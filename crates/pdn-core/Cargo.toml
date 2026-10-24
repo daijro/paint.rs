@@ -1,0 +1,82 @@
+[package]
+name = "pdn-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["avif-dav1d"]
+testing = []
+# Task 48: AVIF decode through the system libdav1d (Ruling R31; formats-matrix.md §3.5). Without it
+# (a machine with no libdav1d: `--no-default-features`) AVIF decode returns Unsupported.
+avif-dav1d = ["dep:dav1d"]
+
+[dependencies]
+# Task54: bounded user asset-pack ZIP reader.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+roxmltree = "0.20"
+tiny-skia.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ttf-parser = "0.25"
+# Task35: interpreted text outlines and managed per-unit Unicode categories (already locked).
+skrifa = "0.44"
+unicode-general-category = "1.1"
+# Global Constraints: polygon booleans (Task 24); PNG decode for the capture loader and clipboard.
+i_overlay = "9.1"
+image.workspace = true
+miniz_oxide = "0.9"
+# Task 47 codecs (pure Rust on every target).
+jpeg-encoder = "0.6"
+jxl-oxide = { version = "0.12", default-features = false }
+zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] }
+zune-core = "0.5"
+ravif = { version = "0.13", default-features = false }
+ddsfile = "0.6"
+bcdec_rs = "0.2"
+# Task 47b: GIF writer (formats-matrix.md §3.3); 0.14 is the version `image` already locks.
+gif = "0.14"
+# Task 47b: palette TIFFs re-tagged as grey (io/tiff.rs); 0.11 is the version `image` already locks.
+tiff = "0.11"
+
+# R95: current Windows click/drag metrics; this version is already locked and cached.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging"] }
+
+# Global Constraints: rayon 1.12, native only (Task 17e: parallel canvas rows and mip tiles).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.12"
+# Task 47: lossy WebP (libwebp, vendored C; formats-matrix.md §3.9).
+webp = { version = "0.3", default-features = false }
+# Task 48: native decoders (formats-matrix.md §2, §3.5, §3.6, §3.8). dav1d (MIT) links the system
+# libdav1d (BSD-2-Clause) through pkg-config; heic-rs (MIT OR Apache-2.0, vendored with a colour
+# patch: Ruling R52) parses HEIF for HEIC and AVIF; openreadout-jpegxr (BSD-2-Clause, Microsoft's
+# jxrlib decoder ported without `unsafe`: Ruling R51) decodes JPEG XR; half (MIT OR Apache-2.0,
+# already locked) reads its half floats.
+dav1d = { version = "0.11", optional = true }
+heic-rs = { version = "0.1", default-features = false, features = ["parallel"] }
+openreadout-jpegxr = "0.4"
+half = "2"
+
+# Task 47: libjxl (BSD-3-Clause) built statically for the hand-written lossy JPEG XL FFI in
+# io/encode.rs (formats-matrix.md §3.4 and its ruling: never the GPL jpegxl-rs/jpegxl-sys).
+# build.rs skips it on wasm32, which stays lossless-only.
+[build-dependencies]
+jpegxl-src = "0.12"
+
+# Task 37: `effect::rng::clock_seed` reads `Date.now()` on the web (already in the lock through
+# wasm-bindgen).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+
+[[test]]
+name = "canvas_ref"
+required-features = ["testing"]
+
+[[test]]
+name = "engine_ref"
+required-features = ["testing"]
+
+[[test]]
+name = "pdn_tools"
+required-features = ["testing"]

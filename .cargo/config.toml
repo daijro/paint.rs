@@ -1,0 +1,6 @@
+# WebAssembly SIMD for every wasm build: `trunk build`, tools/web-dist.sh and the gate's
+# `cargo build --target wasm32-unknown-unknown`. Our code and our dependencies
+# autovectorise with it. Every browser the web build supports has it (index.html shows older ones a
+# notice). A RUSTFLAGS variable replaces this list rather than adding to it.
+[target.wasm32-unknown-unknown]
+rustflags = ["-Ctarget-feature=+simd128"]

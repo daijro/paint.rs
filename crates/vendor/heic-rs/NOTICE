@@ -1,0 +1,19 @@
+heic-rs is an independent implementation of ISO/IEC 23008-12 (HEIF) and of the
+decoding process described in Recommendation ITU-T H.265 | ISO/IEC 23008-2
+(High Efficiency Video Coding).
+
+No code was taken from any GPL, LGPL or AGPL licensed decoder. The algorithms
+are written from the published specification text. Permissively licensed Rust
+projects were consulted for cross-checking header syntax only, with no code
+copied:
+
+  * rust_h265    (MIT OR Apache-2.0)  https://github.com/roticv/rust_h265
+  * scuffle-h265 (MIT OR Apache-2.0)  NAL and parameter set header parsing
+
+This crate does not grant any patent licence to the HEVC standard itself.
+
+The brand assets under assets/ are CertifiedCopy's (https://certified.sh), used
+here by its own authors; the mark is not licensed for other people's use.
+assets/fonts/ holds three IBM Plex web fonts, used only to render the social
+preview image; IBM Plex is licensed under the SIL Open Font License 1.1, whose
+text is beside them in assets/fonts/LICENSE-IBM-Plex.txt.

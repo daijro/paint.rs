@@ -1,0 +1,3 @@
+# Hash-verified upstream notices and metadata must retain their original bytes on Windows.
+scripts/ci/license-supplements/** -text
+tests/ci/fixtures/tiny-skia-0.12.0-LICENSE -text

@@ -1,0 +1,20 @@
+//! Custom-painted paint.net widget kit (spec §5.2). Ports interface/item/** visuals.
+pub mod aa;
+pub mod button;
+pub mod color;
+pub mod fonts;
+pub mod glyph;
+pub mod img;
+pub mod inputs;
+pub mod menu;
+pub mod px;
+pub mod scroll;
+pub mod shadow;
+pub mod shape_icon;
+pub mod text;
+pub mod thumbnails;
+pub mod tiles;
+pub mod tool_option;
+pub mod tooltip;
+mod unhinted;
+pub mod window;

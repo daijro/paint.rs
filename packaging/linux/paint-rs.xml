@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The .pdn type for paint-rs.desktop's MimeType (shared-mime-info has none). -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="image/x-paintdotnet">
+    <comment>Paint.NET image</comment>
+    <magic>
+      <match type="string" offset="0" value="PDN3"/>
+    </magic>
+    <glob pattern="*.pdn"/>
+  </mime-type>
+</mime-info>

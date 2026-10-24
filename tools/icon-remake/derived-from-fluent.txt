@@ -1,0 +1,4 @@
+# Icons in assets/icons-svg whose geometry is derived from Microsoft Fluent UI System Icons (MIT).
+# One name per line. Empty: every icon is original, so the pack ships no Fluent notice.
+# When the first name is added: put the MIT notice back as assets/icons-svg/LICENSE-fluent.txt,
+# list it in manifest.json "notices" and set "fluentDerived": true.

@@ -1,0 +1,9 @@
+# The web build (README "Web"). Release builds go through tools/web-dist.sh, which runs wasm-opt itself after Trunk.
+
+[build]
+target = "index.html"
+dist = "dist"
+# index.html's loader fetches `<name>.wasm.gz`, so that is what to preload, not the plain .wasm. Without a .gz
+# (trunk serve) the preload misses and the loader fetches the plain .wasm. No SRI hashes:
+# web-dist.sh rewrites the wasm (wasm-opt) after Trunk would have hashed it.
+pattern_preload = '<link rel="modulepreload" href="{base}{js}" crossorigin="{crossorigin}"><link rel="preload" href="{base}{wasm}.gz" as="fetch" crossorigin="{crossorigin}">'

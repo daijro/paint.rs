@@ -1,0 +1,8 @@
+# Stable-only options. Anything nightly-gated (imports_granularity, group_imports,
+# wrap_comments, comment_width, format_code_in_doc_comments, ...) would make
+# `cargo fmt --check` fail on the stable toolchain that CI uses.
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true

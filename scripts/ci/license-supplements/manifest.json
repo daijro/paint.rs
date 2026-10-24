@@ -1,0 +1,1761 @@
+{
+  "scope": "Reviewed notice sources with explicit exact-original, official-release/sibling, later-upstream and metadata-only provenance categories; no unknown omissions accepted.",
+  "groups": [
+    {
+      "repository": "https://github.com/AccessKit/accesskit",
+      "package_commit": "ce8164ba92995cfa86005b6259115e08c8244253",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "accesskit",
+          "version": "0.25.1",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_atspi_common",
+          "version": "0.21.0",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_consumer",
+          "version": "0.39.1",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_ios",
+          "version": "0.2.1",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_macos",
+          "version": "0.27.1",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_unix",
+          "version": "0.24.0",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_windows",
+          "version": "0.35.1",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "accesskit_winit",
+          "version": "0.34.1",
+          "license": "Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 9723,
+          "git_blob_sha1": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE-APACHE",
+          "file": "blobs/1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d.txt",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1023,
+          "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE-MIT",
+          "file": "blobs/31aa79387f27e730e33d871925e152e35e428031.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE.chromium",
+          "bytes": 1559,
+          "git_blob_sha1": "a32e00ce6be3620adca152e53734f7de8fda38cf",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE.chromium",
+          "file": "blobs/a32e00ce6be3620adca152e53734f7de8fda38cf.txt",
+          "role": "license-terms",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/dropbox/rust-alloc-no-stdlib",
+      "package_commit": "ae42d22078b98549e987d2f03d12df7b984fde47",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "alloc-stdlib",
+          "version": "0.2.4",
+          "license": "BSD-3-Clause"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 1483,
+          "git_blob_sha1": "cd496ba72eb37e83a44958358d1f89a8a28cbc15",
+          "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/ae42d22078b98549e987d2f03d12df7b984fde47/LICENSE",
+          "file": "blobs/cd496ba72eb37e83a44958358d1f89a8a28cbc15.txt",
+          "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/ScanMountGoat/image_dds",
+      "package_commit": "be82800d4cdf20375cd1f3dedb662d42e62242a3",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "bcdec_rs",
+          "version": "0.2.0",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 1060,
+          "git_blob_sha1": "39b2c0eb38623ff5a0c4de2d40d08216064d4a38",
+          "url": "https://raw.githubusercontent.com/ScanMountGoat/image_dds/be82800d4cdf20375cd1f3dedb662d42e62242a3/LICENSE",
+          "file": "blobs/39b2c0eb38623ff5a0c4de2d40d08216064d4a38.txt",
+          "role": "license-terms",
+          "sha256": "0194fa871df6d82a26d58f3b6e035bed033afdc413e2a6ac0ae2f15b7becbb20"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "4fc083f1c6d6784577e38b0ee8dbd344481e2fd2",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "block2",
+          "version": "0.5.1",
+          "license": "MIT"
+        },
+        {
+          "name": "objc-sys",
+          "version": "0.3.5",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.txt",
+          "bytes": 1066,
+          "git_blob_sha1": "e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+          "file": "blobs/e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "b4167b582b2f75f9a1be75495c41b765344fd03c",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "block2",
+          "version": "0.6.2",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.md",
+          "bytes": 1339,
+          "git_blob_sha1": "540ae4c81adb5f64a9f61e222b688880da24300e",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+          "file": "blobs/540ae4c81adb5f64a9f61e222b688880da24300e.txt",
+          "role": "license-terms",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/DoumanAsh/clipboard-win",
+      "package_commit": "3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "clipboard-win",
+          "version": "5.4.1",
+          "license": "BSL-1.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 1338,
+          "git_blob_sha1": "36b7cd93cdfbac762f5be4c6ce276df2ea6305c2",
+          "url": "https://raw.githubusercontent.com/DoumanAsh/clipboard-win/3b27cf2bfd1adcfa6e0264eb51c1025ddaf0f342/LICENSE",
+          "file": "blobs/36b7cd93cdfbac762f5be4c6ce276df2ea6305c2.txt",
+          "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "dispatch2",
+          "version": "0.3.1",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.md",
+          "bytes": 1339,
+          "git_blob_sha1": "540ae4c81adb5f64a9f61e222b688880da24300e",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+          "file": "blobs/540ae4c81adb5f64a9f61e222b688880da24300e.txt",
+          "role": "license-terms",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/emilk/egui",
+      "package_commit": "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "eframe",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/emilk/egui",
+      "package_commit": "9d317be94fc96df23bd5d9316f357efa2d3631d8",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "egui_kittest",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/9d317be94fc96df23bd5d9316f357efa2d3631d8/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/9d317be94fc96df23bd5d9316f357efa2d3631d8/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/brendanzab/gl-rs",
+      "package_commit": "ea503e8d5fb6d73c6030e6191ce738cd3bf3433e",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "gl_generator",
+          "version": "0.14.0",
+          "license": "Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 11358,
+          "git_blob_sha1": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+          "url": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+          "file": "blobs/d645695673349e3947e8e5ae42332d0ac3164cd7.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/iShape-Rust/iKeySort",
+      "package_commit": "688424e09b7758d04e62e350160d164c7384f54b",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "i_key_sort",
+          "version": "0.12.0",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 1068,
+          "git_blob_sha1": "5f21cc740b01ba7c80f95e9f71c857379f355ed8",
+          "url": "https://raw.githubusercontent.com/iShape-Rust/iKeySort/688424e09b7758d04e62e350160d164c7384f54b/LICENSE",
+          "file": "blobs/5f21cc740b01ba7c80f95e9f71c857379f355ed8.txt",
+          "sha256": "47e00f18b265d350a2860d3899f17dd1c7689b966545e929df8ffa7033f5acdc",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/iShape-Rust/iOverlay",
+      "package_commit": "117637e3a65804973da2bfd7c59f42773f4dcc0d",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "i_overlay",
+          "version": "9.1.0",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10172,
+          "git_blob_sha1": "2bb9ad240fa04c8cf706a4901c4807878e90c2dc",
+          "url": "https://raw.githubusercontent.com/iShape-Rust/iOverlay/117637e3a65804973da2bfd7c59f42773f4dcc0d/LICENSE-APACHE",
+          "file": "blobs/2bb9ad240fa04c8cf706a4901c4807878e90c2dc.txt",
+          "sha256": "59899c6091b540582ed617e8eeaac4919dc985ccfc35459ee9752b699be5205b",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1068,
+          "git_blob_sha1": "f1bb3ddc723a156fb96bf6e9c5e9e01201e63bae",
+          "url": "https://raw.githubusercontent.com/iShape-Rust/iOverlay/117637e3a65804973da2bfd7c59f42773f4dcc0d/LICENSE-MIT",
+          "file": "blobs/f1bb3ddc723a156fb96bf6e9c5e9e01201e63bae.txt",
+          "sha256": "260cc580f53a756821a0f35475e2cd6da790f8fed0efc058252fe1bed8f2689e",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/jni-rs/jni-rs",
+      "package_commit": "5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "jni",
+          "version": "0.22.4",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10847,
+          "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-APACHE",
+          "file": "blobs/16fe87b06e802f094b3fbb0894b137bca2b16ef1.txt",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1104,
+          "git_blob_sha1": "74323882c4eeb6ce9f75f1f3269d212038f394d2",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/5ae9458a4ec44c5318f37ddc7569c1d4ae8a69e7/LICENSE-MIT",
+          "file": "blobs/74323882c4eeb6ce9f75f1f3269d212038f394d2.txt",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/jni-rs/jni-rs",
+      "package_commit": "33045a124105c939d1e2cbdcb5a39e5d868ffa03",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "jni-macros",
+          "version": "0.22.4",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10847,
+          "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-APACHE",
+          "file": "blobs/16fe87b06e802f094b3fbb0894b137bca2b16ef1.txt",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1104,
+          "git_blob_sha1": "74323882c4eeb6ce9f75f1f3269d212038f394d2",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-rs/33045a124105c939d1e2cbdcb5a39e5d868ffa03/LICENSE-MIT",
+          "file": "blobs/74323882c4eeb6ce9f75f1f3269d212038f394d2.txt",
+          "sha256": "fea1d5bf3dd71605ce5d7d2ff695c1837e914c77195e523a86b5391716477960",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/jni-rs/jni-sys",
+      "package_commit": "64d77b7a5f119d7b55b4e2c169a4668067ff59e6",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "jni-sys-macros",
+          "version": "0.4.1",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11358,
+          "git_blob_sha1": "8f71f43fee3f78649d238238cbde51e6d7055c82",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-APACHE",
+          "file": "blobs/8f71f43fee3f78649d238238cbde51e6d7055c82.txt",
+          "sha256": "c6596eb7be8581c18be736c846fb9173b69eccf6ef94c5135893ec56bd92ba08",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1071,
+          "git_blob_sha1": "2008402b8a1299cf118ea38e02116bfcc72e53c3",
+          "url": "https://raw.githubusercontent.com/jni-rs/jni-sys/64d77b7a5f119d7b55b4e2c169a4668067ff59e6/LICENSE-MIT",
+          "file": "blobs/2008402b8a1299cf118ea38e02116bfcc72e53c3.txt",
+          "sha256": "1d85bd754b04ceec93e98e890edd1fa3c6a22e81bcb32135806beeccefa51cd1",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/brendanzab/gl-rs",
+      "package_commit": "f150967b1c44ae888e6676f93f639ebc82771bdc",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "khronos_api",
+          "version": "3.1.0",
+          "license": "Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 11358,
+          "git_blob_sha1": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+          "url": "https://raw.githubusercontent.com/brendanzab/gl-rs/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
+          "file": "blobs/d645695673349e3947e8e5ae42332d0ac3164cd7.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/rust-mobile/ndk",
+      "package_commit": "49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "ndk",
+          "version": "0.9.0",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "ndk-sys",
+          "version": "0.6.0+11769913",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11357,
+          "git_blob_sha1": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+          "url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-APACHE",
+          "file": "blobs/261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1036,
+          "git_blob_sha1": "9cf106272ac3b56b0c4c80218e8fc10a664ca5f4",
+          "url": "https://raw.githubusercontent.com/rust-mobile/ndk/49bbbba16c58ff63cb8a0ad0eca5a9fb7ecaec25/LICENSE-MIT",
+          "file": "blobs/9cf106272ac3b56b0c4c80218e8fc10a664ca5f4.txt",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/rust-windowing/android-ndk-rs",
+      "package_commit": "10f2ba388fca20f7349996ebae26ccda7a6fda5c",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "ndk-context",
+          "version": "0.1.1",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11357,
+          "git_blob_sha1": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+          "url": "https://raw.githubusercontent.com/rust-windowing/android-ndk-rs/10f2ba388fca20f7349996ebae26ccda7a6fda5c/LICENSE-APACHE",
+          "file": "blobs/261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1036,
+          "git_blob_sha1": "9cf106272ac3b56b0c4c80218e8fc10a664ca5f4",
+          "url": "https://raw.githubusercontent.com/rust-windowing/android-ndk-rs/10f2ba388fca20f7349996ebae26ccda7a6fda5c/LICENSE-MIT",
+          "file": "blobs/9cf106272ac3b56b0c4c80218e8fc10a664ca5f4.txt",
+          "sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "5237cbf081d04ef75a1f6a207b4018e7c1ae7438",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "objc2",
+          "version": "0.5.3",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.txt",
+          "bytes": 1066,
+          "git_blob_sha1": "e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/5237cbf081d04ef75a1f6a207b4018e7c1ae7438/LICENSE.txt",
+          "file": "blobs/e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "d7d2fa23ceaa5e6096c923b081040e5d81b3b9df",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "objc2",
+          "version": "0.6.5",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.md",
+          "bytes": 1339,
+          "git_blob_sha1": "540ae4c81adb5f64a9f61e222b688880da24300e",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md",
+          "file": "blobs/540ae4c81adb5f64a9f61e222b688880da24300e.txt",
+          "role": "license-terms",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "e282618be4c3a3b9542957e0c8540e9588472ce8",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "objc2-app-kit",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-cloud-kit",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-contacts",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-core-data",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-core-image",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-core-location",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-link-presentation",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-metal",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-quartz-core",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-symbols",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-ui-kit",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-uniform-type-identifiers",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-user-notifications",
+          "version": "0.2.2",
+          "license": "MIT"
+        },
+        {
+          "name": "objc2-foundation",
+          "version": "0.2.2",
+          "license": "MIT",
+          "authors": []
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.txt",
+          "bytes": 1066,
+          "git_blob_sha1": "e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/e282618be4c3a3b9542957e0c8540e9588472ce8/LICENSE.txt",
+          "file": "blobs/e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad.txt",
+          "sha256": "e353f37b12aefbb9f9b29490e837cfee05d9bda70804b3562839a3285c1df1e5",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "objc2-app-kit",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-core-foundation",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-core-graphics",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-io-surface",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-metal",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-quartz-core",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-ui-kit",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT"
+        },
+        {
+          "name": "objc2-foundation",
+          "version": "0.3.2",
+          "license": "MIT",
+          "authors": []
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.md",
+          "bytes": 1339,
+          "git_blob_sha1": "540ae4c81adb5f64a9f61e222b688880da24300e",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+          "file": "blobs/540ae4c81adb5f64a9f61e222b688880da24300e.txt",
+          "role": "license-terms",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/madsmtm/objc2",
+      "package_commit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "objc2-encode",
+          "version": "4.1.0",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE.md",
+          "bytes": 1339,
+          "git_blob_sha1": "540ae4c81adb5f64a9f61e222b688880da24300e",
+          "url": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+          "file": "blobs/540ae4c81adb5f64a9f61e222b688880da24300e.txt",
+          "role": "license-terms",
+          "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/aclysma/profiling",
+      "package_commit": "8271551172eb6fa4cba47369aedd93790c623df9",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "profiling",
+          "version": "1.0.18",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "profiling-procmacros",
+          "version": "1.0.18",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10818,
+          "git_blob_sha1": "139dce95d473c201a8561ef17536314d8b8cda65",
+          "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+          "file": "blobs/139dce95d473c201a8561ef17536314d8b8cda65.txt",
+          "role": "license-terms",
+          "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1093,
+          "git_blob_sha1": "6a84e059ad8b43e03c2b06bc2af4dc1d8442808d",
+          "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+          "file": "blobs/6a84e059ad8b43e03c2b06bc2af4dc1d8442808d.txt",
+          "role": "license-terms",
+          "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/gfx-rs/rspirv",
+      "package_commit": "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "spirv",
+          "version": "0.4.0+sdk-1.4.341.0",
+          "license": "Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 11358,
+          "git_blob_sha1": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+          "url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE",
+          "file": "blobs/d645695673349e3947e8e5ae42332d0ac3164cd7.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/r-efi/r-efi",
+      "package_commit": "97b55bed1c2c91dcbf787674849f05337ff80b33",
+      "basis": "Original published package AUTHORS contains complete MIT grant and copyright",
+      "packages": [
+        {
+          "name": "r-efi",
+          "version": "5.3.0",
+          "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+        }
+      ],
+      "notices": [
+        {
+          "path": "AUTHORS",
+          "bytes": 3693,
+          "git_blob_sha1": "7397b2bd6a8580d51fe7b23783f8f1a05fa70291",
+          "sha256": "ff92bed461f50338dd703a9ba9aee496a425957873df1d91192776e4bdf5dda7",
+          "file": "blobs/7397b2bd6a8580d51fe7b23783f8f1a05fa70291.txt",
+          "url": "https://raw.githubusercontent.com/r-efi/r-efi/97b55bed1c2c91dcbf787674849f05337ff80b33/AUTHORS",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/r-efi/r-efi",
+      "package_commit": "7e1b0322d31d625f81a5656096330934f9cd835d",
+      "basis": "Original published package AUTHORS contains complete MIT grant and copyright",
+      "packages": [
+        {
+          "name": "r-efi",
+          "version": "6.0.0",
+          "license": "MIT OR Apache-2.0 OR LGPL-2.1-or-later"
+        }
+      ],
+      "notices": [
+        {
+          "path": "AUTHORS",
+          "bytes": 3733,
+          "git_blob_sha1": "79c8b7c4a1dabcfbc718b7fe6d43b1892f9850cd",
+          "sha256": "d027e91dbc9cdbb2f1190068e498bd6b61cff022b6a032b191021ba658d96111",
+          "file": "blobs/79c8b7c4a1dabcfbc718b7fe6d43b1892f9850cd.txt",
+          "url": "https://raw.githubusercontent.com/r-efi/r-efi/7e1b0322d31d625f81a5656096330934f9cd835d/AUTHORS",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "ruling": "R134",
+      "repository": "http://github.com/SSheldon/rust-dispatch",
+      "package_commit": "82d6c7a5b75dc0c71c3f46f87bb6c16a476f7748",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "bd0c93bb4b0c6d9b77f4435b0ae98c24d17f1c45b2ff844c6151a07256ca923b",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "313a7abcf98d6834fdf27109ae9bf62f318efe8e4c6ac27b41fbeb2e4ff6a1f8"
+      },
+      "basis": "R134 metadata-only supplement. Original upstream license/copyright notice absent; MIT declared by package, Steven Sheldon identified only as author. Not recovered-original evidence or legal certification.",
+      "packages": [
+        {
+          "name": "dispatch",
+          "version": "0.2.0",
+          "license": "MIT",
+          "authors": [
+            "Steven Sheldon"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "Cargo.toml.orig",
+          "file": "dispatch-0.2.0/Cargo.toml.orig",
+          "bytes": 472,
+          "sha256": "05c60b829931ef7f1f130735843c11f5cf9cc69546eca5fc941d014781c68e31",
+          "git_blob_sha1": "8cc82a81526484217820b15c59af4bae8fb924fd",
+          "url": "https://raw.githubusercontent.com/SSheldon/rust-dispatch/82d6c7a5b75dc0c71c3f46f87bb6c16a476f7748/Cargo.toml.orig",
+          "package_file": "Cargo.toml.orig",
+          "role": "published-attribution"
+        },
+        {
+          "path": "README.md",
+          "file": "dispatch-0.2.0/README.md",
+          "bytes": 1365,
+          "sha256": "9e581e0edb3dcc8238feda4bc709c8c91d43c286ac91f42cf6b0004c9335da58",
+          "git_blob_sha1": "2a6d1a4bb64a4014061265b2337f164bbe7799a0",
+          "url": "https://raw.githubusercontent.com/SSheldon/rust-dispatch/82d6c7a5b75dc0c71c3f46f87bb6c16a476f7748/README.md",
+          "package_file": "README.md",
+          "role": "published-attribution"
+        },
+        {
+          "path": "SUPPLEMENTAL-MIT-TERMS.txt",
+          "file": "dispatch-0.2.0/SUPPLEMENTAL-MIT-TERMS.txt",
+          "bytes": 1622,
+          "sha256": "420834a0e65a06b0746c68c99afbf4025e000eec417d9f0471a9f253b60b9239",
+          "git_blob_sha1": "2e2c590d2822c8ab7f6f2428f9d156bfd3fc7983",
+          "url": "https://spdx.org/licenses/MIT.html",
+          "derivation": {
+            "original_file": "blobs/e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad.txt",
+            "original_url": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+            "original_git_blob_sha1": "e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad",
+            "operation": "Exact byte slice from Permission is hereby granted through EOF; prior copyright lines omitted, explicit supplement label prepended"
+          },
+          "role": "license-terms"
+        }
+      ],
+      "category": "metadata-only-standard-terms"
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "31bcbef0d4263a63eb32c4834e5d711613035ce1333468e107d928923e21e6e2",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "a48a17bb0b9fb2ea533888adff7ffd8b8793adfccacf126253f54d56a7d618ba"
+      },
+      "packages": [
+        {
+          "name": "ecolor",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>",
+            "Andreas Reich <reichandreas@gmx.de>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/ecolor-0.37.0/Cargo.toml.orig",
+          "bytes": 1396,
+          "sha256": "bee5fdb0424d91fea20147e5798d2524c4296f7deb9ac64afd5a81f7ff91f598",
+          "git_blob_sha1": "43543113a81081f09384b158e11d990b9b8a08b9",
+          "url": "https://static.crates.io/crates/ecolor/ecolor-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "ecolor",
+            "version": "0.37.0",
+            "archive_checksum": "31bcbef0d4263a63eb32c4834e5d711613035ce1333468e107d928923e21e6e2",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/ecolor-0.37.0/README.md",
+          "bytes": 695,
+          "sha256": "f8f28cbcdf449616757669e7bfd1fc7622013abe7184e3268b142d7b31148c14",
+          "git_blob_sha1": "98e3c37257ceade15da390fa262f34726084daa6",
+          "url": "https://static.crates.io/crates/ecolor/ecolor-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "ecolor",
+            "version": "0.37.0",
+            "archive_checksum": "31bcbef0d4263a63eb32c4834e5d711613035ce1333468e107d928923e21e6e2",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "bec9144f49b7a28b5f395d3147e325b4fe3e77ba686eac11d1bdf0a7da3f375f",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "6b1586ca056bc5d3aeeaf5e694e712aba43b7032892e051c98fba21369d9eab3"
+      },
+      "packages": [
+        {
+          "name": "egui",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/egui-0.37.0/Cargo.toml.orig",
+          "bytes": 4443,
+          "sha256": "6ebc84e184ad5faef7fe7a2acc9130a7f92a8ad0e47d3e6cac180a609a0eb119",
+          "git_blob_sha1": "8a9771c738a083dfece670aad2add637f480ef82",
+          "url": "https://static.crates.io/crates/egui/egui-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui",
+            "version": "0.37.0",
+            "archive_checksum": "bec9144f49b7a28b5f395d3147e325b4fe3e77ba686eac11d1bdf0a7da3f375f",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/egui-0.37.0/README.md",
+          "bytes": 25236,
+          "sha256": "f6d9742a2cc9d5376537031aff758d322e165a728f5a6c7a19b01afdb36f0f0c",
+          "git_blob_sha1": "e0bbaa36be5bd16ea9bb3d08ec0595a982e06c21",
+          "url": "https://static.crates.io/crates/egui/egui-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui",
+            "version": "0.37.0",
+            "archive_checksum": "bec9144f49b7a28b5f395d3147e325b4fe3e77ba686eac11d1bdf0a7da3f375f",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui/tree/main/crates/egui-wgpu",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "0309cbe1febed48af5b974e4bcc424b35e9664863a4d402697147b57a488c864",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "523dceaef4807f104775c0bb44e462a6f8be20a794c3642e3b90f42c7dd4eb4d"
+      },
+      "packages": [
+        {
+          "name": "egui-wgpu",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Nils Hasenbanck <nils@hasenbanck.de>",
+            "embotech <opensource@embotech.com>",
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/egui-wgpu-0.37.0/Cargo.toml.orig",
+          "bytes": 2750,
+          "sha256": "70b8dc7ec418a004997cb3c039c707a430c00942952ec143cd093a49146c2146",
+          "git_blob_sha1": "5909051823ca206ccfd428225e1cf372148bdafc",
+          "url": "https://static.crates.io/crates/egui-wgpu/egui-wgpu-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui-wgpu",
+            "version": "0.37.0",
+            "archive_checksum": "0309cbe1febed48af5b974e4bcc424b35e9664863a4d402697147b57a488c864",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/egui-wgpu-0.37.0/README.md",
+          "bytes": 522,
+          "sha256": "e7a1c61629bffc2b4ebc0fe9531d2c8fe511ce40b43f77e91546af9aede3e6dd",
+          "git_blob_sha1": "9aab3159d55ec7f7661bb8b6741536020575aabc",
+          "url": "https://static.crates.io/crates/egui-wgpu/egui-wgpu-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui-wgpu",
+            "version": "0.37.0",
+            "archive_checksum": "0309cbe1febed48af5b974e4bcc424b35e9664863a4d402697147b57a488c864",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui/tree/main/crates/egui-winit",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "e4e449f4c4a2a60c7ccb4ba7fa4078417bfe1f9ddc03b5e05ce75748e33a70de",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "3eb2f5f41008d97f2800b00c5245f906e3f70c1c6258714d4e9d89d6f31a8b33"
+      },
+      "packages": [
+        {
+          "name": "egui-winit",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/egui-winit-0.37.0/Cargo.toml.orig",
+          "bytes": 4518,
+          "sha256": "91b7a12afcdc47d3552b7b58510c9dd65e74145825fc5727c0b087fc9339c7f9",
+          "git_blob_sha1": "150551a41b60b79eec7637c11fbb1cfb72424d96",
+          "url": "https://static.crates.io/crates/egui-winit/egui-winit-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui-winit",
+            "version": "0.37.0",
+            "archive_checksum": "e4e449f4c4a2a60c7ccb4ba7fa4078417bfe1f9ddc03b5e05ce75748e33a70de",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/egui-winit-0.37.0/README.md",
+          "bytes": 571,
+          "sha256": "7a8ccbb9fbddf24243446291b8e5a4e6bddcb6b565602c9561581926d5ae362b",
+          "git_blob_sha1": "23864169107dbdad13f5c4753d3312feb2eda5a7",
+          "url": "https://static.crates.io/crates/egui-winit/egui-winit-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui-winit",
+            "version": "0.37.0",
+            "archive_checksum": "e4e449f4c4a2a60c7ccb4ba7fa4078417bfe1f9ddc03b5e05ce75748e33a70de",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui/tree/main/crates/egui_glow",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "9275ca5cc35a6b7c94e0e8cedf22542f66cb0cf45ed8ab2657c78ff49fec7268",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "93d42330ffd7021c04d7be60b896135213f6acd1bf6f0669bcb990f4ffa97b07"
+      },
+      "packages": [
+        {
+          "name": "egui_glow",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/egui_glow-0.37.0/Cargo.toml.orig",
+          "bytes": 2127,
+          "sha256": "6c85ba6c4443ec859e57967c62df2f6571855a02333f903f0bf4ced2c7f19b30",
+          "git_blob_sha1": "2bd8c31093db7e329af87b4883c0f70fb2faf68a",
+          "url": "https://static.crates.io/crates/egui_glow/egui_glow-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui_glow",
+            "version": "0.37.0",
+            "archive_checksum": "9275ca5cc35a6b7c94e0e8cedf22542f66cb0cf45ed8ab2657c78ff49fec7268",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/egui_glow-0.37.0/README.md",
+          "bytes": 1097,
+          "sha256": "f404b997cbf605877145ec14ff733173f43ba6841b8051374483900af736a72e",
+          "git_blob_sha1": "3fcd7db5ab0023cee442904c6e9b041d08551059",
+          "url": "https://static.crates.io/crates/egui_glow/egui_glow-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "egui_glow",
+            "version": "0.37.0",
+            "archive_checksum": "9275ca5cc35a6b7c94e0e8cedf22542f66cb0cf45ed8ab2657c78ff49fec7268",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui/tree/main/crates/emath",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "e73ce90f54750be8672c02be0743fe47530e6f251e066f0ee2869b59eb297af5",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "a5100803f0860139cb9f79332b0cd1b2dcf88dbe698519d7cedbf6201cd5b9f5"
+      },
+      "packages": [
+        {
+          "name": "emath",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/emath-0.37.0/Cargo.toml.orig",
+          "bytes": 1323,
+          "sha256": "f3313d8da517d91b5546b8a00198da70f5533601bd14a3498ec3c4be129f36f0",
+          "git_blob_sha1": "9895fffc69c4c3cb49d3a6ae1ba0d048e2a6ae3e",
+          "url": "https://static.crates.io/crates/emath/emath-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "emath",
+            "version": "0.37.0",
+            "archive_checksum": "e73ce90f54750be8672c02be0743fe47530e6f251e066f0ee2869b59eb297af5",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/emath-0.37.0/README.md",
+          "bytes": 585,
+          "sha256": "53b152ecddf9c891912c40ae6ab94da630e71137c4ae23cb15adc9b9fc73fe70",
+          "git_blob_sha1": "af22459a9d329b97f3bc397c719e462438c439bb",
+          "url": "https://static.crates.io/crates/emath/emath-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "emath",
+            "version": "0.37.0",
+            "archive_checksum": "e73ce90f54750be8672c02be0743fe47530e6f251e066f0ee2869b59eb297af5",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/emilk/egui/tree/main/crates/epaint",
+      "package_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "97bac86ae3dde93fc3951e790951caea739ff39a6c89d909cdaf1d9278dbb1bd",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "0eea1038d83342d089a73cfcaa008c17474b29e4069af9e62ee734b8aafff39e"
+      },
+      "packages": [
+        {
+          "name": "epaint",
+          "version": "0.37.0",
+          "license": "MIT OR Apache-2.0",
+          "authors": [
+            "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/epaint-0.37.0/Cargo.toml.orig",
+          "bytes": 4072,
+          "sha256": "89668b5ae113991ad13f57962ae3ba0319121e47269c4b86c02f304ed68b06d7",
+          "git_blob_sha1": "b480cc21293a3c4ea87f755c826ca50abd0bc60e",
+          "url": "https://static.crates.io/crates/epaint/epaint-0.37.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "epaint",
+            "version": "0.37.0",
+            "archive_checksum": "97bac86ae3dde93fc3951e790951caea739ff39a6c89d909cdaf1d9278dbb1bd",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/epaint-0.37.0/README.md",
+          "bytes": 608,
+          "sha256": "46d81296b496ae6323c5ec65e71689152139fa8515841fb34b4e09447a6d66c0",
+          "git_blob_sha1": "fb5d9c1cf2e0652a126103a7b1ad0eb4a42cf332",
+          "url": "https://static.crates.io/crates/epaint/epaint-0.37.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "epaint",
+            "version": "0.37.0",
+            "archive_checksum": "97bac86ae3dde93fc3951e790951caea739ff39a6c89d909cdaf1d9278dbb1bd",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/egui/3c6eb8261c3293ad9c7ea1ed58487e038860ebef/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "role": "license-terms",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c"
+        }
+      ],
+      "category": "official-release-sibling-mapping",
+      "basis": "R135 official egui 0.37.0 release/sibling corroboration. Published commit7c0b40402271e8d40cda69f87cf3c2617c2e4382 remains unresolved; these are not exact recovered files from that commit.",
+      "provenance": {
+        "official_tag": "0.37.0",
+        "annotated_tag_object": "418687fa18fdac8a9b1b6c8f4a2eb1afd2df4c47",
+        "release_commit": "841a328ba2dd8f6996beb7189ebb7fc00e668a2a",
+        "sibling_published_commits": [
+          "3c6eb8261c3293ad9c7ea1ed58487e038860ebef",
+          "9d317be94fc96df23bd5d9316f357efa2d3631d8"
+        ],
+        "unresolved_published_commit": "7c0b40402271e8d40cda69f87cf3c2617c2e4382",
+        "exact_recovery_from_published_commit": false
+      }
+    },
+    {
+      "ruling": "R135",
+      "repository": "https://github.com/lu-zero/simd_helpers",
+      "package_commit": "ca1a2f84aa386d758e98f8a609d990263932fb85",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6",
+      "package_file_sha256": {
+        ".cargo_vcs_info.json": "50b2d207be467a8a75522908c5ce1d1298a2cb3f9ea8abe8b3f741d124b6e9c1"
+      },
+      "packages": [
+        {
+          "name": "simd_helpers",
+          "version": "0.1.0",
+          "license": "MIT",
+          "authors": [
+            "Luca Barbato <lu_zero@gentoo.org>"
+          ]
+        }
+      ],
+      "notices": [
+        {
+          "path": "published/Cargo.toml.orig",
+          "file": "published/simd_helpers-0.1.0/Cargo.toml.orig",
+          "bytes": 367,
+          "sha256": "b41497677a5498040f2eb3fc089e3c2c38c413dca64f41dc57a115e26480461d",
+          "git_blob_sha1": "17ab16390dd3d9dd00d5bf3c0227d086d0476232",
+          "url": "https://static.crates.io/crates/simd_helpers/simd_helpers-0.1.0.crate",
+          "package_file": "Cargo.toml.orig",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "simd_helpers",
+            "version": "0.1.0",
+            "archive_checksum": "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6",
+            "path": "Cargo.toml.orig"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "published/README.md",
+          "file": "published/simd_helpers-0.1.0/README.md",
+          "bytes": 439,
+          "sha256": "e672b974ba905441c8eee630f10bc351f4e8e462c99d178b334ae3e48d8ca7f5",
+          "git_blob_sha1": "f608520d22eec3bfe0b204d00aae2ff05021f4a6",
+          "url": "https://static.crates.io/crates/simd_helpers/simd_helpers-0.1.0.crate",
+          "package_file": "README.md",
+          "category": "published-package-attribution",
+          "source_package": {
+            "registry": "registry+https://github.com/rust-lang/crates.io-index",
+            "name": "simd_helpers",
+            "version": "0.1.0",
+            "archive_checksum": "95890f873bec569a0362c235787f3aca6e1e887302ba4840839bcc6459c42da6",
+            "path": "README.md"
+          },
+          "role": "published-attribution"
+        },
+        {
+          "path": "LICENSE",
+          "file": "blobs/1b7c6aaa5106ef1459ed8c539c06d640e0e0a784.txt",
+          "bytes": 1069,
+          "git_blob_sha1": "1b7c6aaa5106ef1459ed8c539c06d640e0e0a784",
+          "url": "https://raw.githubusercontent.com/lu-zero/simd_helpers/82040194cd05affb060bf94d6f19f82a771d07fb/LICENSE",
+          "role": "license-terms",
+          "sha256": "d69f24ad84ec2ade64c0b68bdb31b41170e997b158370342056918329cc9af1e"
+        }
+      ],
+      "category": "later-upstream-supplied-terms",
+      "basis": "R135 later upstream-supplied simd_helpers terms, added by the direct child of the published commit. LICENSE was not shipped in the release.",
+      "provenance": {
+        "parent_commit": "ca1a2f84aa386d758e98f8a609d990263932fb85",
+        "parent_date": "2019-10-06T16:08:15Z",
+        "child_commit": "82040194cd05affb060bf94d6f19f82a771d07fb",
+        "child_date": "2019-12-07T05:58:58Z",
+        "changed_files": [
+          {
+            "path": "LICENSE",
+            "before": null,
+            "after": "1b7c6aaa5106ef1459ed8c539c06d640e0e0a784"
+          }
+        ],
+        "license_shipped_in_published_package": false
+      }
+    },
+    {
+      "repository": "https://github.com/NoXF/libwebp-sys",
+      "package_commit": "4007a323c1dcc4ad11d70ddadffc51ecfa1dbb5e",
+      "ruling": "R141",
+      "registry_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "cargo_lock_checksum": "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733",
+      "category": "metadata-only-standard-terms",
+      "basis": "Original wrapper license/copyright notice absent; explicit R141 metadata-only supplement based on published MIT declaration; not recovered original text or legal certification",
+      "packages": [
+        {
+          "name": "libwebp-sys",
+          "version": "0.9.6",
+          "license": "MIT",
+          "authors": [
+            "XianYou <xianyou.cyq@alibaba-inc.com>",
+            "Kornel Lesi\u0144ski <kornel@geekhood.net>"
+          ]
+        }
+      ],
+      "package_file_sha256": {
+        "Cargo.toml.orig": "e8fa9813934a847cd404f30ea93848fac2adbd3b6afe8eb55c773398a79e3306",
+        "README.md": "079dffc3793fd3c95108a463eaf404d17283b666611f02fd8e65266be813e287",
+        ".cargo_vcs_info.json": "3aa96813d3db8ce93bf7c920d1b986405815f627ebc35e1db7a507b5e3efa34e",
+        "vendor/COPYING": "5aec868f669e384a22372a4e8a1a6cd7d44c64cd451f960ca69cc170d1e13acf",
+        "vendor/AUTHORS": "9f43aafb76998315d1eac1e441fbd8e1edc28107a7d28ae26223d258f577e84a"
+      },
+      "notices": [
+        {
+          "path": "Cargo.toml.orig",
+          "file": "published/libwebp-sys-0.9.6/Cargo.toml.orig",
+          "bytes": 849,
+          "git_blob_sha1": "781225826b7a035f5090d734cd36c762a6867404",
+          "sha256": "e8fa9813934a847cd404f30ea93848fac2adbd3b6afe8eb55c773398a79e3306",
+          "role": "published-attribution",
+          "url": "https://static.crates.io/crates/libwebp-sys/libwebp-sys-0.9.6.crate",
+          "package_file": "Cargo.toml.orig",
+          "source_package": {
+            "url": "https://static.crates.io/crates/libwebp-sys/libwebp-sys-0.9.6.crate",
+            "archive_sha256": "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733",
+            "path": "Cargo.toml.orig"
+          }
+        },
+        {
+          "path": "README.md",
+          "file": "published/libwebp-sys-0.9.6/README.md",
+          "bytes": 1531,
+          "git_blob_sha1": "c57ee4658d528d973439cead2ba7f3b859c9714b",
+          "sha256": "079dffc3793fd3c95108a463eaf404d17283b666611f02fd8e65266be813e287",
+          "role": "published-attribution",
+          "url": "https://static.crates.io/crates/libwebp-sys/libwebp-sys-0.9.6.crate",
+          "package_file": "README.md",
+          "source_package": {
+            "url": "https://static.crates.io/crates/libwebp-sys/libwebp-sys-0.9.6.crate",
+            "archive_sha256": "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733",
+            "path": "README.md"
+          }
+        },
+        {
+          "path": ".cargo_vcs_info.json",
+          "file": "published/libwebp-sys-0.9.6/.cargo_vcs_info.json",
+          "bytes": 94,
+          "git_blob_sha1": "3ad0897f12b212646bfb96f0a62a97ff3fe1b09e",
+          "sha256": "3aa96813d3db8ce93bf7c920d1b986405815f627ebc35e1db7a507b5e3efa34e",
+          "role": "published-attribution",
+          "url": "https://static.crates.io/crates/libwebp-sys/libwebp-sys-0.9.6.crate",
+          "package_file": ".cargo_vcs_info.json",
+          "source_package": {
+            "url": "https://static.crates.io/crates/libwebp-sys/libwebp-sys-0.9.6.crate",
+            "archive_sha256": "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733",
+            "path": ".cargo_vcs_info.json"
+          }
+        },
+        {
+          "path": "SUPPLEMENTAL-MIT-TERMS.txt",
+          "file": "published/libwebp-sys-0.9.6/SUPPLEMENTAL-MIT-TERMS.txt",
+          "bytes": 1958,
+          "git_blob_sha1": "fe658ad4b4c78561da62d2bc1d96d7de0349c490",
+          "sha256": "c47487cc256100055beac205df1422a0716b5e9a0ddbc7c39602aabd918e9e88",
+          "role": "license-terms",
+          "url": "https://spdx.org/licenses/MIT.html",
+          "derivation": {
+            "original_file": "blobs/e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad.txt",
+            "original_url": "https://raw.githubusercontent.com/madsmtm/objc2/4fc083f1c6d6784577e38b0ee8dbd344481e2fd2/LICENSE.txt",
+            "original_git_blob_sha1": "e9ab3babc0d8602b83dccde8a462f8f3dc1e52ad",
+            "operation": "Exact byte slice from Permission is hereby granted through EOF; prior copyright lines omitted, explicit supplement label prepended"
+          }
+        }
+      ]
+    }
+  ]
+}

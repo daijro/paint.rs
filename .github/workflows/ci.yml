@@ -1,0 +1,156 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: '8'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUST_TEST_THREADS: '8'
+  RAYON_NUM_THREADS: '8'
+  CMAKE_BUILD_PARALLEL_LEVEL: '8'
+
+# checkout v7.0.1 / upload-artifact v7.0.2, verified 2026-10-21.
+# Use rustup directly so the version input cannot be mistaken for an action revision.
+jobs:
+  test-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install native codecs and software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libdav1d-dev mesa-vulkan-drivers libxkbcommon-dev libwayland-dev libgtk-3-dev
+          echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
+          test -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          mkdir -p "$RUNNER_TEMP/xdg"
+          chmod 700 "$RUNNER_TEMP/xdg"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - run: cargo +1.99.1 fmt --all -- --check
+      - run: cargo +1.99.1 clippy --locked --workspace --all-features -- -D warnings
+      - run: cargo +1.99.1 test --locked --workspace --all-features --no-fail-fast
+      - run: python3 -m unittest discover -s tests/ci -v
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
+      - name: Install native dav1d and pkgconf
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:x64-windows pkgconf:x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          "PKG_CONFIG=$prefix/tools/pkgconf/pkgconf.exe" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> $env:GITHUB_ENV
+          "LIB=$prefix/lib;$env:LIB" >> $env:GITHUB_ENV
+          "$prefix/bin" >> $env:GITHUB_PATH
+          "$env:ProgramFiles/LLVM/bin" >> $env:GITHUB_PATH
+      # This compiles Task33's SM_CXDRAG/SM_CYDRAG and Task56's Windows IPC cfg paths.
+      - run: cargo +1.99.1 build --locked --release -p paintrs --target x86_64-pc-windows-msvc
+      - name: Stage developer build and notices
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/paintrs.exe artifacts/windows/
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*dav1d*.dll" artifacts/windows/
+          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/collect_notices.py artifacts/windows/notices --kind native --metadata metadata.json --dav1d-license "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/dav1d/copyright"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-x86_64-developer-build
+          path: artifacts/windows
+          if-no-files-found: error
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install native codecs and Rust
+        run: |
+          test "$(uname -m)" = '${{ matrix.arch }}'
+          brew install dav1d pkgconf cmake
+          rustup toolchain install 1.99.1 --profile minimal --target '${{ matrix.target }}'
+          echo "PKG_CONFIG_PATH=$(brew --prefix dav1d)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - run: cargo +1.99.1 build --locked --release -p paintrs --target '${{ matrix.target }}'
+      - name: Stage unsigned app and notices
+        run: |
+          mkdir -p artifacts
+          sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/release/paintrs' artifacts/paint.rs.app
+          plutil -lint artifacts/paint.rs.app/Contents/Info.plist
+          lipo -verify_arch '${{ matrix.arch }}' artifacts/paint.rs.app/Contents/MacOS/paintrs
+          otool -L artifacts/paint.rs.app/Contents/MacOS/paintrs
+          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
+          python3 scripts/ci/collect_notices.py artifacts/notices --kind native --metadata metadata.json --dav1d-license "$(brew --prefix dav1d)/COPYING"
+          # tar preserves executable modes, which upload-artifact alone does not.
+          tar -czf 'macos-${{ matrix.target }}-developer-build.tar.gz' -C artifacts paint.rs.app notices
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: macos-${{ matrix.target }}-developer-build
+          path: macos-${{ matrix.target }}-developer-build.tar.gz
+          if-no-files-found: error
+
+  build-web:
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install web build tools
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.99.1 install trunk --version 0.21.14 --locked
+      # Normal production package, without the optional Binaryen pass.
+      - run: trunk build --release --locked
+      - name: Stage production notices from the common metadata superset
+        run: |
+          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
+          python3 scripts/ci/collect_notices.py dist/notices --kind web --metadata metadata.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: web-production
+          path: dist
+          if-no-files-found: error
+
+  vendor-heic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - run: cargo +1.99.1 test --locked --manifest-path crates/vendor/heic-rs/Cargo.toml --lib --all-features
+
+  vendor-heic-asan:
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: -Zsanitizer=address
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      CARGO_TARGET_DIR: target/heic-asan
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      # Pinned to the installed/locally exercised vendor-compatible nightly, not workspace MSRV.
+      - run: rustup toolchain install nightly-2025-11-06 --profile minimal --component rust-src --target x86_64-unknown-linux-gnu
+      - run: cargo +nightly-2025-11-06 test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --manifest-path crates/vendor/heic-rs/Cargo.toml --lib --all-features

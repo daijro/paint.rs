@@ -1,0 +1,149 @@
+{
+  "approval": "User explicitly approved both pinned fonts and their licenses in this chat on 2026-10-20 America/Chicago.",
+  "acquired_at_utc": "2026-10-21T01:49:26.800135+00:00",
+  "files": [
+    {
+      "repository": "googlefonts/noto-emoji",
+      "commit": "8998f5dd683424a73e2314a8c1f1e359c19e8742",
+      "source_path": "fonts/NotoColorEmoji.ttf",
+      "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/8998f5dd683424a73e2314a8c1f1e359c19e8742/fonts/NotoColorEmoji.ttf",
+      "metadata_url": "https://api.github.com/repos/googlefonts/noto-emoji/git/trees/8998f5dd683424a73e2314a8c1f1e359c19e8742?recursive=1",
+      "bytes": 10673480,
+      "git_blob_sha1": "943741df1e37aa3ee3b5afc9129843fd8d81908c",
+      "sha256": "72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b",
+      "tables": [
+        "CBDT",
+        "CBLC",
+        "GSUB",
+        "OS/2",
+        "cmap",
+        "head",
+        "hhea",
+        "hmtx",
+        "maxp",
+        "name",
+        "post",
+        "vhea",
+        "vmtx"
+      ],
+      "names": {
+        "0": [
+          "Copyright 2022 Google Inc."
+        ],
+        "1": [
+          "Noto Color Emoji"
+        ],
+        "2": [
+          "Regular"
+        ],
+        "4": [
+          "Noto Color Emoji"
+        ],
+        "5": [
+          "Version 2.051;GOOG;noto-emoji:20250818:e92753bfa55fd449e427d4d325f9c8c40408c74e"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software."
+        ],
+        "14": [
+          "http://scripts.sil.org/OFL"
+        ]
+      }
+    },
+    {
+      "repository": "googlefonts/noto-emoji",
+      "commit": "8998f5dd683424a73e2314a8c1f1e359c19e8742",
+      "source_path": "fonts/LICENSE",
+      "url": "https://raw.githubusercontent.com/googlefonts/noto-emoji/8998f5dd683424a73e2314a8c1f1e359c19e8742/fonts/LICENSE",
+      "metadata_url": "https://api.github.com/repos/googlefonts/noto-emoji/git/trees/8998f5dd683424a73e2314a8c1f1e359c19e8742?recursive=1",
+      "bytes": 4301,
+      "git_blob_sha1": "d952d62c065f3f35fb83a173496e90b21525aef3",
+      "sha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
+      "license": "SIL Open Font License 1.1",
+      "opening_lines": [
+        "This Font Software is licensed under the SIL Open Font License,",
+        "Version 1.1.",
+        "",
+        "This license is copied below, and is also available with a FAQ at:",
+        "http://scripts.sil.org/OFL",
+        "",
+        "-----------------------------------------------------------",
+        "SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007"
+      ]
+    },
+    {
+      "repository": "googlefonts/AntonFont",
+      "commit": "beb92fcad87808357123bb66881b4032dc96efe7",
+      "source_path": "fonts/Anton-Regular.ttf",
+      "url": "https://raw.githubusercontent.com/googlefonts/AntonFont/beb92fcad87808357123bb66881b4032dc96efe7/fonts/Anton-Regular.ttf",
+      "metadata_url": "https://api.github.com/repos/googlefonts/AntonFont/git/trees/beb92fcad87808357123bb66881b4032dc96efe7?recursive=1",
+      "bytes": 170812,
+      "git_blob_sha1": "4d65707db9d8663ccfa99cd28cd3a4e0025be178",
+      "sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+      "tables": [
+        "DSIG",
+        "GDEF",
+        "GPOS",
+        "GSUB",
+        "OS/2",
+        "cmap",
+        "cvt ",
+        "fpgm",
+        "gasp",
+        "glyf",
+        "head",
+        "hhea",
+        "hmtx",
+        "loca",
+        "maxp",
+        "name",
+        "post",
+        "prep"
+      ],
+      "names": {
+        "0": [
+          "Copyright 2020 The Anton Project Authors (https://github.com/googlefonts/AntonFont.git)"
+        ],
+        "1": [
+          "Anton"
+        ],
+        "2": [
+          "Regular"
+        ],
+        "4": [
+          "Anton Regular"
+        ],
+        "5": [
+          "Version 2.116; ttfautohint (v1.8.3)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      }
+    },
+    {
+      "repository": "googlefonts/AntonFont",
+      "commit": "beb92fcad87808357123bb66881b4032dc96efe7",
+      "source_path": "OFL.txt",
+      "url": "https://raw.githubusercontent.com/googlefonts/AntonFont/beb92fcad87808357123bb66881b4032dc96efe7/OFL.txt",
+      "metadata_url": "https://api.github.com/repos/googlefonts/AntonFont/git/trees/beb92fcad87808357123bb66881b4032dc96efe7?recursive=1",
+      "bytes": 4484,
+      "git_blob_sha1": "93feddee37145696e123ea65a6772cab09663f9e",
+      "sha256": "ee67e6ee22790b7929f1a3769ca2801d565c64b5a9096942c1adf5596de9c9e4",
+      "license": "SIL Open Font License 1.1",
+      "opening_lines": [
+        "Copyright 2020 The Anton Project Authors (https://github.com/googlefonts/AntonFont.git)",
+        "",
+        "This Font Software is licensed under the SIL Open Font License, Version 1.1.",
+        "This license is copied below, and is also available with a FAQ at:",
+        "http://scripts.sil.org/OFL",
+        "",
+        "",
+        "-----------------------------------------------------------"
+      ]
+    }
+  ]
+}

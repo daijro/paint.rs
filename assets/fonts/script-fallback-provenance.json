@@ -1,0 +1,310 @@
+{
+  "purpose": "R183 follow-up: lazily loaded Text fallback faces after Noto Sans and R131 Arabic/Hebrew; also UI fallbacks once loaded",
+  "approval": "User explicitly approved these faces (major Indic scripts and Thai, the common-charset Noto Sans CJK SC subset, sourced from the local Arch packages) in chat on 2026-10-23. In the same exchange the user chose \"Emoji + scripts\": once the already-bundled Noto Color Emoji and these script faces are loaded, add them to the UI fallback.",
+  "license": "SIL Open Font License 1.1",
+  "fonts": [
+    {
+      "file": "NotoSansDevanagari-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansDevanagari-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 243520,
+      "sha256": "4e3c66638958c3e2ab5d37f47a8deb89fffeb7be9985c665a519bbc7ba762313",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/devanagari)"
+        ],
+        "5": [
+          "Version 2.007; ttfautohint (v1.8.4.16-eb64)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-devanagari/NotoSansDevanagari-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-devanagari/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansBengali-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansBengali-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 143072,
+      "sha256": "b55c62ee531e3214da6c0701daecea89a52ba42db7d8206b92e6b51f397a3193",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2025 The Noto Project Authors (https://github.com/notofonts/bengali)"
+        ],
+        "5": [
+          "Version 3.011; ttfautohint (v1.8.4.16-eb64)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org"
+        ],
+        "14": [
+          "https://openfontlicense.org/"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-bengali/NotoSansBengali-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-bengali/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansGurmukhi-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansGurmukhi-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 55172,
+      "sha256": "658d0207da305a1411c539a8b0bbeda64d4146e54fb4827facddb890b6b90d74",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/gurmukhi)"
+        ],
+        "5": [
+          "Version 2.004; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-gurmukhi/NotoSansGurmukhi-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-gurmukhi/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansGujarati-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansGujarati-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 200704,
+      "sha256": "9b5a7aaeeb649a2e75a49d8b006a1f87db1b61c0df3b001609f4e0725d88dbf6",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/gujarati)"
+        ],
+        "5": [
+          "Version 2.106; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-gujarati/NotoSansGujarati-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-gujarati/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansOriya-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansOriya-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 131216,
+      "sha256": "a16645d056017927406546aa78e4ce15e782fd8783467267b75450453d007415",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/oriya)"
+        ],
+        "5": [
+          "Version 2.007"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-oriya/NotoSansOriya-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-oriya/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansTamil-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansTamil-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 73992,
+      "sha256": "3c0a186feb3c63c7f6d63e1511dcdc144e745ae09b98e217c83f3e317974f6f9",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/tamil)"
+        ],
+        "5": [
+          "Version 2.004; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-tamil/NotoSansTamil-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-tamil/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansTelugu-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansTelugu-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 235176,
+      "sha256": "b274780b69d1d23fe84b55e809a152cb2ac5306d33864b1f87622f6971871aae",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/telugu)"
+        ],
+        "5": [
+          "Version 2.005; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-telugu/NotoSansTelugu-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-telugu/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansKannada-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansKannada-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 182416,
+      "sha256": "9ad74dc64838c6855b96f671fc08e425a58921b9d0c71712ea79c328a27e6e38",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/kannada)"
+        ],
+        "5": [
+          "Version 2.006; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-kannada/NotoSansKannada-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-kannada/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansMalayalam-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansMalayalam-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 112936,
+      "sha256": "c08de7fa8d032a5d6a4d120fb82c78cec60b362a4e73fa26360d89759ff2a7f9",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/malayalam)"
+        ],
+        "5": [
+          "Version 2.104; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-malayalam/NotoSansMalayalam-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-malayalam/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansSinhala-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansSinhala-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 154912,
+      "sha256": "9e32612d47004552f3125e78648a9e2e7899a216ccd3cefbb93a9b5f4c809feb",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/sinhala)"
+        ],
+        "5": [
+          "Version 3.000; ttfautohint (v1.8.4.16-eb64)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-sinhala/NotoSansSinhala-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-sinhala/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansThai-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansThai-Regular.ttf",
+      "package": "noto-fonts 1:2026.10.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.10.01-1-any.pkg.tar.zst",
+      "bytes": 37780,
+      "sha256": "61cf814eec46b294d6ea4401ac295d0cecd5207bd2331dcc5a15e7301d30ee44",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/thai)"
+        ],
+        "5": [
+          "Version 2.002; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL"
+        ],
+        "14": [
+          "https://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-thai/NotoSansThai-Regular.ttf",
+      "license_path": "assets/fonts/noto-sans-thai/LICENSE.txt"
+    },
+    {
+      "file": "NotoSansCJKsc-Regular.otf",
+      "source": "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+      "source_face_index": 2,
+      "source_bytes": 19484784,
+      "source_sha256": "b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a",
+      "package": "noto-fonts-cjk 20240730-1",
+      "package_verified": "pacman -Qkk noto-fonts-cjk: 21 total files, 0 altered files (package archive not cached)",
+      "modified": "subset by scripts/fonts/subset_cjk.py (fontTools 4.67.0, Python 3.14.8): GB2312, JIS X 0208 and KS X 1001 characters plus Hangul, Kana and CJK punctuation/forms blocks; GSUB, GPOS, GDEF and BASE dropped; head timestamp kept",
+      "bytes": 4760280,
+      "sha256": "c5391802a78184854c15791a13b192d716eaf0b4b6d6288310aeb46fd14c1e49",
+      "embedded_names": {
+        "0": [
+          "© 2014-2021 Adobe (http://www.adobe.com/)."
+        ],
+        "5": [
+          "Version 2.004;hotconv 1.0.118;makeotfexe 2.5.65603"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software."
+        ],
+        "14": [
+          "http://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf",
+      "license_path": "assets/fonts/noto-sans-cjk-sc/LICENSE.txt"
+    }
+  ]
+}

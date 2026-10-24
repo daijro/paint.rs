@@ -1,0 +1,555 @@
+{
+ "source": {
+  "framework": ".NET 10.0.13",
+  "sdk": "10.0.113",
+  "platform": "Linux ICU",
+  "icuLibraries": [
+   "libicui18n.so.78.3",
+   "libicuuc.so.78.3"
+  ],
+  "userOverrides": false,
+  "enumerated": 907,
+  "namedCultures": 906,
+  "selectedCalendar": "GregorianCalendar Localized (the only optional Gregorian calendar)",
+  "projected": {
+   "ckb-IR": "PersianCalendar",
+   "fa": "PersianCalendar",
+   "fa-AF": "PersianCalendar",
+   "fa-IR": "PersianCalendar",
+   "lrc": "PersianCalendar",
+   "lrc-IR": "PersianCalendar",
+   "mzn": "PersianCalendar",
+   "mzn-IR": "PersianCalendar",
+   "ps": "PersianCalendar",
+   "ps-AF": "PersianCalendar",
+   "shn-TH": "ThaiBuddhistCalendar",
+   "th": "ThaiBuddhistCalendar",
+   "th-TH": "ThaiBuddhistCalendar",
+   "uz-Arab": "PersianCalendar",
+   "uz-Arab-AF": "PersianCalendar"
+  },
+  "contract": "Public CultureInfo DateTimeFormatInfo with its Gregorian calendar assigned. R154 Q58/Q59. Portable snapshot; Windows NLS, user overrides and default non-Gregorian calendars are not calibrated.",
+  "generator": {
+   "Program.cs": "70f16d0467f5ddbe9180e42f56da483ef5709fff05b9b19e1ce73369bcabfd27",
+   "generate.py": "bef569b2a41fb65e77d6be3016623f695b3189be44153050852391c8b483fd19"
+  }
+ },
+ "fixtures": [
+  {
+   "culture": "en-US",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": " 2026-02-14 ",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "02/14/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2 / 14 / 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "03/04/2026",
+   "ok": true,
+   "value": "2026-03-04"
+  },
+  {
+   "culture": "en-US",
+   "text": "14/2/2026",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/26",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/49",
+   "ok": true,
+   "value": "2049-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/50",
+   "ok": true,
+   "value": "1950-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/226",
+   "ok": true,
+   "value": "0226-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/2",
+   "ok": true,
+   "value": "2002-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "03/04/05",
+   "ok": true,
+   "value": "2005-03-04"
+  },
+  {
+   "culture": "en-US",
+   "text": "14 February 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "February 14 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "Feb 14 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "14 FEB 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "February 14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "February 14, 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "Saturday 14 February 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-02-30",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2024-02-29",
+   "ok": true,
+   "value": "2024-02-29"
+  },
+  {
+   "culture": "en-US",
+   "text": "2000-02-29",
+   "ok": true,
+   "value": "2000-02-29"
+  },
+  {
+   "culture": "en-US",
+   "text": "1900-02-29",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2100-02-29",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "0001-01-01",
+   "ok": true,
+   "value": "0001-01-01"
+  },
+  {
+   "culture": "en-US",
+   "text": "9999-12-31",
+   "ok": true,
+   "value": "9999-12-31"
+  },
+  {
+   "culture": "en-US",
+   "text": "0000-12-31",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "10000-01-01",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-13-01",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-00-10",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-01-32",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-01-00",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "+2026-01-01",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "-2026-01-01",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-02-14 10:00",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-02-14Z",
+   "ok": true,
+   "value": "2026-02-13"
+  },
+  {
+   "culture": "en-US",
+   "text": "#2026-02-14#",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "2026-02-14\u0000",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "٢٠٢٦-٠٢-١٤",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-US",
+   "text": "2/14/2026 AD",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-US",
+   "text": "February 2026",
+   "ok": true,
+   "value": "2026-02-01"
+  },
+  {
+   "culture": "en-US",
+   "text": "2026",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-GB",
+   "text": "03/04/2026",
+   "ok": true,
+   "value": "2026-04-03"
+  },
+  {
+   "culture": "en-GB",
+   "text": "14/2/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-GB",
+   "text": "2/14/2026",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "en-GB",
+   "text": "14/02/26",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "en-GB",
+   "text": "14 February 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14.02.2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14.2.2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14 . 2 . 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14/02/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14 Februar 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14 februar 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14. Februar 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "14 Feb. 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-DE",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-CH",
+   "text": "14.02.2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "de-CH",
+   "text": "14 Februar 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fr-FR",
+   "text": "14/02/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fr-FR",
+   "text": "14 février 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fr-FR",
+   "text": "14 FÉVRIER 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fr-FR",
+   "text": "14 févr. 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fr-FR",
+   "text": "14 fevrier 2026",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "fr-FR",
+   "text": "février 14 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fr-FR",
+   "text": "14 February 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ru-RU",
+   "text": "14.02.2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ru-RU",
+   "text": "14 февраля 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ru-RU",
+   "text": "14 февраль 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ru-RU",
+   "text": "14 февр. 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "tr-TR",
+   "text": "14.02.2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "tr-TR",
+   "text": "14 Şubat 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "tr-TR",
+   "text": "14 şubat 2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ja-JP",
+   "text": "2026/02/14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ja-JP",
+   "text": "2026/2/14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ja-JP",
+   "text": "14 2月 2026",
+   "ok": false,
+   "value": null
+  },
+  {
+   "culture": "ko-KR",
+   "text": "2026. 2. 14.",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ko-KR",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "zh-CN",
+   "text": "2026/2/14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "zh-CN",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ar-EG",
+   "text": "14/2/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "ar-EG",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fa-IR",
+   "text": "2026/2/14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "fa-IR",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "th-TH",
+   "text": "14/2/2026",
+   "ok": true,
+   "value": "2026-02-14"
+  },
+  {
+   "culture": "th-TH",
+   "text": "2026-02-14",
+   "ok": true,
+   "value": "2026-02-14"
+  }
+ ]
+}

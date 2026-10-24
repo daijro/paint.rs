@@ -1,0 +1,14 @@
+{
+    "formatVersion": 1,
+    "id": "paintrs-default",
+    "name": "paint.rs",
+    "author": "paint.rs contributors",
+    "version": "0.1.0",
+    "description": "paint.rs's own flat colour SVG icons, one file per Paint.NET icon name (<name>.svg).",
+    "license": "MIT",
+    "notices": [],
+    "fluentDerived": false,
+    "format": "svg",
+    "darkSuffix": ".dark",
+    "singleFrame": ["animation_busy_spinner"]
+}

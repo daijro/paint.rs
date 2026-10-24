@@ -1,0 +1,35 @@
+# paint.rs: heic-rs 0.1.4 (MIT OR Apache-2.0, https://github.com/tbraun96/heic-rs), vendored with a
+# small patch (Ruling R52; see PAINTRS-PATCH.md) and wired in through the workspace's
+# `[patch.crates-io]`. Only `src/`, the licences and NOTICE are kept; the published manifest's
+# examples, tests, benches and dev-dependencies are dropped.
+[package]
+edition = "2024"
+rust-version = "1.85"
+name = "heic-rs"
+version = "0.1.4"
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Pure-Rust HEIC/HEIF image decoder: no C, no unsafe, no_std-friendly, wasm-ready"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/tbraun96/heic-rs"
+
+[features]
+bench = []
+default = ["std", "parallel"]
+parallel = ["std", "dep:rayon"]
+std = []
+
+[lib]
+name = "heic_rs"
+path = "src/lib.rs"
+
+[dependencies.rayon]
+version = "1.10"
+optional = true
+
+# Keep standalone tests independent even inside a nested Git worktree.
+[workspace]

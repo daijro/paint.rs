@@ -1,0 +1,126 @@
+# paint.rs attribution notice
+
+paint.rs is an open source, clean-room reimplementation of Paint.NET, licensed under the GNU General
+Public License version 3 or later (`LICENSE`, `LICENSE.md`). [paint.js](https://github.com/LabyStudio/paintdotjs)
+by LabyStudio served as a reference during its development, and paint.rs includes code adapted from it
+(not its artwork). paint.js is itself an unofficial JavaScript port of Paint.NET 3.36.7 whose interface targets
+Paint.NET 5.1.12+.
+
+The original Paint.NET source is Copyright (C) dotPDN LLC, Rick Brewster, and contributors.
+Paint.NET was created by Rick Brewster. paint.js is Copyright (C) 2024-present LabyStudio.
+
+paint.rs is not affiliated with or endorsed by dotPDN LLC, Paint.NET, or LabyStudio. The bundled
+interface artwork (the icons, cursors and interface images in `assets/icons-svg/`) is original work
+by paint.rs contributors, licensed under this project's GPL-3.0-or-later licence. paint.js's artwork
+is not included.
+No SVG geometry is derived from Microsoft Fluent icons; `assets/icons-svg/manifest.json`
+records `fluentDerived: false`, so no Fluent icon notice applies. Bundled fonts in `assets/font/` keep their colocated `LICENSE.txt`;
+they include Selawik (Microsoft, SIL Open Font License 1.1) and Carlito (tyPoland Łukasz
+Dziedzic, SIL Open Font License 1.1).
+Bundled UI fallbacks Noto Sans Arabic Version 2.013 (Copyright 2022 The Noto Project
+Authors, https://github.com/notofonts/arabic) and Noto Sans Hebrew Version 3.001
+(Copyright 2024 The Noto Project Authors, https://github.com/notofonts/hebrew) are
+unmodified SIL Open Font License 1.1 faces. Their full licenses are colocated in
+`assets/font/noto-sans-arabic/` and `assets/font/noto-sans-hebrew/`; pinned local package,
+embedded copyright/version/license records, byte sizes and SHA-256 hashes are in
+`assets/font/rtl-fallback-provenance.json`. They follow the existing interface faces
+and provide Arabic/Hebrew glyph coverage without changing Latin font selection.
+Additional document fonts in `assets/fonts/` are Noto Color Emoji Version 2.051,
+Copyright 2022 Google Inc., from googlefonts/noto-emoji commit
+`8998f5dd683424a73e2314a8c1f1e359c19e8742`, under SIL Open Font License 1.1
+(`assets/fonts/noto-color-emoji/LICENSE`), and Anton Version 2.116,
+Copyright 2020 The Anton Project Authors, from googlefonts/AntonFont commit
+`beb92fcad87808357123bb66881b4032dc96efe7`, under SIL Open Font License 1.1
+(`assets/fonts/anton/OFL.txt`). Pinned source URLs, sizes and SHA-256 hashes are in
+`assets/fonts/provenance.json`. These fonts serve document content; they do not replace
+bundled interface fonts. Color-glyph rendering is tracked separately by Task35c.
+Script fallback fonts in `assets/fonts/noto-sans-*/` (R183 follow-up) are Noto Sans Devanagari,
+Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, Sinhala and Thai
+(Copyright 2022–2025 The Noto Project Authors, https://github.com/notofonts), unmodified from
+the Arch Linux `noto-fonts 1:2026.10.01-1` package, and a subset of Noto Sans CJK SC Version
+2.004 (© 2014-2021 Adobe, https://github.com/notofonts/noto-cjk) from `noto-fonts-cjk
+20240730-1`, made by `scripts/fonts/subset_cjk.py` (common GB2312/JIS X 0208/KS X 1001
+characters, Hangul and Kana; layout tables removed). All are under SIL Open Font License 1.1,
+with each license colocated as `LICENSE.txt`; sources, sizes and SHA-256 hashes are in
+`assets/fonts/script-fallback-provenance.json`.
+paint.rs contains no GPC code. See LICENSE.md for the complete terms.
+
+The application icon `assets/app-icon.svg` was supplied by the project owner (2026-10-24);
+original file name `paint-rs-final.svg`. `assets/app-icon.png` is rendered
+from it by paint.rs.
+
+Image codecs: native builds link libjxl (the JPEG XL Project Authors, BSD-3-Clause) with its
+bundled Highway (the Highway Project Authors, Apache-2.0 or BSD-3-Clause), Brotli (the Brotli
+Authors, MIT) and skcms (Google Inc., BSD-3-Clause), and libwebp (Google Inc., BSD-3-Clause)
+statically. The JPEG encoder (`jpeg-encoder`) is based in part on the work of the Independent JPEG
+Group. Native builds decode AVIF with the system dav1d library (Copyright © 2018-2025, VideoLAN and
+dav1d authors; BSD-2-Clause). HEIC and the AVIF container are read by heic-rs (MIT OR Apache-2.0,
+https://github.com/tbraun96/heic-rs), vendored in `crates/vendor/heic-rs` with its licences and
+NOTICE and modified by paint.rs (its `PAINTRS-PATCH.md`: the colour of files without an `nclx` box,
+and the direction of `imir`). JPEG XR is decoded by openreadout-jpegxr, a port of Microsoft's jxrlib
+decoder (Copyright (c) 2009, Microsoft; Copyright (c) 2026, The OpenReadout Authors; BSD-2-Clause,
+the full text in that crate's LICENSE). The BSD licences above require their notices in the
+documentation of binary distributions too (Task 58 packaging).
+
+Web decoding uses @imagemagick/magick-wasm 0.0.44 (Dirk Lemstra, Apache-2.0), ImageMagick
+and its delegates, and jpegxr 0.3.0 (Microsoft jxrlib, Brion Vibber; BSD-style license).
+Their unchanged runtime assets, package metadata, LICENSE and complete delegate NOTICE are
+bundled in `assets/codecs/` and copied into web distributions by Trunk. Regenerate them only
+from the installed packages with `node scripts/copy-web-codecs.mjs`; see `assets/codecs/README.md`.
+
+PhotoSauce.MagicScaler (Clinton Ingram, MIT License) — resampling kernels ported in
+`crates/pdn-core/src/resample/magic.rs` (from version 0.15.0, https://github.com/saucecontrol/PhotoSauce).
+MagicScaler is third-party code, not Paint.NET code. Its license:
+
+> The MIT License
+>
+> Copyright (c) 2015-2024 Clinton Ingram and Contributors
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+> THE SOFTWARE.
+
+Some plugins were inspired by BoltBait's Paint.NET plugin pack. The `bb…` effects reproduce its
+behaviour from a written specification; no BoltBait code or artwork is included.
+
+PhotoCraft (ArtCraft Team and the PhotoCraft contributors, MIT License) — algorithms for the Extra
+effects and tools ported in `crates/pdn-core/src/extra/`, `crates/pdn-core/src/tool/` and
+`crates/paintrs/src/dialogs/` (from commits `ff47388` and `e6d6fb45`). PhotoCraft is
+dual-licensed MIT OR Apache-2.0; paint.rs uses it under MIT. It is third-party code, not Paint.NET
+code. Its license:
+
+> MIT License
+>
+> Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.

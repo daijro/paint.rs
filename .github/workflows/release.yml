@@ -1,0 +1,164 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build and attach to its release
+        required: true
+        type: string
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+  GH_TOKEN: ${{ github.token }}
+  BINARYEN_VERSION: version_133
+
+# Release builds only build and package; ci.yml runs the tests. Desktop builds use the
+# `dist` profile (fat LTO, one codegen unit) and, on x86-64, AVX2 (x86-64-v3: Haswell / Excavator
+# or newer); Apple Silicon builds use the default aarch64 target, which has NEON.
+# checkout v7.0.1, the same pin as ci.yml. Uploads use the gh CLI that every runner ships, not a third-party
+# action, so there is nothing else to pin.
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create the release if the tag has none yet
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 (.tar.gz), Windows x86_64 (.zip), macOS arm64 and x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
+
+          The x86-64 downloads need a CPU with AVX2 (Intel Haswell or AMD Excavator and newer). On older CPUs, build from source.
+
+          The macOS and Windows builds are unsigned and not notarized: macOS Gatekeeper and Windows SmartScreen will warn on first launch."
+
+  linux-x86_64:
+    needs: release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - name: Install native codecs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libdav1d-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - run: cargo +1.99.1 build --locked --profile dist -p paintrs
+        env: {RUSTFLAGS: -Ctarget-cpu=x86-64-v3}
+      - name: Package and upload
+        run: |
+          set -euo pipefail
+          dir="paint.rs-$TAG-linux-x86_64"
+          mkdir -p "$dir"
+          cp target/dist/paintrs LICENSE LICENSE.md NOTICE.md "$dir/"
+          # scripts/linux-install-desktop.sh adds the launcher entry and the Wayland taskbar icon.
+          mkdir -p "$dir/scripts" "$dir/packaging/linux" "$dir/assets"
+          cp scripts/linux-install-desktop.sh "$dir/scripts/"
+          cp packaging/linux/paint-rs.desktop packaging/linux/paint-rs.xml "$dir/packaging/linux/"
+          cp assets/app-icon.svg assets/app-icon.png "$dir/assets/"
+          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
+          python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license /usr/share/doc/libdav1d7/copyright
+          tar -czf "$dir.tar.gz" "$dir"
+          gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+
+  windows-x86_64:
+    needs: release
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
+      - name: Install native dav1d and pkgconf
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:x64-windows pkgconf:x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          "PKG_CONFIG=$prefix/tools/pkgconf/pkgconf.exe" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> $env:GITHUB_ENV
+          "LIB=$prefix/lib;$env:LIB" >> $env:GITHUB_ENV
+          "$prefix/bin" >> $env:GITHUB_PATH
+          "$env:ProgramFiles/LLVM/bin" >> $env:GITHUB_PATH
+      - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target x86_64-pc-windows-msvc
+        env: {RUSTFLAGS: -Ctarget-cpu=x86-64-v3}
+      - name: Package and upload
+        shell: pwsh
+        run: |
+          $dir = "paint.rs-$env:TAG-windows-x86_64"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/dist/paintrs.exe, LICENSE, LICENSE.md, NOTICE.md $dir
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*dav1d*.dll" $dir
+          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/dav1d/copyright"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          gh release upload $env:TAG "$dir.zip" --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  macos:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+            rustflags: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+            rustflags: -Ctarget-cpu=x86-64-v3
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - name: Install native codecs and Rust
+        run: |
+          test "$(uname -m)" = '${{ matrix.arch }}'
+          brew install dav1d pkgconf cmake
+          rustup toolchain install 1.99.1 --profile minimal --target '${{ matrix.target }}'
+          echo "PKG_CONFIG_PATH=$(brew --prefix dav1d)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target '${{ matrix.target }}'
+        env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
+      - name: Package unsigned app and upload
+        run: |
+          set -euo pipefail
+          dir="paint.rs-$TAG-macos-${{ matrix.arch }}"
+          mkdir -p "$dir"
+          sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/dist/paintrs' "$dir/paint.rs.app"
+          plutil -lint "$dir/paint.rs.app/Contents/Info.plist"
+          lipo -verify_arch '${{ matrix.arch }}' "$dir/paint.rs.app/Contents/MacOS/paintrs"
+          cp LICENSE LICENSE.md NOTICE.md "$dir/"
+          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
+          python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$(brew --prefix dav1d)/COPYING"
+          # tar keeps the executable modes inside the bundle.
+          tar -czf "$dir.tar.gz" "$dir"
+          gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+
+  web:
+    needs: release
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - name: Install trunk and wasm-opt
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.99.1 install trunk --version 0.21.14 --locked
+          curl -sSfL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz" | tar xz -C "$RUNNER_TEMP"
+          echo "WASM_OPT=$RUNNER_TEMP/binaryen-${BINARYEN_VERSION}/bin/wasm-opt" >> "$GITHUB_ENV"
+      - run: tools/web-dist.sh --zip
+      - name: Upload
+        run: gh release upload "$TAG" target/paintrs-web-*.zip --clobber --repo "$GITHUB_REPOSITORY"

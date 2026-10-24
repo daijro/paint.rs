@@ -1,0 +1,13 @@
+/paintdotjs
+target/
+dist/
+tests/node_modules
+/tests/parity/
+.local/
+.worktrees/
+assets/pdn/templates/
+/docs/
+/DEVELOPMENT.md
+/.claude/
+/.superpowers/
+*-scratch/

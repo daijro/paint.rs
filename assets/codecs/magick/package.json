@@ -1,0 +1,65 @@
+{
+    "name": "@imagemagick/magick-wasm",
+    "version": "0.0.44",
+    "description": "The WASM library for ImageMagick",
+    "keywords": [
+        "imagemagick",
+        "magick",
+        "wasm",
+        "image",
+        "convert",
+        "resize"
+    ],
+    "homepage": "https://github.com/dlemstra/magick-wasm",
+    "bugs": {
+        "url": "https://github.com/dlemstra/magick-wasm/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/dlemstra/magick-wasm.git"
+    },
+    "license": "Apache-2.0",
+    "author": "Dirk Lemstra",
+    "type": "module",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js",
+            "require": "./dist/index.umd.cjs"
+        },
+        "./x64/magick.wasm": "./dist/x64/magick.wasm",
+        "./magick.wasm": "./dist/x86/magick.wasm"
+    },
+    "main": "./dist/index.umd.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": [
+        "dist",
+        "NOTICE"
+    ],
+    "scripts": {
+        "build": "vite build && dts-bundle-generator src/index.ts -o dist/index.d.ts --external-inlines @dlemstra/magick-native",
+        "demo": "cd demo && tsc && node demo.js",
+        "lint": "eslint --max-warnings=0 .",
+        "issue": "cd issue && tsc && node issue.js",
+        "prepare": "node npm-postinstall.mjs",
+        "test": "vitest run",
+        "test-dist": "node tests/dist/test-dist",
+        "update-index": "cd tools && tsc && node update-index.js ../src"
+    },
+    "devDependencies": {
+        "@dlemstra/magick-native": "2026.927.1314",
+        "@types/jsdom": "30.0.0",
+        "@types/node": "26.6.3",
+        "@typescript-eslint/eslint-plugin": "8.70.1",
+        "@typescript-eslint/parser": "8.70.1",
+        "dts-bundle-generator": "9.5.1",
+        "eslint": "10.11.0",
+        "eslint-plugin-license-header": "0.9.0",
+        "jsdom": "29.1.1",
+        "set-value": "4.1.0",
+        "typescript": "6.0.3",
+        "vite": "8.3.1",
+        "vitest": "5.0.2"
+    }
+}

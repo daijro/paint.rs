@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/pdn-core", "crates/paintrs"]
+# Vendored third-party crates (patched below) are not workspace members: no lint, test or fmt gate.
+exclude = ["crates/vendor/heic-rs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+egui = "0.37"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "persistence", "wayland", "x11", "accesskit"] }
+egui_kittest = { version = "0.37", features = ["wgpu", "eframe"] }
+tiny-skia = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# The web build's release profile (index.html's `data-cargo-profile-release`, so `trunk build
+# --release` and tools/web-dist.sh use it): fat LTO and one codegen unit
+# on top of release, which only the wasm pays for in build time. tools/web-dist.sh then runs
+# `wasm-opt -O3`.
+# Release downloads (.github/workflows/release.yml): release plus fat LTO and one codegen unit; the
+# workflow adds x86-64-v3 (AVX2) on x86-64. A plain `--release` build stays quicker to compile.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+[profile.web]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+# Ruling R52 (Task 48): heic-rs with the HEVC VUI honoured and the MIAF colour default (BT.601
+# full range) for files without an `nclx` box; see crates/vendor/heic-rs/PAINTRS-PATCH.md.
+[patch.crates-io]
+heic-rs = { path = "crates/vendor/heic-rs" }

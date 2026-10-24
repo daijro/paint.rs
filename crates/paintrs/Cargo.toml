@@ -1,0 +1,69 @@
+[package]
+name = "paintrs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pdn-core = { path = "../pdn-core" }
+egui = { workspace = true, features = ["web_file"] }
+eframe.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+web-time = "1"
+image.workspace = true
+resvg = { version = "0.47.0", default-features = false }
+ttf-parser = "0.25"
+# Task54/R102: installed UUIDs and JS-compatible UTC ISO timestamps.
+uuid = { version = "1", features = ["v4", "js"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
+
+# Task 28: the system clipboard (straight RGBA images, on-demand reads); 3.7 is the version
+# egui-winit already locks, so it adds no crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sys-locale = "0.3"
+rfd = "0.17.2"
+# Task56: bounded private local transport (cached); primary ownership uses File::try_lock.
+interprocess = "=2.4.5"
+tempfile = "3.27"
+arboard = { version = "3.7", default-features = false, features = ["image-data"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Location", "Document", "Element", "HtmlCanvasElement", "ImageData", "FileSystemFileHandle", "HtmlAnchorElement", "Url", "UrlSearchParams", "Blob", "DataTransfer", "DataTransferItem", "DataTransferItemList", "ClipboardEvent", "BeforeUnloadEvent", "DragEvent", "CustomEvent", "Event", "EventTarget", "IdbFactory", "IdbDatabase", "IdbRequest", "IdbOpenDbRequest", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "IdbObjectStoreParameters", "IdbTransaction", "IdbTransactionMode", "DomStringList", "Storage", "Response", "Headers"] }
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+pdn-core = { path = "../pdn-core", features = ["testing"] }
+egui_kittest.workspace = true
+image.workspace = true
+
+# Timing harness (all ignored): `cargo test --release -p paintrs --test perf_frames -- --ignored`
+# builds it; plain test runs skip it.
+[[test]]
+name = "perf_frames"
+test = false
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+objc2 = "=0.6.5"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSAppleEventManager", "NSAppleEventDescriptor", "NSNotification", "NSString", "NSURL", "NSObject"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem"] }
+
+[target.'cfg(windows)'.dependencies]
+widestring = "1.2.1"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+# Wayland: clipboard images through data-control (KDE, wlroots; arboard falls back to X11 where the
+# compositor lacks it), and drag and drop on the window's own connection (platform/wayland_dnd.rs).
+# All three are already in the build through arboard and winit.
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
+wayland-client = { version = "0.31.15", features = ["system"] }
+percent-encoding = "2.3.2"

@@ -1,0 +1,13 @@
+# paint.rs on Cloudflare (Workers static assets or Pages), which reads `_headers` from the site root:
+# tools/web-dist.sh copies it into dist/, the site (README "Web").
+# Cloudflare compresses HTML and JS itself, but doesn't send a stored .gz with Content-Encoding. So the wasm files
+# and the fonts are fetched as their .gz and gunzipped in the browser (index.html's loader), and a .gz needs no
+# header here. Types come from the extension. Paths not listed keep Cloudflare's default, which revalidates.
+
+# Trunk names the app's wasm and JS, its snippets and the icon by their content: cache them for good.
+/paintrs-*
+  Cache-Control: public, max-age=31536000, immutable
+/snippets/*
+  Cache-Control: public, max-age=31536000, immutable
+/app-icon-*
+  Cache-Control: public, max-age=31536000, immutable

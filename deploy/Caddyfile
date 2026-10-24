@@ -1,0 +1,21 @@
+# paint.rs behind Caddy 2 (README "Web"). The site folder is dist/ after tools/web-dist.sh, or the release zip's
+# folder. Change the path and the address to yours. Serve it over HTTPS (or from localhost) for the system
+# clipboard, which browsers allow only in a secure context.
+:8080 {
+	root * /srv/paintrs
+
+	# Precompressed: a request for x is answered from x.gz with Content-Encoding: gzip when the client accepts gzip,
+	# and from x otherwise. The wasm files and the fonts are fetched as their .gz, which goes out as it is and is
+	# gunzipped in the browser. Text without a .gz beside it (the SVG icon, the notices) is compressed on the fly.
+	file_server {
+		precompressed gzip
+	}
+	encode gzip
+
+	# Trunk names the app's wasm and JS, its snippets and the icon by their content: kept for good. The rest
+	# (index.html, the codecs, the fonts, the notices) keeps its name across releases and revalidates.
+	@hashed path /paintrs-* /snippets/* /app-icon-*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+	@named not path /paintrs-* /snippets/* /app-icon-*
+	header @named Cache-Control "no-cache"
+}

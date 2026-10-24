@@ -1,0 +1,53 @@
+{
+  "purpose": "R131 bundled UI fallback only, after R47 primary and existing Noto Sans faces",
+  "fonts": [
+    {
+      "file": "NotoSansArabic-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+      "package": "noto-fonts 1:2026.09.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.09.01-1-any.pkg.tar.zst",
+      "bytes": 234892,
+      "sha256": "bdff3e5659d67e67def05b33f749683b9376ae819d65d3dd62ac4640b3aaef48",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2022 The Noto Project Authors (https://github.com/notofonts/arabic)"
+        ],
+        "5": [
+          "Version 2.013; ttfautohint (v1.8.4.16-eb64)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org"
+        ],
+        "14": [
+          "https://openfontlicense.org"
+        ]
+      },
+      "bundled_path": "assets/font/noto-sans-arabic/NotoSansArabic-Regular.ttf"
+    },
+    {
+      "file": "NotoSansHebrew-Regular.ttf",
+      "source": "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf",
+      "package": "noto-fonts 1:2026.09.01-1",
+      "archive": "/var/cache/pacman/pkg/noto-fonts-1:2026.09.01-1-any.pkg.tar.zst",
+      "bytes": 26860,
+      "sha256": "cdefaf8efd47045f6820928eba84db5bed7557539328952b5f828315485e02ee",
+      "archive_member_verified": true,
+      "embedded_names": {
+        "0": [
+          "Copyright 2024 The Noto Project Authors (https://github.com/notofonts/hebrew)"
+        ],
+        "5": [
+          "Version 3.001; ttfautohint (v1.8.4.7-5d5b)"
+        ],
+        "13": [
+          "This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software."
+        ],
+        "14": [
+          "http://scripts.sil.org/OFL"
+        ]
+      },
+      "bundled_path": "assets/font/noto-sans-hebrew/NotoSansHebrew-Regular.ttf"
+    }
+  ]
+}

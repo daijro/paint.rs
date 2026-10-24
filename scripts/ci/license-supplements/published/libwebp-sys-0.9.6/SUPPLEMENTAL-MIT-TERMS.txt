@@ -1,0 +1,34 @@
+R141 supplemental standard MIT terms for the libwebp-sys 0.9.6 Rust wrapper
+
+The published wrapper declares MIT and the following authors:
+XianYou <xianyou.cyq@alibaba-inc.com>
+Kornel Lesiński <kornel@geekhood.net>
+These are declared authors only. No copyright holder or year is inferred.
+
+An original wrapper license/copyright notice was not supplied or recovered.
+The original Cargo.toml.orig, README.md and VCS metadata accompany this supplement
+verbatim. Bundled libwebp BSD notices, including vendor/COPYING and vendor/AUTHORS,
+remain independently preserved; they do not replace these wrapper terms.
+
+The permission, conditions and disclaimer below are standard MIT terms derived
+from the same existing local MIT body documented for R134, excluding its other
+authors' copyright statements. This is an explicit packaging supplement based on
+the published MIT declaration, not a recovered upstream notice or legal certification.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

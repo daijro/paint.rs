@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {requestClipboardImage} from '../crates/paintrs/src/platform/web_clipboard.js';
+let resolve,reads=0;
+Object.defineProperty(globalThis,'navigator',{value:{clipboard:{read(){reads++;return new Promise(r=>resolve=r);}}},configurable:true});
+const first=requestClipboardImage(32768,536870912);const old=requestClipboardImage(32768,536870912);const latest=requestClipboardImage(32768,536870912);
+await assert.rejects(old,/superseded/);assert.equal(reads,1);
+resolve([]);assert.equal(await first,null);
+await new Promise(r=>setImmediate(r));assert.equal(reads,2);resolve([{types:['text/plain']}]);assert.equal(await latest,null);
+navigator.clipboard.read=()=>Promise.reject(new Error('denied'));
+await assert.rejects(requestClipboardImage(32768,536870912),/denied/);
+navigator.clipboard.read=()=>Promise.resolve([]);
+assert.equal(await requestClipboardImage(32768,536870912),null);
+console.log('PASS clipboard requests: one active + latest queued, supersession, empty/text, denial, recovery');
