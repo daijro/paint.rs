@@ -27,12 +27,15 @@ rfd = "0.17.2"
 interprocess = "=2.4.5"
 tempfile = "3.27"
 arboard = { version = "3.7", default-features = false, features = ["image-data"] }
+# Object Selection's MobileSAM model (pdn-core `sam`, its 41 MB of weights built in), desktop only:
+# on the web its seconds-long image encoder would freeze the page until it runs in a Web Worker.
+pdn-core = { path = "../pdn-core", features = ["sam"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
 wasm-bindgen = "0.2"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Navigator", "Location", "Document", "Element", "HtmlCanvasElement", "ImageData", "FileSystemFileHandle", "HtmlAnchorElement", "Url", "UrlSearchParams", "Blob", "DataTransfer", "DataTransferItem", "DataTransferItemList", "ClipboardEvent", "BeforeUnloadEvent", "DragEvent", "CustomEvent", "Event", "EventTarget", "IdbFactory", "IdbDatabase", "IdbRequest", "IdbOpenDbRequest", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "IdbObjectStoreParameters", "IdbTransaction", "IdbTransactionMode", "DomStringList", "Storage", "Response", "Headers"] }
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Location", "Document", "Element", "HtmlCanvasElement", "ImageData", "FileSystemFileHandle", "HtmlAnchorElement", "Url", "UrlSearchParams", "Blob", "DataTransfer", "DataTransferItem", "DataTransferItemList", "ClipboardEvent", "BeforeUnloadEvent", "DragEvent", "CustomEvent", "Event", "EventTarget", "IdbFactory", "IdbDatabase", "IdbRequest", "IdbOpenDbRequest", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "IdbObjectStoreParameters", "IdbTransaction", "IdbTransactionMode", "DomStringList", "Storage", "Response", "Headers", "Worker", "MessageEvent"] }
 
 [dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

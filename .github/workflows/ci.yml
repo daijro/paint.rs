@@ -24,8 +24,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake clang pkg-config libdav1d-dev mesa-vulkan-drivers libxkbcommon-dev libwayland-dev libgtk-3-dev
-          echo "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
-          test -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          # Lavapipe's ICD file: lvp_icd.json or lvp_icd.<arch>.json, depending on the Mesa build.
+          icd=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -n 1)
+          test -n "$icd"
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/xdg"
           chmod 700 "$RUNNER_TEMP/xdg"
           echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"

@@ -377,8 +377,6 @@ pub const SEPARATOR_MARGIN: (f32, f32) = (5.0, 1.0); // x, bottom
 /// Paint.NET plugin indicator size and right inset, DIP (Photocraft research §D; plan BB6).
 pub const PLUGIN_INDICATOR_SIZE: (f32, f32) = (12.0, 16.0);
 pub const PLUGIN_INDICATOR_RIGHT: f32 = 9.0;
-/// S§4.1: the gap between an Extra toolbar option's plus and its label (or its control), DIP.
-pub const EXTRA_OPTION_PLUS_GAP: f32 = 4.0;
 /// css/menu.css `.vertical-separator { height: 1px; margin: 2px 2px 2px 27px; opacity: .2 }`.
 pub const RULE_SEPARATOR: (f32, f32) = (1.0, 2.0); // height, margin (top/right/bottom)
 /// css/header.css `#toolMenu { height: 35px; width: calc(100% - 4px); margin-left: 2px;

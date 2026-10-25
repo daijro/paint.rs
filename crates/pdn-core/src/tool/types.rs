@@ -269,7 +269,10 @@ impl ToolType {
             MagneticLasso => json!({
                 "width": 10, "contrast": 10, "frequency": 57, "renderingQuality": "high"
             }),
+            // The method: MobileSAM on desktop (built in), GrabCut on the web (MobileSAM's model
+            // loads there only once picked).
             ObjectSelection => json!({
+                "segmenter": if cfg!(target_arch = "wasm32") { "grabcut" } else { "mobilesam" },
                 "sampleImage": false, "objectFinder": true, "renderingQuality": "high"
             }),
             Remove => merge(
@@ -1424,8 +1427,27 @@ pub fn option_definitions_with_fonts(
             let mut subject = OptionDef::new(K::Action, "Select Subject", "selectSubject");
             subject.icon = Some("object_selection_tool_icon.png");
             (sample.extra, subject.extra) = (true, true);
+            // The method every lookup uses (box, Object Finder, Select Subject).
+            let mut method = icon_choice(
+                "",
+                "segmenter",
+                &[
+                    (
+                        "mobilesam",
+                        "MobileSAM",
+                        "object_selection_mobilesam_icon.png",
+                    ),
+                    ("grabcut", "GrabCut", "object_selection_grabcut_icon.png"),
+                ],
+                35.0,
+                true,
+            );
+            method.extra = true;
+            method.title = "MobileSAM: an AI model finds the object\nGrabCut: the classic color-based \
+                            method";
             vec![
                 combine(),
+                section(method),
                 section(sample),
                 section(finder),
                 section(subject),
@@ -2366,8 +2388,8 @@ mod tests {
         assert!(!ToolSettings::shared_owners("combineMode").contains(&ToolType::ObjectSelection));
     }
 
-    /// S§4.3: the combine modes and the quality are Paint.NET's (no plus); Sample, Object Finder
-    /// and Select Subject are Object Selection's own.
+    /// S§4.3: the combine modes and the quality are Paint.NET's (no plus); the method (MobileSAM
+    /// or GrabCut), Sample, Object Finder and Select Subject are Object Selection's own.
     #[test]
     fn object_selection_options() {
         let defs = option_definitions(ToolType::ObjectSelection, &ToolSettings::default());
@@ -2376,13 +2398,14 @@ mod tests {
             got,
             [
                 ("combineMode", OptionKind::IconGroup, false),
+                ("segmenter", OptionKind::IconChoice, true),
                 ("sampleImage", OptionKind::Select, true),
                 ("objectFinder", OptionKind::Checkbox, true),
                 ("selectSubject", OptionKind::Action, true),
                 ("renderingQuality", OptionKind::IconChoice, false),
             ]
         );
-        assert_eq!(defs[3].label, Some("Select Subject"));
+        assert_eq!(defs[4].label, Some("Select Subject"));
         let s = ToolSettings::default();
         assert_eq!(
             s.get(ToolType::ObjectSelection, "objectFinder"),

@@ -225,6 +225,9 @@ pub struct AppWorkspace {
     pub clone_sources: std::collections::HashMap<(u64, ToolType), [f64; 2]>,
     /// UI work raised by keyboard-dispatched actions (`action::dispatch_key`); the UI drains it.
     pub ui_requests: Vec<crate::action::UiRequest>,
+    /// Object Selection may use MobileSAM when its toolbar picks it (the desktop and web apps set
+    /// it); harnesses leave it off, so their lookups stay on GrabCut.
+    pub object_model: bool,
     pub measurement_unit: MeasurementUnit,
     /// Fixed gradient dither seed for reproducible tests; production uses RandomState.
     pub seed_override: Option<u32>,
@@ -292,6 +295,7 @@ impl Default for AppWorkspace {
             clone_anchors: Default::default(),
             clone_sources: Default::default(),
             ui_requests: vec![],
+            object_model: false,
             measurement_unit: MeasurementUnit::Pixel,
             seed_override: None,
             shape_drag_size_override: None,
@@ -694,6 +698,7 @@ impl AppWorkspace {
     pub fn on_frame(&mut self, now_ms: f64) {
         self.now_ms = now_ms;
         crate::tool::remove::poll_content_fill(self);
+        crate::tool::object_select::release_model(self);
         self.with_transacted(|t, app| t.poll(app));
         self.tool_hook(|t, app| t.on_frame(app));
     }

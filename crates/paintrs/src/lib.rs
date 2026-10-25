@@ -75,6 +75,13 @@ impl PaintApp {
         let mut app = Self::new_with_policy(cc, default_policy());
         app.shell.clipboard = platform::Clipboard::system();
         platform::Files::system().install();
+        // Object Selection may use MobileSAM when its toolbar picks it; on the web it runs in a
+        // worker.
+        app.app.object_model = true;
+        #[cfg(target_arch = "wasm32")]
+        pdn_core::extra::segment::remote::set(Some(std::rc::Rc::new(
+            platform::sam_worker::WorkerClient::new(cc.egui_ctx.clone()),
+        )));
         app.asset_library = platform::asset_library::AssetLibrary::new(
             platform::asset_library::AssetStore::system(),
         );

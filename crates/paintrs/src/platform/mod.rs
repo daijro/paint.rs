@@ -367,5 +367,12 @@ mod asset_web;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod launch;
+#[cfg(target_arch = "wasm32")]
+pub mod sam_worker;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod startup;
 #[cfg(target_os = "linux")]
 pub mod wayland_dnd;
+/// build.rs writes the Windows .exe's resources with it; compiled here for its tests.
+#[cfg(test)]
+pub(crate) mod winres;

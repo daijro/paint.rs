@@ -10,6 +10,10 @@ testing = []
 # Task 48: AVIF decode through the system libdav1d (Ruling R31; formats-matrix.md §3.5). Without it
 # (a machine with no libdav1d: `--no-default-features`) AVIF decode returns Unsupported.
 avif-dav1d = ["dep:dav1d"]
+# Object Selection through MobileSAM (candle, pure Rust): paintrs's desktop build, the weights
+# bundled from assets/models/mobilesam, and the web's worker (crates/sam-worker), which fetches
+# them. 0.9.2, not 0.11: 0.10+ links `tokenizers` with the Oniguruma C library on native.
+sam = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:getrandom"]
 
 [dependencies]
 # Task54: bounded user asset-pack ZIP reader.
@@ -38,6 +42,9 @@ bcdec_rs = "0.2"
 gif = "0.14"
 # Task 47b: palette TIFFs re-tagged as grey (io/tiff.rs); 0.11 is the version `image` already locks.
 tiff = "0.11"
+candle-core = { version = "=0.9.2", optional = true }
+candle-nn = { version = "=0.9.2", optional = true }
+candle-transformers = { version = "=0.9.2", optional = true }
 
 # R95: current Windows click/drag metrics; this version is already locked and cached.
 [target.'cfg(windows)'.dependencies]
@@ -68,6 +75,13 @@ jpegxl-src = "0.12"
 # wasm-bindgen).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
+# `sam` in the web's MobileSAM worker (crates/sam-worker): candle's rand reaches getrandom 0.3,
+# which needs its JS backend on the web.
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
+
+# `sam`'s test pinning the bundled weights' SHA-256: dev-only, in no shipped build.
+[dev-dependencies]
+sha2 = "0.10"
 
 [[test]]
 name = "canvas_ref"

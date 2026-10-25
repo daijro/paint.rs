@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn every_bundled_svg_rasterizes() {
-        assert_eq!(embedded::ICON_SVGS.len(), 471);
+        assert_eq!(embedded::ICON_SVGS.len(), 473);
         for (name, bytes) in embedded::ICON_SVGS {
             assert!(raster_svg(bytes, 1.0).is_some(), "{name}");
         }
@@ -609,18 +609,11 @@ mod tests {
         }
     }
 
-    /// `assets/app-icon.png` (the macOS `.icns` source) is `app-icon.svg` rendered 1024 px, within
-    /// 2 per premultiplied channel: tiny-skia's SIMD pipelines may differ by an LSB across CPUs,
-    /// which straight colour magnifies by 255 / alpha at faint edges; an SVG edit moves pixels far
-    /// more. `PAINTRS_WRITE_APP_ICON=1` rewrites it after an SVG change.
-    #[test]
-    fn app_icon_png_matches_the_svg() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/app-icon.png");
-        if std::env::var_os("PAINTRS_WRITE_APP_ICON").is_some() {
-            app_icon(1024).save(path).unwrap();
-        }
-        let (png, fresh) = (image::open(path).unwrap().into_rgba8(), app_icon(1024));
-        assert_eq!(png.dimensions(), fresh.dimensions(), "{path}");
+    /// Fails unless `stored` is `fresh` within 2 per premultiplied channel: tiny-skia's SIMD
+    /// pipelines may differ by an LSB across CPUs, which straight colour magnifies by 255 / alpha
+    /// at faint edges; an SVG edit moves pixels far more.
+    fn assert_matches_render(stored: &image::RgbaImage, fresh: &image::RgbaImage, what: &str) {
+        assert_eq!(stored.dimensions(), fresh.dimensions(), "{what}");
         let premul = |p: &image::Rgba<u8>, c: usize| match c {
             3 => p.0[3] as u32,
             c => (p.0[c] as u32 * p.0[3] as u32 + 127) / 255,
@@ -631,18 +624,112 @@ mod tests {
                 .max()
                 .unwrap()
         };
-        let (d, x, y) = png
+        let (d, x, y) = stored
             .enumerate_pixels()
             .map(|(x, y, p)| (diff(p, fresh.get_pixel(x, y)), x, y))
             .max()
             .unwrap();
         assert!(
             d <= 2,
-            "stale {path}: ({x}, {y}) is {:?}, a fresh render {:?} (premultiplied off by {d}); \
+            "stale {what}: ({x}, {y}) is {:?}, a fresh render {:?} (premultiplied off by {d}); \
              PAINTRS_WRITE_APP_ICON=1 rewrites it",
-            png.get_pixel(x, y).0,
+            stored.get_pixel(x, y).0,
             fresh.get_pixel(x, y).0
         );
+    }
+
+    /// `assets/app-icon.png` (the macOS `.icns` source) is `app-icon.svg` rendered 1024 px.
+    /// `PAINTRS_WRITE_APP_ICON=1` rewrites it (and `app-icon.ico`) after an SVG change.
+    #[test]
+    fn app_icon_png_matches_the_svg() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/app-icon.png");
+        if std::env::var_os("PAINTRS_WRITE_APP_ICON").is_some() {
+            app_icon(1024).save(path).unwrap();
+        }
+        let png = image::open(path).unwrap().into_rgba8();
+        assert_matches_render(&png, &app_icon(1024), path);
+    }
+
+    /// The Windows .exe icon's sizes (build.rs embeds `assets/app-icon.ico`).
+    const ICO_SIDES: [u32; 9] = [16, 20, 24, 32, 40, 48, 64, 128, 256];
+
+    /// An .ico of `images`: 32-bit DIBs (BGRA rows bottom up, then the 1-bit transparency mask),
+    /// as every Windows version reads them, and a PNG for 256 px, as Windows Vista and later do.
+    fn ico(images: &[image::RgbaImage]) -> Vec<u8> {
+        let mut head = [0u16, 1, images.len() as u16]
+            .map(u16::to_le_bytes)
+            .concat();
+        let mut body = vec![];
+        for image in images {
+            let (w, h) = image.dimensions();
+            let mut data = vec![];
+            if w >= 256 {
+                image
+                    .write_to(
+                        &mut std::io::Cursor::new(&mut data),
+                        image::ImageFormat::Png,
+                    )
+                    .unwrap();
+            } else {
+                let mask_row = w.div_ceil(32) as usize * 4;
+                let size = w * h * 4 + mask_row as u32 * h;
+                for v in [40, w, 2 * h, 1 | 32 << 16, 0, size, 0, 0, 0, 0] {
+                    data.extend(u32::to_le_bytes(v));
+                }
+                for y in (0..h).rev() {
+                    for x in 0..w {
+                        let [r, g, b, a] = image.get_pixel(x, y).0;
+                        data.extend([b, g, r, a]);
+                    }
+                }
+                for y in (0..h).rev() {
+                    let mut row = vec![0u8; mask_row];
+                    for x in (0..w).filter(|&x| image.get_pixel(x, y).0[3] == 0) {
+                        row[x as usize / 8] |= 0x80 >> (x % 8);
+                    }
+                    data.extend(row);
+                }
+            }
+            let offset = 6 + 16 * images.len() + body.len();
+            head.extend([w as u8, h as u8, 0, 0, 1, 0, 32, 0]);
+            head.extend((data.len() as u32).to_le_bytes());
+            head.extend((offset as u32).to_le_bytes());
+            body.extend(data);
+        }
+        head.extend(body);
+        head
+    }
+
+    /// `assets/app-icon.ico` holds `app-icon.svg` rendered at each of `ICO_SIDES`.
+    #[test]
+    fn app_icon_ico_matches_the_svg() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/app-icon.ico");
+        if std::env::var_os("PAINTRS_WRITE_APP_ICON").is_some() {
+            std::fs::write(path, ico(&ICO_SIDES.map(app_icon))).unwrap();
+        }
+        let bytes = std::fs::read(path).unwrap();
+        let images = crate::platform::winres::ico_images(&bytes).unwrap();
+        assert_eq!(images.len(), ICO_SIDES.len(), "{path}");
+        for (image, side) in images.iter().zip(ICO_SIDES) {
+            assert_eq!(image.entry[..2], [side as u8; 2], "{side} px entry");
+            let stored = if side == 256 {
+                image::load_from_memory_with_format(image.data, image::ImageFormat::Png)
+                    .unwrap()
+                    .into_rgba8()
+            } else {
+                let le = |at: usize| u32::from_le_bytes(image.data[at..at + 4].try_into().unwrap());
+                assert_eq!(
+                    [le(0), le(4), le(8), le(12)],
+                    [40, side, 2 * side, 1 | 32 << 16]
+                );
+                image::RgbaImage::from_fn(side, side, |x, y| {
+                    let at = 40 + 4 * ((side - 1 - y) * side + x) as usize;
+                    let [b, g, r, a] = image.data[at..at + 4].try_into().unwrap();
+                    image::Rgba([r, g, b, a])
+                })
+            };
+            assert_matches_render(&stored, &app_icon(side), &format!("{path} at {side} px"));
+        }
     }
 
     /// R213: the title-bar icon and About banner are the app icon under every pack, also when it

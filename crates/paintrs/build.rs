@@ -1,10 +1,13 @@
 //! Generates `$OUT_DIR/embedded_assets.rs`: the SVGs under `assets/icons-svg` and (native builds)
 //! the `assets/font/*/*.ttf` faces as `(file name, bytes)` tables sorted by name, with absolute
-//! include paths.
+//! include paths. Windows MSVC builds also get `$OUT_DIR/paintrs.res`, the .exe's icon and
+//! version.
 use std::{env, fmt::Write, fs, path::PathBuf};
 
 #[path = "src/kit/unhinted.rs"]
 mod unhinted;
+#[path = "src/platform/winres.rs"]
+mod winres;
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -81,4 +84,14 @@ fn main() {
     }
     out.push_str("];\n");
     fs::write(out_dir.join("embedded_assets.rs"), out).unwrap();
+    // The .exe's icon and version (platform/winres.rs): link.exe and lld-link take a `.res`
+    // file as an input. ponytail: MSVC only, windows-gnu would need windres to turn it into COFF.
+    let target = |key: &str, value: &str| env::var(key).is_ok_and(|v| v == value);
+    if target("CARGO_CFG_TARGET_OS", "windows") && target("CARGO_CFG_TARGET_ENV", "msvc") {
+        let ico = fs::read(assets.join("app-icon.ico")).unwrap();
+        let res = out_dir.join("paintrs.res");
+        let version = env::var("CARGO_PKG_VERSION").unwrap();
+        fs::write(&res, winres::res_file(&ico, &version).unwrap()).unwrap();
+        println!("cargo:rustc-link-arg-bins={}", res.display());
+    }
 }

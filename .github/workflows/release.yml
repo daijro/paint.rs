@@ -18,8 +18,9 @@ env:
   BINARYEN_VERSION: version_133
 
 # Release builds only build and package; ci.yml runs the tests. Desktop builds use the
-# `dist` profile (fat LTO, one codegen unit) and, on x86-64, AVX2 (x86-64-v3: Haswell / Excavator
-# or newer); Apple Silicon builds use the default aarch64 target, which has NEON.
+# `dist` profile (fat LTO, one codegen unit). Each x86-64 download comes twice: baseline x86-64,
+# which runs on any 64-bit CPU, and `-avx2` (x86-64-v3: Haswell / Excavator or newer). Apple
+# Silicon builds use the default aarch64 target, which has NEON.
 # checkout v7.0.1, the same pin as ci.yml. Uploads use the gh CLI that every runner ships, not a third-party
 # action, so there is nothing else to pin.
 jobs:
@@ -33,12 +34,18 @@ jobs:
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 (.tar.gz), Windows x86_64 (.zip), macOS arm64 and x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
 
-          The x86-64 downloads need a CPU with AVX2 (Intel Haswell or AMD Excavator and newer). On older CPUs, build from source.
+          The plain x86-64 downloads run on any x86-64 CPU. The -avx2 ones are faster but need AVX2 (most Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If unsure, take the plain one.
 
           The macOS and Windows builds are unsigned and not notarized: macOS Gatekeeper and Windows SmartScreen will warn on first launch."
 
   linux-x86_64:
     needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {suffix: '', rustflags: ''}
+          - {suffix: '-avx2', rustflags: -Ctarget-cpu=x86-64-v3}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -50,11 +57,11 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs
-        env: {RUSTFLAGS: -Ctarget-cpu=x86-64-v3}
+        env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
       - name: Package and upload
         run: |
           set -euo pipefail
-          dir="paint.rs-$TAG-linux-x86_64"
+          dir="paint.rs-$TAG-linux-x86_64${{ matrix.suffix }}"
           mkdir -p "$dir"
           cp target/dist/paintrs LICENSE LICENSE.md NOTICE.md "$dir/"
           # scripts/linux-install-desktop.sh adds the launcher entry and the Wayland taskbar icon.
@@ -69,6 +76,12 @@ jobs:
 
   windows-x86_64:
     needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {suffix: '', rustflags: ''}
+          - {suffix: '-avx2', rustflags: -Ctarget-cpu=x86-64-v3}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -87,11 +100,11 @@ jobs:
           "$prefix/bin" >> $env:GITHUB_PATH
           "$env:ProgramFiles/LLVM/bin" >> $env:GITHUB_PATH
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target x86_64-pc-windows-msvc
-        env: {RUSTFLAGS: -Ctarget-cpu=x86-64-v3}
+        env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
       - name: Package and upload
         shell: pwsh
         run: |
-          $dir = "paint.rs-$env:TAG-windows-x86_64"
+          $dir = "paint.rs-$env:TAG-windows-x86_64${{ matrix.suffix }}"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/dist/paintrs.exe, LICENSE, LICENSE.md, NOTICE.md $dir
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*dav1d*.dll" $dir
@@ -112,10 +125,17 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             arch: arm64
+            suffix: ''
             rustflags: ''
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             arch: x86_64
+            suffix: ''
+            rustflags: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+            suffix: '-avx2'
             rustflags: -Ctarget-cpu=x86-64-v3
     runs-on: ${{ matrix.runner }}
     steps:
@@ -132,7 +152,7 @@ jobs:
       - name: Package unsigned app and upload
         run: |
           set -euo pipefail
-          dir="paint.rs-$TAG-macos-${{ matrix.arch }}"
+          dir="paint.rs-$TAG-macos-${{ matrix.arch }}${{ matrix.suffix }}"
           mkdir -p "$dir"
           sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/dist/paintrs' "$dir/paint.rs.app"
           plutil -lint "$dir/paint.rs.app/Contents/Info.plist"

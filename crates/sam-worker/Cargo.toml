@@ -1,0 +1,22 @@
+[package]
+name = "sam-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The web's MobileSAM worker: a second wasm (index.html's `data-type="worker"` link) holding candle,
+# the model and its load, so the app's own wasm has none of them. Natively an empty program.
+[[bin]]
+name = "sam_worker"
+path = "src/main.rs"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pdn-core = { path = "../pdn-core", features = ["sam"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["DedicatedWorkerGlobalScope", "WorkerGlobalScope", "WorkerLocation", "MessageEvent", "Response", "ReadableStream", "ReadableStreamDefaultReader", "Cache", "CacheStorage", "Url", "RequestInit", "RequestCache"] }
+# The download's SHA-256 (already in the lock).
+sha2 = "0.10"

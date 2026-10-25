@@ -1756,6 +1756,66 @@
           }
         }
       ]
+    },
+    {
+      "repository": "https://github.com/huggingface/candle",
+      "package_commit": "3b39794c14b1de8ba4c2d10d49354d557a415547",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "candle-nn",
+          "version": "0.9.2",
+          "license": "MIT OR Apache-2.0"
+        },
+        {
+          "name": "candle-transformers",
+          "version": "0.9.2",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 11357,
+          "git_blob_sha1": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+          "url": "https://raw.githubusercontent.com/huggingface/candle/3b39794c14b1de8ba4c2d10d49354d557a415547/LICENSE-APACHE",
+          "file": "blobs/261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64.txt",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1023,
+          "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031",
+          "url": "https://raw.githubusercontent.com/huggingface/candle/3b39794c14b1de8ba4c2d10d49354d557a415547/LICENSE-MIT",
+          "file": "blobs/31aa79387f27e730e33d871925e152e35e428031.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "role": "license-terms"
+        }
+      ]
+    },
+    {
+      "repository": "https://github.com/sarah-quinones/pulp",
+      "package_commit": "5eb07fd7b68edf0a5e19f71737d315f72a510295",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "pulp-wasm-simd-flag",
+          "version": "0.1.1",
+          "license": "MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "bytes": 1062,
+          "git_blob_sha1": "84e3f4435bfe437a7e2a1db5f6d701ffd0638fae",
+          "url": "https://raw.githubusercontent.com/sarah-quinones/pulp/5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE",
+          "file": "blobs/84e3f4435bfe437a7e2a1db5f6d701ffd0638fae.txt",
+          "sha256": "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9",
+          "role": "license-terms"
+        }
+      ]
     }
   ]
 }

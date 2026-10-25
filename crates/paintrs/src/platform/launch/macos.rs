@@ -116,10 +116,9 @@ define_class!(
                 for index in 1..=count {
                     let url=list.descriptorAtIndex(index).and_then(|d|d.fileURLValue()).ok_or_else(||io::Error::other("file URL coercion failed"))?;
                     if !url.isFileURL() { return Err(io::Error::other("open event contains a non-file URL")); }
-                    // SAFETY: NSURL owns its terminated native representation through this copy.
-                    let pointer=unsafe {url.fileSystemRepresentation()};
-                    if pointer.is_null() { return Err(io::Error::other("file URL has no native path")); }
-                    let bytes=unsafe {CStr::from_ptr(pointer)}.to_bytes();
+                    let pointer=url.fileSystemRepresentation();
+                    // SAFETY: NSURL owns this NUL-terminated native path while `url` lives.
+                    let bytes=unsafe {CStr::from_ptr(pointer.as_ptr())}.to_bytes();
                     if bytes.len()>super::wire::LIMIT {return Err(io::Error::other("open path exceeds transport bound"));}
                     paths.push(PathBuf::from(OsString::from_vec(bytes.to_vec())));
                 }

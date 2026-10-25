@@ -3,7 +3,17 @@
 [build]
 target = "index.html"
 dist = "dist"
+# Relative asset URLs, so the site works from `/` and from any sub-path (a `playground` app, a GitHub
+# Pages project). TRUNK_BUILD_PUBLIC_URL (or --public-url) still overrides it.
+public_url = "./"
 # index.html's loader fetches `<name>.wasm.gz`, so that is what to preload, not the plain .wasm. Without a .gz
 # (trunk serve) the preload misses and the loader fetches the plain .wasm. No SRI hashes:
 # web-dist.sh rewrites the wasm (wasm-opt) after Trunk would have hashed it.
 pattern_preload = '<link rel="modulepreload" href="{base}{js}" crossorigin="{crossorigin}"><link rel="preload" href="{base}{wasm}.gz" as="fetch" crossorigin="{crossorigin}">'
+
+# The MobileSAM weights for the web's worker (Object Selection's toolbar), in parts a host with a 25 MiB
+# file cap takes: models/mobilesam/ in the site.
+[[hooks]]
+stage = "post_build"
+command = "python3"
+command_arguments = ["-I", "tools/model-parts.py"]

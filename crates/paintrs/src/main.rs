@@ -1,32 +1,66 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(not(target_arch = "wasm32"))]
-fn main() -> eframe::Result {
+fn main() -> std::process::ExitCode {
+    use paintrs::platform::startup;
     let files = paintrs::platform::native::argv_files(std::env::args_os().skip(1));
     let bridge = paintrs::platform::launch::Bridge::default();
     use paintrs::platform::launch::Instance;
     let started = Instance::start(files.clone(), bridge.clone());
-    let Some(_owner) = Instance::settle(started, files, &bridge) else {
-        return Ok(());
+    let Some(owner) = Instance::settle(started, files, &bridge) else {
+        return std::process::ExitCode::SUCCESS;
     };
-    #[cfg(target_os = "macos")]
-    return paintrs::platform::launch::macos::run(bridge, native_options);
-    #[cfg(not(target_os = "macos"))]
-    eframe::run_native(
-        "paint.rs",
-        native_options(),
-        Box::new(move |cc| {
-            let mut app = paintrs::PaintApp::new(cc);
-            bridge.attach(&cc.egui_ctx);
-            #[cfg(target_os = "linux")]
-            if let Some(window) = cc.winit_window() {
-                bridge.attach_wayland_attention(window);
-                app.wayland_dnd = paintrs::platform::wayland_dnd::Dnd::start(window, &cc.egui_ctx);
-            }
-            app.native_launch = Some(bridge);
-            Ok(Box::new(app))
-        }),
-    )
+    // Release builds have no console: startup.log and an error dialog say why a launch failed.
+    let log = &startup::Log::start(startup::log_path());
+    startup::log_panics(log.clone());
+    let var = std::env::var("PAINTRS_RENDERER").ok();
+    if let Some(var) = &var {
+        log.line(&format!("PAINTRS_RENDERER={var}"));
+    }
+    let options = native_options();
+    let renderers = startup::Renderer::chain(var.as_deref(), &options);
+    let run = |renderer: startup::Renderer, started: &std::cell::Cell<bool>| {
+        let bridge = bridge.clone();
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (renderer, started, log, &options);
+            paintrs::platform::launch::macos::run(bridge, native_options)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut options = options.clone();
+            renderer.apply(&mut options, log);
+            eframe::run_native(
+                "paint.rs",
+                options,
+                Box::new(move |cc| {
+                    started.set(true);
+                    startup::log_adapter(log, cc);
+                    let mut app = paintrs::PaintApp::new(cc);
+                    bridge.attach(&cc.egui_ctx);
+                    #[cfg(target_os = "linux")]
+                    if let Some(window) = cc.winit_window() {
+                        bridge.attach_wayland_attention(window);
+                        app.wayland_dnd =
+                            paintrs::platform::wayland_dnd::Dnd::start(window, &cc.egui_ctx);
+                    }
+                    app.native_launch = Some(bridge);
+                    Ok(Box::new(app))
+                }),
+            )
+        }
+    };
+    let show = move |text: &str| {
+        // A launch while the dialog is open starts afresh instead of handing its files over.
+        drop(owner);
+        startup::show_dialog(text);
+    };
+    let release = !cfg!(debug_assertions);
+    if startup::launch(log, &renderers, release, run, show) {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -69,9 +69,9 @@ over() { # what, bytes, budget
 }
 
 check() {
-    set -- dist/*_bg.wasm
+    set -- dist/paintrs-*_bg.wasm
     if [ $# -ne 1 ] || [ ! -f "$1" ]; then
-        echo "dist/ has no single *_bg.wasm: run tools/web-dist.sh first"
+        echo "dist/ has no single paintrs-*_bg.wasm: run tools/web-dist.sh first"
         exit 1
     fi
     wasm=$1 js=${1%_bg.wasm}.js
@@ -90,13 +90,22 @@ check() {
     over "$wasm.gz" "$(size "$wasm.gz")" $WASM_GZ
     over "$js.gz" "$(size "$js.gz")" $JS_GZ
     # Before the first frame: the wasm, the JS (with wasm-bindgen's snippets) and the page. The codecs and fonts
-    # load on first use.
+    # load on first use, and so does Object Selection's MobileSAM worker (its wasm and JS, then the model's parts).
     first=0
-    for f in dist/*.wasm dist/*.js dist/index.html $(find dist/snippets -name '*.js'); do
+    for f in dist/paintrs-*.wasm dist/paintrs-*.js dist/index.html $(find dist/snippets -name '*.js'); do
         first=$((first + $(size "$f.gz")))
     done
     printf '%-72s %23s\n' "first load (wasm, JS, snippets, HTML; gzipped)" $first
     over "the first load" $first $FIRST_LOAD
+    # The worker fetches its JS and wasm itself (index.html's .gz loader is the page's): raw, or gzipped where the
+    # host sends the .gz with Content-Encoding (nginx's gzip_static, Caddy's precompressed).
+    worker=0 worker_gz=0
+    for f in dist/sam_worker*.js dist/sam_worker_bg.wasm; do
+        worker=$((worker + $(size "$f"))) worker_gz=$((worker_gz + $(size "$f.gz")))
+    done
+    model=$(cat dist/models/mobilesam/*.safetensors.* | wc -c | tr -d ' ')
+    printf '%-72s %11s %11s\n' "MobileSAM when picked: worker (wasm, JS)" $worker $worker_gz
+    printf '%-72s %23s\n' "MobileSAM when picked: the model's parts (once; the Cache API keeps it)" "$model"
     for f in $(find dist -type f); do over "$f" "$(size "$f")" $FILE_MAX; done
 }
 

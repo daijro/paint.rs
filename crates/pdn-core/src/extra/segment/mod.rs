@@ -28,12 +28,28 @@
 
 pub mod gmm;
 pub mod grabcut;
+#[cfg(feature = "sam")]
+mod mask_decoder;
 pub mod maxflow;
+pub mod remote;
+#[cfg(feature = "sam")]
+pub mod sam;
 pub mod slic;
 pub mod subject;
+#[cfg(feature = "sam")]
+mod tiny_vit;
 
 use crate::extra::geom::Rect;
 use crate::extra::interrupt::{Cancelled, Interrupt};
+
+/// What an Object Selection lookup asks for: the object in a box, the object under a point, or
+/// the main subject (document pixels).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Prompt {
+    Rect(Rect),
+    Point(f32, f32),
+    Subject,
+}
 
 /// A selected region: 8-bit coverage over `bbox` (row-major), the bounding box of the pixels
 /// touched (including the anti-aliased fringe).

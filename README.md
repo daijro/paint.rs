@@ -58,7 +58,7 @@ These features come from PhotoCraft. In the app they're marked with a gray plus.
   </tr>
   <tr>
     <td><img src="assets/screenshots/11-content-aware-fill.png" alt="Content-Aware Fill, before and after"><br><b>Content-Aware Fill</b>: the selected carriage filled from the road around it</td>
-    <td><img src="assets/screenshots/25-object-selection.png" alt="Object Selection, before and after"><br><b>Object Selection</b>: drag a box around an object and it's selected for you. Here the rest is darkened.</td>
+    <td><img src="assets/screenshots/25-object-selection.png" alt="Object Selection, before and after"><br><b>Object Selection</b>: drag a box around an object and it's selected for you. Uses MobileSAM or GrabCut.</td>
   </tr>
   <tr>
     <td><img src="assets/screenshots/15-camera-raw.png" alt="Camera Raw, before and after"><br><b>Camera Raw</b>: more contrast, clarity, dehaze and vibrance on an 1869 photograph</td>
@@ -76,12 +76,11 @@ These features come from PhotoCraft. In the app they're marked with a gray plus.
 
 **Tools**
 
-- Magnetic Lasso, Object Selection (with Object Finder and Select Subject), Remove, Patch, Healing
-  Brush and Spot Healing Brush.
+- Magnetic Lasso, Remove, Patch, Healing Brush and Spot Healing Brush.
+- Object Selection (with Object Finder and Select Subject) using [MobileSAM](https://github.com/chaoningzhang/mobilesam)
 - Clone Stamp's **Aligned** and **Sample: Layer / Image** options.
-- **Perspective Warp** (Layers menu) works right on the canvas. In Layout, drag the plane's corners
-  onto a window, a wall or a sheet of paper. In Warp, drag them and the image follows. Straighten
-  squares the plane, and Crop to plane turns it into a flat, upright picture.
+- **Perspective Warp** (Layers menu) on the canvas: drag the corners to fit an image onto a
+  surface. Straighten and Crop to plane flatten an angled photo.
 - Move Selected Pixels' **Resize / Warp** option. With Resize, a corner scales the selection as in
   Paint.NET. With Warp, a corner moves on its own to put the selection in perspective.
 - **Editable text**: text stays editable after you place it. Click it with the Text tool to change
@@ -110,9 +109,9 @@ These features come from PhotoCraft. In the app they're marked with a gray plus.
 
 ---
 
-## Plugins
+## Other Plugins (inspired by BoltBait)
 
-paint.rs also has 47 plugins inspired by BoltBait's Paint.NET plugin pack. In menus they carry
+paint.rs also has 47 plugins inspired by [BoltBait's Paint.NET plugin pack](https://www.boltbait.com/pdn/). In menus they carry
 the same gray plus as PhotoCraft's additions.
 
 | Menu | Additions |
@@ -132,45 +131,54 @@ the same gray plus as PhotoCraft's additions.
 
 ---
 
-## Build and run
+## Download
 
-There are no downloads yet, so build it from source. You need Rust 1.99.1, the version pinned in
-`rust-toolchain.toml` (rustup picks it up), a C/C++ compiler, CMake, pkg-config and dav1d 1.3 or
-later.
+Builds for Linux, Windows, macOS and the web are on the
+[Releases](https://github.com/daijro/paint.rs/releases) page.
+
+- The plain x86-64 downloads run on any x86-64 CPU. The `-avx2` ones are faster but need AVX2 (most
+  Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If
+  unsure, take the plain one.
+- On Linux, run `sh scripts/linux-install-desktop.sh ./paintrs` once to add a launcher entry and
+  the taskbar icon.
+- The macOS and Windows builds are unsigned, so the system warns the first time you open them.
+- If the Windows app doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach
+  that file when you report the problem. Setting the environment variable
+  `PAINTRS_RENDERER=software` makes it draw without the graphics card. If there is no log at all,
+  use the download without `-avx2`.
+
+---
+
+## Build from source
+
+You need Rust 1.99.1 (rustup reads it from `rust-toolchain.toml`), a C/C++ compiler, CMake,
+pkg-config and dav1d 1.3 or newer.
+
+| System | Install first |
+|---|---|
+| Ubuntu 24.04 | `sudo apt install build-essential cmake clang pkg-config libdav1d-dev libxkbcommon-dev libwayland-dev libgtk-3-dev` |
+| macOS | `brew install dav1d pkgconf cmake` |
+| Windows | Visual Studio's C++ tools with ClangCL, then `vcpkg install dav1d:x64-windows pkgconf:x64-windows` |
+
+Then build and run:
 
 ```sh
-cargo run --locked -p paintrs --release
+cargo run --release -p paintrs
 ```
 
-Release builds for Linux, Windows, macOS and the web are attached to [GitHub Releases](https://github.com/daijro/paint.rs/releases) once a version is tagged. In the
-Linux download, run `sh scripts/linux-install-desktop.sh ./paintrs` once for a launcher entry and
-the taskbar icon. The x86-64 downloads need a CPU with AVX2 (Intel Haswell or AMD Excavator and
-newer). On older CPUs, build from source.
+- **Linux:** for the launcher entry and taskbar icon, run
+  `sh scripts/linux-install-desktop.sh target/release/paintrs` once.
+- **macOS:** `sh scripts/macos-bundle.sh target/release/paintrs paint.rs.app` makes an app bundle.
+- **Windows:** set `PKG_CONFIG` to vcpkg's `pkgconf.exe` and `PKG_CONFIG_PATH` to its
+  `lib/pkgconfig`, and put its `bin` folder on `PATH`.
 
-- **Linux:** on Ubuntu 24.04, install `build-essential cmake clang pkg-config libdav1d-dev
-  libxkbcommon-dev libwayland-dev libgtk-3-dev`. A working GPU driver is needed. For a launcher
-  entry and the taskbar icon on Wayland, run `sh scripts/linux-install-desktop.sh
-  target/release/paintrs` once.
-- **macOS:** install `dav1d pkgconf cmake` with Homebrew of the same architecture as the Rust
-  target. To make an unsigned development app bundle (it still needs Homebrew's dav1d):
+Linux is the most tested platform.
 
-  ```sh
-  sh scripts/macos-bundle.sh target/release/paintrs paint.rs.app
-  open paint.rs.app --args /absolute/path/to/image.png
-  ```
+---
 
-- **Windows:** use the MSVC Rust target and Visual Studio's C++ tools with LLVM's ClangCL
-  component. Install `dav1d:x64-windows` and `pkgconf:x64-windows` with vcpkg, set `PKG_CONFIG` to
-  `installed/x64-windows/tools/pkgconf/pkgconf.exe` and `PKG_CONFIG_PATH` to
-  `installed/x64-windows/lib/pkgconfig`. Its `lib` directory must be on the linker path and its
-  `bin` directory on `PATH` when you run the app.
+## Web
 
-Linux is the desktop platform paint.rs has been tested on. CI is set up to build Windows and macOS,
-but those builds have not been run yet.
-
-### Web
-
-For development:
+Run it locally:
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -178,25 +186,20 @@ cargo install trunk --version 0.21.14 --locked
 trunk serve --locked
 ```
 
-For a release build:
+Build the site into `dist/` (needs Trunk, `wasm-opt`, gzip and Python 3):
 
 ```sh
-tools/web-dist.sh          # build the site into dist/
-tools/web-dist.sh --check  # check an existing build
-tools/web-dist.sh --zip    # also write target/paintrs-web-<version>.zip
-TRUNK_BUILD_PUBLIC_URL=/paintrs/ tools/web-dist.sh   # when hosted below /paintrs/
+tools/web-dist.sh          # build
+tools/web-dist.sh --zip    # also write a zip
 ```
 
-- **Requirements:** Trunk, binaryen's `wasm-opt` (or set `WASM_OPT`), gzip, Python 3 and, for
-  `--zip`, zip.
-- **Hosting:** serve `dist/` over HTTP or HTTPS. The system clipboard needs HTTPS or localhost.
-  Example configs for nginx, Caddy and Cloudflare are in `deploy/`.
-- **Browsers:** Chrome 96, Firefox 113 or Safari 16.4 and later, which have WebAssembly SIMD and
-  `DecompressionStream`. Older browsers see a notice. The web build has been checked in Chromium
-  with WebGL.
-- **Compression:** the wasm, JS, HTML and font files are pre-gzipped. Hosts that don't send
-  `Content-Encoding: gzip`, like Cloudflare, still work: the browser unpacks the wasm and the fonts
-  itself.
+- The site works from any folder of a web server. Example configs for nginx, Caddy and Cloudflare
+  are in `deploy/`.
+- Serve it over HTTPS or localhost. Otherwise the clipboard won't work and the MobileSAM model is
+  downloaded again each time it's picked.
+- `dist/models/` holds the MobileSAM model (41 MB). Browsers only fetch it when someone picks
+  MobileSAM for Object Selection.
+- It runs in Chrome 96, Firefox 113, Safari 16.4 and newer.
 
 ---
 
@@ -212,30 +215,28 @@ TRUNK_BUILD_PUBLIC_URL=/paintrs/ tools/web-dist.sh   # when hosted below /paintr
 | DDS | Yes | Yes, uncompressed 32-bit |
 | HEIC / HEIF, JPEG XR | Yes | No |
 
-ICO is not supported. Colour profiles and EXIF metadata are not kept, but the DPI is.
+ICO isn't supported. Colour profiles and EXIF metadata aren't kept. The DPI is.
 
 ---
 
 ## License
 
-paint.rs is free software under the [GNU General Public License v3.0 or later](LICENSE).
-[LICENSE.md](LICENSE.md) lists the third-party parts that keep their own terms, and
-[NOTICE.md](NOTICE.md) gives the full attribution.
+paint.rs is free software under the [GNU GPL v3.0 or later](LICENSE). Third-party parts keep
+their own licences, listed in [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md).
 
 ---
 
 ## Credits
 
-- **[Paint.NET](https://www.getpaint.net/)** by Rick Brewster and dotPDN LLC: the editor paint.rs
+- **[Paint.NET](https://www.getpaint.net/)** by Rick Brewster and dotPDN LLC, the editor paint.rs
   is modelled on. **No artwork or icons are taken from Paint.NET.** paint.rs is not affiliated
-  with or endorsed by them.
-- **BoltBait's Paint.NET Plugin Pack:** the inspiration and behavioural reference for the plugins.
-  No BoltBait code or artwork is included.
-- **[paint.js](https://github.com/LabyStudio/paintdotjs)** by LabyStudio: a reference during
-  development. paint.rs includes code adapted from it, under its MIT notice, and none of its
-  artwork.
-- **The Metropolitan Museum of Art** Open Access (public domain, CC0) and **Wikimedia Commons**
-  (a CC0 photograph by Raysonho): the photographs and paintings in the screenshots.
-  [SOURCES.md](assets/readme-sources/SOURCES.md) lists each one.
-- **PhotoCraft** by the ArtCraft Team and the PhotoCraft contributors (MIT): code adapted for the
-  additions above.
+  with it.
+- **[BoltBait's Paint.NET Plugin Pack](https://www.boltbait.com/pdn/)**, the inspiration for the plugins. No BoltBait code or
+  artwork is included.
+- **[paint.js](https://github.com/LabyStudio/paintdotjs)** by LabyStudio, a reference during
+  development. Some code is adapted from it under its MIT licence. None of its artwork is used.
+- **PhotoCraft** by the ArtCraft Team and contributors (MIT), the source of the additions above.
+- **[MobileSAM](https://github.com/chaoningzhang/mobilesam)** by Chaoning Zhang and contributors
+  (Apache-2.0), the model behind Object Selection. It is built into the desktop app.
+- **The Metropolitan Museum of Art** (CC0) and **Wikimedia Commons** (a CC0 photo by Raysonho)
+  for the pictures in the screenshots. [SOURCES.md](assets/readme-sources/SOURCES.md) lists each.

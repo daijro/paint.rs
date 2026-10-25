@@ -68,6 +68,70 @@ Their unchanged runtime assets, package metadata, LICENSE and complete delegate 
 bundled in `assets/codecs/` and copied into web distributions by Trunk. Regenerate them only
 from the installed packages with `node scripts/copy-web-codecs.mjs`; see `assets/codecs/README.md`.
 
+MobileSAM (Chaoning Zhang and the MobileSAM authors, Apache-2.0,
+https://github.com/ChaoningZhang/MobileSAM) — Object Selection's segmentation model. Its weights are
+`assets/models/mobilesam/mobile_sam-tiny-vitt.safetensors`: built into the desktop binary, and
+served by the web build in two parts under `models/mobilesam/` with the licence, for its worker to
+fetch when Object Selection's toolbar picks MobileSAM. They are a bit-identical safetensors
+conversion of MobileSAM's official Apache-2.0 `mobile_sam.pt` by candle's author
+(https://huggingface.co/lmz/candle-sam, revision `8b4cb7c7`; all 439 tensors match). MobileSAM's
+Apache-2.0 license is `assets/models/mobilesam/LICENSE`, its `LICENSE` at commit `f706ad9`.
+MobileSAM builds on Segment Anything (Meta Platforms, Inc., Apache-2.0) and TinyViT (Microsoft,
+MIT). The model runs through candle (Hugging Face, MIT OR Apache-2.0).
+`crates/pdn-core/src/extra/segment/tiny_vit.rs` and `mask_decoder.rs` are adapted from
+candle-transformers 0.9.2 (Hugging Face, MIT OR Apache-2.0), used under MIT. That code ports
+MobileSAM's `tiny_vit_sam.py`, which is TinyViT's architecture (Microsoft, MIT; it adapts LeViT,
+Apache-2.0, and Swin Transformer, MIT), and Segment Anything's mask decoder (Apache-2.0).
+candle's license (its `LICENSE-MIT` at commit `3b39794c`, which has no copyright line):
+
+> Permission is hereby granted, free of charge, to any
+> person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the
+> Software without restriction, including without
+> limitation the rights to use, copy, modify, merge,
+> publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software
+> is furnished to do so, subject to the following
+> conditions:
+>
+> The above copyright notice and this permission notice
+> shall be included in all copies or substantial portions
+> of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+> ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+> TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+> PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+> SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+> OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+> IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+> DEALINGS IN THE SOFTWARE.
+
+TinyViT's license (`TinyViT/LICENSE` in https://github.com/microsoft/Cream at commit `4a13c409`):
+
+> MIT License
+> Copyright (c) Microsoft Corporation.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE
+
 PhotoSauce.MagicScaler (Clinton Ingram, MIT License) — resampling kernels ported in
 `crates/pdn-core/src/resample/magic.rs` (from version 0.15.0, https://github.com/saucecontrol/PhotoSauce).
 MagicScaler is third-party code, not Paint.NET code. Its license:

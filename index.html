@@ -7,6 +7,12 @@
     <!-- The `web` profile (Cargo.toml) for release builds. wasm-opt is off here: tools/web-dist.sh
          runs `wasm-opt -O3` itself after Trunk. -->
     <link data-trunk rel="rust" href="crates/paintrs/Cargo.toml" data-bin="paintrs" data-cargo-profile-release="web" data-wasm-opt="0" />
+    <!-- Object Selection's MobileSAM in a Web Worker: candle and the model's load in their own wasm
+         (sam_worker.js, sam_worker_bg.wasm, started through sam_worker_loader.js, which reports a
+         wasm that fails to start), fetched only when the toolbar picks MobileSAM. Trunk's
+         post_build hook adds the weights (Trunk.toml). -->
+    <link data-trunk rel="rust" href="crates/sam-worker/Cargo.toml" data-bin="sam_worker" data-type="worker" data-cargo-profile-release="web" data-wasm-opt="0" />
+    <link data-trunk rel="copy-file" href="crates/sam-worker/sam_worker_loader.js" />
     <link data-trunk rel="icon" href="assets/app-icon.svg" />
     <link data-trunk rel="copy-dir" href="assets/codecs" data-target-path="assets/codecs" />
     <link data-trunk rel="copy-dir" href="assets/font" data-target-path="font" />

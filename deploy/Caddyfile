@@ -16,6 +16,12 @@
 	# (index.html, the codecs, the fonts, the notices) keeps its name across releases and revalidates.
 	@hashed path /paintrs-* /snippets/* /app-icon-*
 	header @hashed Cache-Control "public, max-age=31536000, immutable"
-	@named not path /paintrs-* /snippets/* /app-icon-*
+	@named not path /paintrs-* /snippets/* /app-icon-* /models/mobilesam/mobile_sam-tiny-vitt-*
 	header @named Cache-Control "no-cache"
+
+	# Object Selection's MobileSAM weights, in parts for its worker: binary, which `encode` leaves as it is.
+	# Their names carry the SHA: kept for good.
+	@model path_regexp \.safetensors\.[0-9]+$
+	header @model Content-Type application/octet-stream
+	header @model Cache-Control "public, max-age=31536000, immutable"
 }

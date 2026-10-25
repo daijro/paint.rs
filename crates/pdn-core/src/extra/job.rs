@@ -3,10 +3,11 @@
 //! A tool's long job (Remove, Patch, Spot Healing, Select Subject) off the UI thread: on native a
 //! thread and an `AtomicBool` cancel, as the effect worker's (`dialogs/effect_config/preview.rs`); on wasm
 //! `spawn` runs it at once. The UI polls it each frame, shows a busy cursor meanwhile and cancels
-//! it on Esc.
+//! it on Esc. A [`Job::pending`] job is finished by someone else (the web's MobileSAM worker
+//! answering a message).
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::interrupt::{Cancelled, Interrupt};
 
@@ -17,6 +18,28 @@ pub struct Job<T> {
     thread: Option<std::thread::JoinHandle<Result<T, Cancelled>>>,
     #[cfg(target_arch = "wasm32")]
     done: Option<Result<T, Cancelled>>,
+    /// A pending job's result, set by its [`Done`].
+    slot: Option<Slot<T>>,
+}
+
+type Slot<T> = Arc<Mutex<Option<Result<T, Cancelled>>>>;
+
+/// Where a [`Job::pending`] job's result goes.
+pub struct Done<T> {
+    slot: Slot<T>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<T> Done<T> {
+    /// The job's result: its next `poll` answers it (`Err(Cancelled)` if it was cancelled).
+    pub fn finish(self, result: Result<T, Cancelled>) {
+        *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
+    }
+
+    /// The job was cancelled or dropped: its answer is no longer wanted.
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 impl<T: Send + 'static> Job<T> {
@@ -30,18 +53,61 @@ impl<T: Send + 'static> Job<T> {
             Job {
                 cancel,
                 thread: Some(thread),
+                slot: None,
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
             let done = Some(f(&Interrupt(Some(&cancel))));
-            Job { cancel, done }
+            Job {
+                cancel,
+                done,
+                slot: None,
+            }
         }
+    }
+
+    /// A job someone else finishes through the [`Done`].
+    pub fn pending() -> (Job<T>, Done<T>) {
+        let (cancel, slot) = (Arc::new(AtomicBool::new(false)), Slot::default());
+        let done = Done {
+            slot: slot.clone(),
+            cancel: cancel.clone(),
+        };
+        let job = Job {
+            cancel,
+            #[cfg(not(target_arch = "wasm32"))]
+            thread: None,
+            #[cfg(target_arch = "wasm32")]
+            done: None,
+            slot: Some(slot),
+        };
+        (job, done)
+    }
+
+    /// A pending job's result, once its [`Done`] gave it.
+    fn take_slot(&mut self) -> Option<Result<T, Cancelled>> {
+        let r = self
+            .slot
+            .as_ref()?
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        self.slot = None;
+        Some(r)
     }
 
     /// The result once the job has stopped, then `None` ever after. A cancelled job answers
     /// `Err(Cancelled)` whatever it computed; so does one that panicked.
     pub fn poll(&mut self) -> Option<Result<T, Cancelled>> {
+        if self.slot.is_some() {
+            let r = self.take_slot()?;
+            return Some(if self.cancel.load(Ordering::Relaxed) {
+                Err(Cancelled)
+            } else {
+                r
+            });
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let r = {
             if !self.thread.as_ref()?.is_finished() {
@@ -61,6 +127,10 @@ impl<T: Send + 'static> Job<T> {
     /// Waits for the job to stop and gives its result, as `poll` would: Ruling R72's synchronous
     /// commit keeps the work already done.
     pub fn wait(&mut self) -> Result<T, Cancelled> {
+        if self.slot.is_some() {
+            // ponytail: no waiting on a pending job (nothing commits one synchronously).
+            return self.poll().unwrap_or(Err(Cancelled));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let r = self
             .thread
@@ -78,13 +148,20 @@ impl<T: Send + 'static> Job<T> {
     /// The job is still working.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn is_running(&self) -> bool {
-        self.thread.as_ref().is_some_and(|t| !t.is_finished())
+        self.pending_open() || self.thread.as_ref().is_some_and(|t| !t.is_finished())
     }
 
-    /// Never: on wasm the job ran in `spawn`.
+    /// Only a pending job: on wasm a spawned job ran in `spawn`.
     #[cfg(target_arch = "wasm32")]
     pub fn is_running(&self) -> bool {
-        false
+        self.pending_open()
+    }
+
+    /// A pending job whose result has not come yet.
+    fn pending_open(&self) -> bool {
+        self.slot
+            .as_ref()
+            .is_some_and(|s| s.lock().unwrap_or_else(|e| e.into_inner()).is_none())
     }
 }
 
@@ -131,6 +208,25 @@ mod tests {
         let mut job = Job::spawn(|_| Ok(9));
         job.cancel();
         assert_eq!(job.wait(), Err(Cancelled));
+    }
+
+    /// A pending job answers what its `Done` gave, once; cancelled or dropped, the `Done` knows,
+    /// and the job answers `Cancelled` whatever comes.
+    #[test]
+    fn pending_job_answers_its_done() {
+        let (mut job, done) = Job::pending();
+        assert!(job.is_running() && job.poll().is_none() && !done.cancelled());
+        done.finish(Ok(3));
+        assert!(!job.is_running());
+        assert_eq!(job.poll(), Some(Ok(3)));
+        assert_eq!(job.poll(), None);
+        let (job, done) = Job::<i32>::pending();
+        drop(job);
+        assert!(done.cancelled());
+        let (mut job, done) = Job::pending();
+        job.cancel();
+        done.finish(Ok(4));
+        assert_eq!(job.poll(), Some(Err(Cancelled)));
     }
 
     /// S§4.3 "Resource limits", Review Focus 1: a cancel set before a 2048² removal's first

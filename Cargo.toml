@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/pdn-core", "crates/paintrs"]
+members = ["crates/pdn-core", "crates/paintrs", "crates/sam-worker"]
 # Vendored third-party crates (patched below) are not workspace members: no lint, test or fmt gate.
 exclude = ["crates/vendor/heic-rs"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
@@ -27,7 +27,8 @@ opt-level = 2
 # on top of release, which only the wasm pays for in build time. tools/web-dist.sh then runs
 # `wasm-opt -O3`.
 # Release downloads (.github/workflows/release.yml): release plus fat LTO and one codegen unit; the
-# workflow adds x86-64-v3 (AVX2) on x86-64. A plain `--release` build stays quicker to compile.
+# workflow builds each x86-64 download twice, baseline and x86-64-v3 (AVX2, the `-avx2` assets). A
+# plain `--release` build stays quicker to compile.
 [profile.dist]
 inherits = "release"
 lto = "fat"

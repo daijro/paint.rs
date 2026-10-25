@@ -502,7 +502,7 @@ impl ToolMenu {
             if let Some(line) = p.section_line {
                 painter.rect_filled(px::snap_line(line, ppp), 0.0, theme.pdn_separator);
             }
-            paint_label(&painter, def, p, theme.menu_item_text, bg);
+            paint_label(&painter, def, p, theme.menu_item_text);
             let control = p.control;
             let value = owner.value(app, def.key);
             match def.kind {
@@ -784,22 +784,16 @@ pub struct Placed {
     pub section_line: Option<Rect>,
     /// The label box (when it has text): its text line box's top, the box's width.
     pub label: Option<Rect>,
-    /// An Extra option's plus (S§4.1): `plugin_indicator.png`'s box.
-    pub plus: Option<Rect>,
     /// The control's border box.
     pub control: Rect,
 }
 
-/// An option's label, centred in its box (§8.2: DirectWrite centres it in GDI's T), and an Extra
-/// option's plus.
-fn paint_label(painter: &egui::Painter, def: &OptionDef, p: &Placed, color: Color32, bg: Color32) {
+/// An option's label, centred in its box (§8.2: DirectWrite centres it in GDI's T). Extra options
+/// carry no plus here: the user keeps it for menus and the Tools window (2026-10-25).
+fn paint_label(painter: &egui::Painter, def: &OptionDef, p: &Placed, color: Color32) {
     if let (Some(label), Some(r)) = (def.label, p.label) {
         let x = r.min.x + (r.width() - text::css_width(label, TOOL_FONT_SIZE)) / 2.0;
         text::draw(painter, Pos2::new(x, r.min.y), label, spec(), color);
-    }
-    if let Some(r) = p.plus {
-        let r = px::snap_rect(r, painter.pixels_per_point());
-        img::paint_icon(painter, "plugin_indicator.png", r, bg, Filter::None);
     }
 }
 
@@ -854,16 +848,6 @@ pub fn layout_row(
             )
         });
         x += s.label_w;
-        // S§4.1: an Extra option's plus, a gap after its label and before its control.
-        let plus = def.extra.then(|| {
-            if label.is_some() {
-                x += EXTRA_OPTION_PLUS_GAP;
-            }
-            let (w, h) = PLUGIN_INDICATOR_SIZE;
-            let r = Rect::from_min_size(Pos2::new(x, top + (gh - h) / 2.0), Vec2::new(w, h));
-            x += w + EXTRA_OPTION_PLUS_GAP;
-            r
-        });
         x += s.control_margin;
         let control = Rect::from_min_size(
             Pos2::new(x, top + (gh - s.control_h) / 2.0),
@@ -873,7 +857,6 @@ pub fn layout_row(
         options.push(Placed {
             section_line,
             label,
-            plus,
             control,
         });
     }
@@ -1387,11 +1370,10 @@ mod tests {
         }
     }
 
-    /// S§4.1 and Ruling R1 (a synthetic Extra option: no real one exists before the tool tasks):
-    /// `plugin_indicator.png` 4 DIP after an Extra option's label, or 4 DIP before its
-    /// control when it has none; the control moves over to make room, and it is painted.
+    /// User (2026-10-25): the gray plus marks Extras in menus and the Tools window only; an Extra
+    /// option in the toolbar lays out exactly as a plain one.
     #[test]
-    fn extra_option_label_draws_plus() {
+    fn extra_options_carry_no_plus_in_the_toolbar() {
         let content = Rect::from_min_max(Pos2::new(2.0, 58.0), Pos2::new(1278.0, 84.0));
         let settings = ToolSettings::default();
         let tool = ToolType::PaintBucket;
@@ -1403,56 +1385,7 @@ mod tests {
         let value = |k: &str| settings.get(tool, k);
         let before = layout_row(&plain, value, content, 83.0, 1.0);
         let after = layout_row(&defs, value, content, 83.0, 1.0);
-        let (w, h) = PLUGIN_INDICATOR_SIZE;
-        let mut shift = 0.0;
-        let mut pluses = vec![];
-        for (i, d) in defs.iter().enumerate() {
-            let (p, q) = (after.options[i], before.options[i]);
-            let Some(plus) = p.plus else {
-                assert!(!d.extra, "{}", d.key);
-                assert_eq!(p.control.min.x, q.control.min.x + shift, "{}", d.key);
-                continue;
-            };
-            assert_eq!(plus.size(), Vec2::new(w, h));
-            assert_eq!(plus.center().y, p.control.center().y);
-            match p.label {
-                Some(label) => assert_eq!(plus.min.x, label.max.x + 4.0, "{}", d.key),
-                None => assert_eq!(plus.min.x, q.control.min.x + shift, "{}", d.key),
-            }
-            assert_eq!(p.control.min.x, plus.max.x + 4.0, "{}", d.key);
-            shift = p.control.min.x - q.control.min.x;
-            pluses.push(px::snap_rect(plus, 1.0));
-        }
-        assert_eq!(pluses.len(), 2);
-        let ctx = egui::Context::default();
-        crate::install_fonts(&ctx, pdn_core::fonts::FontPolicy::Bundled, "Selawik");
-        let image = image::RgbaImage::from_pixel(12, 16, image::Rgba([20, 200, 70, 255]));
-        let mut png = std::io::Cursor::new(Vec::new());
-        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-        crate::assets::Assets::set_icon_override(&ctx, "plugin_indicator.png", png.into_inner());
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            for (d, p) in defs.iter().zip(&after.options) {
-                paint_label(
-                    ui.painter(),
-                    d,
-                    p,
-                    egui::Color32::BLACK,
-                    egui::Color32::WHITE,
-                );
-            }
-        });
-        let icons: Vec<Rect> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                egui::Shape::Mesh(m) if m.calc_bounds().size() == Vec2::new(w, h) => {
-                    Some(m.calc_bounds())
-                }
-                _ => None,
-            })
-            .collect();
-        output.textures_delta.clear();
-        assert_eq!(icons, pluses);
+        assert_eq!(after, before);
     }
 
     /// Ruling R18 (PC10): Clone Stamp's Extra options, Aligned and Sample, follow its row.
@@ -1537,6 +1470,36 @@ mod tests {
         let entries: Vec<_> = last.values.iter().map(|&(v, t, _)| (v, t)).collect();
         assert_eq!(entries, [("false", "Resize"), ("true", "Warp")]);
         assert_eq!(face(last, &Value::Bool(false)).label, "Resize");
+    }
+
+    /// Object Selection's method follows the combine row, an Extra (the plus): MobileSAM, the
+    /// desktop's default (the web's is GrabCut), then GrabCut, each with its own icon.
+    #[test]
+    fn object_selection_method_follows_the_combine_row() {
+        let ctx = egui::Context::default();
+        let app = AppWorkspace::default();
+        let defs = definitions(&ctx, ToolType::ObjectSelection, &app);
+        let method = &defs[1];
+        assert_eq!((method.key, method.extra), ("segmenter", true));
+        assert_eq!(
+            method.values,
+            [
+                (
+                    "mobilesam",
+                    "MobileSAM",
+                    Some("object_selection_mobilesam_icon.png")
+                ),
+                (
+                    "grabcut",
+                    "GrabCut",
+                    Some("object_selection_grabcut_icon.png")
+                )
+            ]
+        );
+        let default = app
+            .tool_settings
+            .get(ToolType::ObjectSelection, "segmenter");
+        assert_eq!(face(method, &default).label, "MobileSAM");
     }
 
     /// compositing.md §2.7 "Toolbar list": AlphaBlending.True for the layer ops, False for Overwrite.
