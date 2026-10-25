@@ -6,11 +6,11 @@
 //! As in Paint.NET, invalidated rects are queued, unioned and clipped; only what they cover
 //! re-renders.
 
-use super::RendererId;
 use super::display::{DisplayTarget, SPAN_GAP, SpanMask, span_bands};
 use super::float::{Float, FloatPainter, Levels};
 use super::selection::{self, TintParts};
 use super::view::{self, CanvasStyle, MipChain, ViewTransform};
+use super::{Renderer, RendererId};
 use crate::document::layer::BlendMode;
 use crate::document::surface::Surface;
 use crate::document::workspace::DocumentWorkspace;
@@ -41,10 +41,11 @@ pub enum Upload {
     Rect(IntRect),
     /// One-row rects sorted by row (`display::span_bands` makes upload rects of them).
     Spans(Vec<IntRect>),
-    /// Nothing in the caller's pixels: a zoom draft, at half resolution (`half_shown`).
+    /// Nothing in the caller's pixels: a zoom draft, at a reduced resolution (`half_shown`).
     Half,
-    /// A pan draft: every pixel moved by `d` (device px; the uncovered ones keep what they held),
-    /// then `rects` were drawn again. A display that can move its copy by `d` uploads only them.
+    /// A pan (a draft, or exact: see `render`): every pixel moved by `d` (device px; the
+    /// uncovered ones keep what they held), then `rects` were drawn again. A display that can
+    /// move its copy by `d` uploads only them.
     Panned {
         d: [i32; 2],
         rects: Vec<IntRect>,
@@ -77,6 +78,10 @@ pub struct CanvasPixels {
     /// Set by the caller while a pan or zoom is in progress: a change of view alone is drawn as a
     /// draft (see `render_draft`) until a render without it settles the view exactly.
     pub draft: bool,
+    /// The most pixels a zoom draft draws: it renders at 1/k of the view's resolution, k the
+    /// least of 2, 3 and 4 that keeps it under this (the web renders on one thread). `None`: half
+    /// resolution.
+    pub draft_pixels: Option<usize>,
     /// The upload pixels show a draft at this transform, not `key`'s view.
     drafted: Option<ViewTransform>,
     /// The moving pixels drawn (`DocumentWorkspace::float`): their revision and device bounds;
@@ -87,16 +92,22 @@ pub struct CanvasPixels {
     under: Option<(UnderKey, Option<Surface>, MipChain)>,
     below: Option<((ViewTransform, CanvasStyle), DisplayTarget)>,
     levels: Option<Levels>,
-    /// A zoom draft's half-resolution view; a pan draft's planes over translucent pixels (see
+    /// A zoom draft's reduced view; a pan draft's planes over translucent pixels (see
     /// `draft_translucent`) at their transform. Both go when a render settles the view.
     half: Option<DisplayTarget>,
     planes: Option<(ViewTransform, [Vec<[u8; 4]>; 2])>,
-    /// The zoom draft shown, at half resolution: the upload pixels hold an older frame until a
-    /// pan draft spreads it over them (`spread_half`) or the view settles.
-    half_shown: Option<([u32; 2], Vec<[u8; 4]>)>,
+    /// The zoom draft shown, at 1/k resolution (its size, k, its pixels): the upload pixels hold
+    /// an older frame until a pan draft spreads it over them or the view settles.
+    half_shown: Option<([u32; 2], u32, Vec<[u8; 4]>)>,
     /// Whether the composite of (document, revision) has no translucent pixel.
     opaque: Option<((u64, u64), bool)>,
+    /// An exact pan moved the upload pixels but not the target's (it drew only the strips it
+    /// uncovered): until the next full render, a write draws the base where it reads the target.
+    stale: bool,
 }
+
+/// A zoom draft's size, k, and pixels (`CanvasPixels::half_shown`).
+pub type HalfShown<'a> = ([u32; 2], u32, &'a [[u8; 4]]);
 
 type Layer = (
     RendererId,
@@ -221,10 +232,12 @@ impl CanvasPixels {
         self.drafted.is_some()
     }
 
-    /// After `Upload::Half` (until another upload): the zoom draft shown, at half resolution
-    /// (its size, and its pixels row-major), each pixel to be shown as a 2 × 2 block.
-    pub fn half_shown(&self) -> Option<([u32; 2], &[[u8; 4]])> {
-        self.half_shown.as_ref().map(|(size, px)| (*size, &px[..]))
+    /// After `Upload::Half` (until another upload): the zoom draft shown, at 1/k resolution (its
+    /// size, k, and its pixels row-major), each pixel to be shown as a k × k block.
+    pub fn half_shown(&self) -> Option<HalfShown<'_>> {
+        self.half_shown
+            .as_ref()
+            .map(|(size, k, px)| (*size, *k, &px[..]))
     }
 
     /// `DocumentInvalidated { rects }` (empty = the whole document).
@@ -264,11 +277,16 @@ impl CanvasPixels {
             style: *style,
             grid: ws.grid_visible,
         };
-        if self.draft
+        // A pan by whole device px over an opaque image, from an exact view: the pixels move and
+        // only the strips it uncovers are drawn, exactly (no draft, no settle).
+        let exact = self.drafted.is_none()
             && self.view_only(ws, &key)
-            && let Some(redo) = self.draft_overlays(ws, &key, stamp)
+            && self.pan_of(&key).is_some_and(|(t, _)| t == key.t)
+            && self.composite_opaque(ws);
+        if (exact || (self.draft && self.view_only(ws, &key)))
+            && let Some(redo) = self.draft_overlays(ws, &key, stamp, exact)
         {
-            return self.render_draft(ws, &key, &redo, out(), conv);
+            return self.render_draft(ws, &key, &redo, exact, out(), conv);
         }
         if self.drafted.is_some() {
             // The view settles: the drafts' buffers go.
@@ -300,6 +318,7 @@ impl CanvasPixels {
         let mode = self.target.as_ref().expect("drawn above").mode;
         // An ants frame alone changes only the outline pixels (unless they are too many).
         if !content && let Some(spans) = ws.surface_box.overlay_spans(ws, t) {
+            self.fresh_base(ws, t, style, all, Some(&spans));
             let target = self.target.as_ref().expect("drawn above");
             let paint = self.painter(ws, t, mode, float);
             target.write_rgba8_over(all, Some(&spans), out(), conv, paint);
@@ -336,6 +355,10 @@ impl CanvasPixels {
         let spans = pieces.and_then(|p| sparse(&p, all, area(refresh)));
         self.overlay_rect = drawn;
         self.overlay_key = Some(overlay_key);
+        match &spans {
+            Some(spans) => self.fresh_base(ws, t, style, all, Some(spans)),
+            None => self.fresh_base(ws, t, style, refresh, None),
+        }
         let target = self.target.as_ref().expect("drawn above");
         let paint = self.painter(ws, t, mode, float);
         match spans {
@@ -459,6 +482,38 @@ impl CanvasPixels {
                 .any(|e| matches!(e, crate::app::AppEvent::DocumentInvalidated { .. }))
     }
 
+    /// Draws the base into the target over `rect` (∩ `spans`) before a write reads it there, while
+    /// the target lags the upload pixels (`stale`); all of it, for good, past half of it.
+    fn fresh_base(
+        &mut self,
+        ws: &DocumentWorkspace,
+        t: &ViewTransform,
+        style: &CanvasStyle,
+        rect: IntRect,
+        spans: Option<&[IntRect]>,
+    ) {
+        let Some(target) = self.target.as_mut().filter(|_| self.stale) else {
+            return;
+        };
+        let whole = IntRect::new(0, 0, target.width, target.height);
+        let n = spans.map_or(area(rect), |s| {
+            s.iter().map(|r| area(r.intersect(&rect))).sum()
+        });
+        if n == 0 {
+            return;
+        }
+        let (rect, spans) = match n * 2 >= area(whole) {
+            true => {
+                self.stale = false;
+                (whole, None)
+            }
+            false => (rect, spans),
+        };
+        target.set_clip(Some(rect));
+        ws.surface_box.render_base_in(ws, target, t, style, spans);
+        target.set_clip(None);
+    }
+
     /// The transform shown now (a draft's, or the base's).
     fn shown(&self) -> ViewTransform {
         self.drafted
@@ -489,6 +544,7 @@ impl CanvasPixels {
         ws: &DocumentWorkspace,
         key: &BaseKey,
         stamp: u64,
+        exact: bool,
     ) -> Option<Vec<IntRect>> {
         let keys = ws.surface_box.overlay_keys(ws, stamp);
         let Some((t, _)) = self.pan_of(key) else {
@@ -534,7 +590,27 @@ impl CanvasPixels {
                 .position(|l| l.0 == id)
                 .map(|i| old.swap_remove(i));
             let (rects, parts) = match was {
-                Some((_, wk, rects, parts)) if wk == k => (moved(&rects), moved_parts(&parts)),
+                // Listed again at `t`: the old lists stop at the old view's edge, and miss what
+                // the strips the pan uncovered draw now (review I-1).
+                Some((_, wk, rects, parts)) if wk == k => {
+                    let parts_now = ws.surface_box.overlay_tint_parts(ws, &t, id);
+                    let now = match &parts_now {
+                        Some(p) => Some([&p.outline[..], &p.tint[..]].concat()),
+                        None => ws.surface_box.overlay_paint_rects(ws, &t, id),
+                    };
+                    // An exact pan draws a selection's outline again, old and new: where the view
+                    // clipped it, its first corner is a cap, not the join it is once in view (an
+                    // outline too dense to list is left as it moved).
+                    if exact && matches!(ws.surface_box.renderer(id), Some(Renderer::Selection(_)))
+                    {
+                        let outline = |p: Option<TintParts>, r: Option<Vec<IntRect>>| {
+                            p.map(|p| p.outline).or(r).unwrap_or_default()
+                        };
+                        redo.extend(outline(moved_parts(&parts), moved(&rects)));
+                        redo.extend(outline(parts_now.clone(), now.clone()));
+                    }
+                    (now, parts_now)
+                }
                 was => {
                     // As `overlay_changes`: a tinting selection's tint where both frames tint
                     // shows the same pixels (the base under it moved with them).
@@ -568,23 +644,26 @@ impl CanvasPixels {
     }
 
     /// A pan or zoom frame, drawn cheaply; the next render without `draft` draws the view exactly.
+    /// `exact` (a whole-pixel pan over an opaque image from an exact view): the strips are drawn
+    /// in the view's own style, so the frame is the view at its transform and needs no settling.
     /// A pan by whole device px (rounded) moves the pixels shown and draws only the strips it
     /// uncovers, at the shown transform moved by that much (≤ ½ px off until the view settles),
     /// plus `redo` (the overlays that changed); any other change of view draws everything at half
-    /// resolution with one Linear tap (`render_half`). The overlays are drawn with the pixels
-    /// they lie on; the ants hold still meanwhile.
+    /// resolution (or less, see `draft_pixels`) with one Linear tap (`render_half`). The overlays
+    /// are drawn with the pixels they lie on; the ants hold still meanwhile.
     fn render_draft<T: Copy + Send>(
         &mut self,
         ws: &DocumentWorkspace,
         key: &BaseKey,
         redo: &[IntRect],
+        exact: bool,
         out: &mut [T],
         conv: impl Fn([u8; 4]) -> T + Sync + Send,
     ) -> Upload {
         let shown = self.shown();
         let [w, h] = key.t.viewport.map(|v| v.max(1));
         let style = CanvasStyle {
-            draft: true,
+            draft: !exact,
             ..key.style
         };
         let (t, d, strips) = if let Some((t, d)) = self.pan_of(key) {
@@ -641,14 +720,15 @@ impl CanvasPixels {
             self.drafted = Some(t);
             return Upload::All;
         }
-        // A zoom draft shown at half resolution first fills the upload pixels it left as they were.
-        if let Some(([hw, _], small)) = self.half_shown.take() {
-            let (w, hw) = (w as usize, hw as usize);
+        // A zoom draft shown at a reduced resolution first fills the upload pixels it left as
+        // they were.
+        if let Some(([hw, _], k, small)) = self.half_shown.take() {
+            let (w, hw, k) = (w as usize, hw as usize, k as usize);
             super::display::for_bands(out, w, 0..h as usize, 32, |y0, band| {
                 for (j, row) in band.chunks_mut(w).enumerate() {
-                    let src = &small[(y0 + j) / 2 * hw..][..hw];
+                    let src = &small[(y0 + j) / k * hw..][..hw];
                     for (x, o) in row.iter_mut().enumerate() {
-                        *o = conv(src[x / 2]);
+                        *o = conv(src[x / k]);
                     }
                 }
             });
@@ -675,7 +755,23 @@ impl CanvasPixels {
             target.set_clip(None);
             target.write_rgba8_over(r, None, out, &conv, &paint);
         }
-        self.drafted = Some(t);
+        if exact {
+            // What a full render at `t` shows (the ants hold their frame until the next render).
+            // The overlays drew into the old rect moved, and into the strips now.
+            let [dx, dy] = d.map(|v| v as i32);
+            let moved = self
+                .overlay_rect
+                .map(|r| IntRect::new(r.x + dx, r.y + dy, r.w, r.h));
+            let now = ws.surface_box.overlay_bounds(ws, &t);
+            self.overlay_rect = [moved, now]
+                .into_iter()
+                .flatten()
+                .reduce(|a, b| a.union(&b))
+                .map(|r| r.intersect(&all));
+            (self.key, self.stale) = (Some(key.clone()), true);
+        } else {
+            self.drafted = Some(t);
+        }
         Upload::Panned {
             d: [d[0] as i32, d[1] as i32],
             rects: regions,
@@ -714,8 +810,8 @@ impl CanvasPixels {
         let (mut planes, regions) = match self.planes.take() {
             Some((at, planes)) if at == shown => (moved(planes), regions.to_vec()),
             // The base still shows `shown` (in its own style): it is the first plane's half of
-            // the squares.
-            _ if self.drafted.is_none() => {
+            // the squares (unless an exact pan left it behind).
+            _ if self.drafted.is_none() && !self.stale => {
                 let mut planes = new();
                 let base = self.key.as_ref().expect("view_only: drawn before").style;
                 fill_planes(ws, &mut target, &shown, &base, all, &mut planes, true);
@@ -761,17 +857,24 @@ impl CanvasPixels {
         }
     }
 
-    /// A zoom's draft: the view at half resolution (half the scale, origin and UI scale), each
-    /// pixel to be shown as a 2 × 2 block (`half_shown`; the caller's display scales it, so a
-    /// zoom uploads a quarter of the pixels and spreads none of them).
+    /// A zoom's draft: the view at 1/k resolution (1/k the scale, origin and UI scale; k from
+    /// `draft_pixels`, else 2), each pixel to be shown as a k × k block (`half_shown`; the
+    /// caller's display scales it, so a zoom uploads 1/k² of the pixels and spreads none of them).
     fn render_half(&mut self, ws: &DocumentWorkspace, t: &ViewTransform, style: &CanvasStyle) {
         let [w, h] = t.viewport.map(|v| v.max(1));
-        let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
+        let size = |k: u32| (w.div_ceil(k), h.div_ceil(k));
+        let k = match self.draft_pixels {
+            Some(most) => (2..4)
+                .find(|&k| (size(k).0 as usize) * (size(k).1 as usize) <= most)
+                .unwrap_or(4),
+            None => 2,
+        };
+        let (hw, hh) = size(k);
         let half = ViewTransform {
-            scale: t.scale / 2.0,
-            origin: t.origin.map(|o| o / 2.0),
+            scale: t.scale / k as f64,
+            origin: t.origin.map(|o| o / k as f64),
             viewport: [hw, hh],
-            ui_scale: t.ui_scale / 2.0,
+            ui_scale: t.ui_scale / k as f64,
         };
         let target = match self.half.take() {
             Some(target) if (target.width, target.height, target.mode) == (hw, hh, style.mode) => {
@@ -782,11 +885,15 @@ impl CanvasPixels {
         let target = self.half.insert(target);
         ws.surface_box
             .render_base_in(ws, target, &half, style, None);
-        let mut small = self.half_shown.take().map(|(_, px)| px).unwrap_or_default();
+        let mut small = self
+            .half_shown
+            .take()
+            .map(|(_, _, px)| px)
+            .unwrap_or_default();
         small.resize(hw as usize * hh as usize, [0; 4]);
         let paint = ws.surface_box.overlay_painter(ws, &half, style.mode);
         target.write_rgba8_over(IntRect::new(0, 0, hw, hh), None, &mut small, |p| p, paint);
-        self.half_shown = Some(([hw, hh], small));
+        self.half_shown = Some(([hw, hh], k, small));
     }
 
     /// Draws the base where it changed: just the invalidated document rects' device pixels in an
@@ -831,6 +938,8 @@ impl CanvasPixels {
             _ => DisplayTarget::new(w, h, key.style.mode),
         };
         let target = self.target.insert(target);
+        // A full render draws the target again (a partial one only where it changed).
+        self.stale &= partial.is_some();
         let (bounds, spans) = partial.unwrap_or((all, None));
         target.set_clip(Some(bounds));
         ws.surface_box
@@ -1210,7 +1319,8 @@ mod tests {
                     i == 0 || drawn * 2 < view,
                     "{mode:?} {i}: {drawn} of {view} px"
                 );
-                let shown = check.canvas.drafted.expect("a draft");
+                // (Whole-pixel pans over an opaque image are exact: no draft.)
+                let shown = check.canvas.drafted.unwrap_or(t);
                 let mut fresh = vec![[0u8; 4]; check.out.len()];
                 CanvasPixels::default().render(ws, &shown, &style, 0, || &mut fresh[..], |p| p);
                 let stale = check.out.iter().zip(&fresh).filter(|(a, b)| a != b).count();
@@ -1385,6 +1495,59 @@ mod tests {
         }
     }
 
+    /// Under a pixel budget a zoom draft renders at 1/k resolution, k the least of 2, 3 and 4 that
+    /// fits it (else 4); a pan right after it spreads each of its pixels over k × k upload pixels
+    /// and moves them; the view settles to a full refresh.
+    #[test]
+    fn budgeted_zoom_drafts_spread_their_pixels() {
+        for (budget, want) in [(None, 2), (Some(9000), 3), (Some(1), 4)] {
+            // An opaque image: the outlines of a sparse selection make the pixels differ.
+            let mut app = scene(1.7, false, cells(20.0, 20.0, 260, 160, 600));
+            let mut check = Check::new(RenderMode::Hardware);
+            check.frame(&mut app, 0);
+            (check.canvas.draft, check.canvas.draft_pixels) = (true, budget);
+            let render = |app: &mut AppWorkspace, check: &mut Check| {
+                let ws = app.active_ws().unwrap();
+                let t = ws.view.view_transform();
+                let (style, out) = (check.style, &mut check.out);
+                let up = check
+                    .canvas
+                    .render(ws, &t, &style, 0, || &mut out[..], |p| p);
+                (t, up)
+            };
+            app.active_ws_mut().unwrap().view.zoom = 1.3;
+            let (t, up) = render(&mut app, &mut check);
+            assert_eq!(up, Upload::Half);
+            let (size, k, small) = check.canvas.half_shown().expect("a zoom draft");
+            let [w, h] = t.viewport;
+            assert_eq!(
+                (k, size),
+                (want, [w.div_ceil(k), h.div_ceil(k)]),
+                "{budget:?}"
+            );
+            let (small, hw, k) = (small.to_vec(), size[0] as usize, k as usize);
+            assert!(small.iter().any(|p| *p != small[0]));
+            let v = &mut app.active_ws_mut().unwrap().view;
+            v.set_view_position(v.viewport_x - 5.0, v.viewport_y - 3.0);
+            let Upload::Panned { d, rects } = render(&mut app, &mut check).1 else {
+                panic!("a pan draft");
+            };
+            assert!(check.canvas.half_shown().is_none());
+            let (w, h) = (w as i32, h as i32);
+            for (y, x) in (0..h).flat_map(|y| (0..w).map(move |x| (y, x))) {
+                let (sx, sy) = (x - d[0], y - d[1]);
+                if rects.iter().any(|r| r.contains(x, y)) || sx < 0 || sy < 0 || sx >= w || sy >= h
+                {
+                    continue;
+                }
+                let want = small[sy as usize / k * hw + sx as usize / k];
+                assert_eq!(check.out[(y * w + x) as usize], want, "{k}: ({x}, {y})");
+            }
+            check.canvas.draft = false;
+            assert!(check.frame(&mut app, 0) > 0);
+        }
+    }
+
     /// A pan draft by whole device px shows what a full render at its transform shows: over an
     /// opaque image (the pixels shift), over a translucent one (I2: the checkerboard stays fixed to
     /// the viewport under them, frame after frame), and when the selection changed meanwhile (I4:
@@ -1466,16 +1629,125 @@ mod tests {
                         Upload::Panned { .. } => {}
                         up => assert!(noise || (zoom && change && i == 0), "{up:?}"),
                     }
-                    // A changed overlay drawn at half resolution is not listed: that frame
-                    // renders exactly.
+                    // Over an opaque image from an exact view a pan is exact, no draft. A changed
+                    // overlay drawn at half resolution is not listed: that frame renders exactly.
                     let drafted = check.canvas.drafted;
-                    assert_eq!(drafted.is_some(), !(zoom && change && i == 0));
+                    let exact = !noise && !zoom;
+                    assert_eq!(drafted.is_some(), !exact && !(zoom && change && i == 0));
                     let shown = drafted.unwrap_or(t);
                     let mut fresh = vec![[0u8; 4]; size];
                     CanvasPixels::default().render(ws, &shown, &style, 0, || &mut fresh[..], |p| p);
                     let stale = check.out.iter().zip(&fresh).filter(|(a, b)| a != b).count();
                     assert_eq!(stale, 0, "{mode:?} {noise} {change} {zoom} step {i}");
                 }
+            }
+        }
+    }
+
+    /// A pan by whole device px over an opaque image, in a gesture or not, moves the pixels and
+    /// draws only the strips it uncovers, exactly: no draft and no settle. The target lags the
+    /// pixels meanwhile; the frames after (an ants step, a selection change, a brush dab, another
+    /// pan, a zoom) each equal a full refresh.
+    #[test]
+    fn exact_pans_need_no_settle() {
+        for mode in [RenderMode::Hardware, RenderMode::Software] {
+            // Zoomed out the settled view samples more finely than a draft. After the pans the
+            // selection is deselected, or replaced by another.
+            for (zoom, draft, deselect, ppp) in [
+                (1.0, false, false, 1.0),
+                (1.0, true, true, 1.0),
+                (0.6, true, false, 1.0),
+                (0.6, false, true, 1.0),
+                (1.0, false, false, 1.25),
+                (0.6, true, true, 1.25),
+            ] {
+                // An opaque image with a pattern (a stale pixel shows), larger than the view.
+                let mut app = AppWorkspace {
+                    view_width: 320.0,
+                    view_height: 240.0,
+                    ..Default::default()
+                };
+                app.create_blank_document_in_new_workspace(800, 600, 96.0, true);
+                let ws = app.active_ws_mut().unwrap();
+                let px = ws.document.layers.get_at_mut(0).unwrap().surface.data_mut();
+                for (i, p) in px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let (x, y) = (i % 800, i / 800);
+                    *p = [(x * 7) as u8, (y * 5) as u8, (x ^ y) as u8, 255];
+                }
+                ws.invalidate(None);
+                (ws.view.ppp, ws.view.zoom_to_window) = (ppp, false);
+                ws.view.zoom = zoom;
+                ws.view.center_view();
+                // Two rects the view clips: the strips the pans uncover draw more of their outlines,
+                // and the pans bring the second one wholly into view (its first corner becomes a
+                // join, review M-1).
+                let path = GraphicsPath {
+                    polygons: [(300.0, 250.0, 400.0, 80.0), (520.0, 400.0, 30.0, 30.0)]
+                        .map(|(x, y, w, h)| GraphicsPath::from_rect(&Rectangle::new(x, y, w, h)))
+                        .into_iter()
+                        .flat_map(|p| p.polygons)
+                        .collect(),
+                };
+                ws.selection
+                    .set_continuation_path(path, CombineMode::Replace);
+                ws.selection.commit_continuation();
+                let mut check = Check::new(mode);
+                check.frame(&mut app, 0);
+                check.canvas.draft = draft;
+                // (Whole device px at 1.25 too.)
+                let pan = |app: &mut AppWorkspace, check: &mut Check, dx: f64, dy: f64| {
+                    let v = &mut app.active_ws_mut().unwrap().view;
+                    v.set_view_position(v.viewport_x + dx, v.viewport_y + dy);
+                    let ws = app.active_ws().unwrap();
+                    let t = ws.view.view_transform();
+                    let size = (t.viewport[0] * t.viewport[1]) as usize;
+                    let (style, out) = (check.style, &mut check.out);
+                    let up = check
+                        .canvas
+                        .render(ws, &t, &style, 0, || &mut out[..], |p| p);
+                    let Upload::Panned { rects, .. } = up else {
+                        panic!("{mode:?} {zoom}: {up:?}");
+                    };
+                    let drawn: u64 = rects.iter().map(|r| area(*r)).sum();
+                    assert!(drawn * 2 < size as u64, "{drawn} of {size}");
+                    assert!(!check.canvas.drafted());
+                    let mut fresh = vec![[0u8; 4]; size];
+                    CanvasPixels::default().render(ws, &t, &style, 0, || &mut fresh[..], |p| p);
+                    assert!(check.out == fresh, "{mode:?} {zoom} ({dx}, {dy})");
+                };
+                for (dx, dy) in [(32.0, 20.0), (24.0, 28.0), (20.0, 16.0)] {
+                    pan(&mut app, &mut check, dx, dy);
+                }
+                check.canvas.draft = false;
+                // Nothing to settle.
+                assert_eq!(check.frame(&mut app, 0), 0);
+                let ws = app.active_ws_mut().unwrap();
+                ws.surface_box.set_ants_frame(3);
+                assert!(check.frame(&mut app, 0) > 0);
+                // The ants' spans alone drew the base under them, not all of it.
+                assert!(check.canvas.stale);
+                // Review I-1: the old outline goes everywhere it was drawn, the strips included.
+                let ws = app.active_ws_mut().unwrap();
+                if deselect {
+                    ws.selection.reset();
+                } else {
+                    let r = Rectangle::new(380.0, 280.0, 60.0, 40.0);
+                    let path = GraphicsPath::from_rect(&r);
+                    ws.selection
+                        .set_continuation_path(path, CombineMode::Replace);
+                }
+                ws.selection.commit_continuation();
+                assert!(check.frame(&mut app, 0) > 0);
+                // Exact still, the small one's outline too dense to list.
+                pan(&mut app, &mut check, -24.0, -20.0);
+                // A dab in view, then a zoom.
+                app.set_active_tool_from_type(ToolType::PaintBrush);
+                app.on_mouse_down(150.0, 110.0, MouseButton::Left, &input(150.0, 110.0));
+                app.on_mouse_up(159.0, 110.0, MouseButton::Left, &input(159.0, 110.0));
+                check.frame(&mut app, 0);
+                let ws = app.active_ws_mut().unwrap();
+                ws.view.zoom = zoom * 1.25;
+                check.frame(&mut app, 0);
             }
         }
     }

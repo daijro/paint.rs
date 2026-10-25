@@ -3,19 +3,26 @@
 //   node tests/web-perf.mjs --url http://127.0.0.1:8123/ [--dpr 1.25|native] [--size 1600x1000]
 //        [--doc 1920x1080,3000x2000] [--only brush,pan] [--secs 2] [--profile dir] [--shot dir]
 //        [--gpu vulkan|swiftshader|...] [--headful 1] [--pos x,y] [--profiles dir] [--uploads 1]
-//        [--console 1]
+//        [--console 1] [--flags '--ozone-platform=x11 ...']
 // It opens the app in a fresh profile at that device scale, makes a --doc image (File > New) and
 // runs each scenario for --secs, sending input every 8 ms as a mouse would, whatever the frame
 // rate. Per scenario it reports: frames drawn per second; the main thread's time in each drawn
-// animation frame (eframe's whole frame: input, the app, tessellation, the WebGL/WebGPU calls);
-// the gap between drawn frames; input→drawn, from each event's timestamp to the end of the first
-// frame drawn after it (the display adds about a refresh); and the texture bytes uploaded a frame.
+// animation frame (eframe's whole frame: input, the app, tessellation, the WebGL/WebGPU calls),
+// plus the page's event listeners since the frame before (eframe runs the app inside a press's or
+// a release's listener); the gap between drawn frames; input→drawn, from each event's timestamp
+// to the end of the first frame drawn after it (the display adds about a refresh); and the
+// texture bytes uploaded a frame. The Effects menu's opening click is measured on its own: the
+// longest frame and the main thread's time in the frames until it shows. Wheel events go one at a
+// time (CDP sends the next only once the page took the last, where a real wheel's deltas
+// coalesce), and a "Leave site?" dialog is accepted.
 // --profile writes a CPU profile per scenario (open it in DevTools) and prints the top self and
 // total times by function; --shot saves a screenshot after each scenario; --uploads lists upload
-// sizes; --console forwards the page's console. CHROMIUM names the browser binary (Chrome:
-// /usr/sbin/google-chrome-stable); the browser profile is a fresh directory under --profiles (else
-// the temp dir), deleted after. Headless composites in software and reads each WebGL frame back, so
-// past DPR 1 its frame rate is the readback's: the frame times hold, --headful shows the rate.
+// sizes; --console forwards the page's console; --flags passes more browser flags (on Wayland,
+// --ozone-platform=x11 lets --pos place the window; --pos is in DIP, scaled by --dpr). CHROMIUM
+// names the browser binary (Chrome: /usr/sbin/google-chrome-stable); the browser profile is a
+// fresh directory under --profiles (else the temp dir), deleted after. Headless composites in
+// software and reads each WebGL frame back, so past DPR 1 its frame rate is the readback's: the
+// frame times hold, --headful shows the rate.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,7 +43,7 @@ const chrome = spawn(process.env.CHROMIUM || '/usr/sbin/chromium', [
   '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows', ...(opt.dpr == "native" ? [] : [`--force-device-scale-factor=${opt.dpr}`]),
   ...(angle[opt.gpu] ?? [`--use-angle=${opt.gpu}`]),
-  ...(opt.webgpu ? ['--enable-unsafe-webgpu'] : []), 'about:blank',
+  ...(opt.webgpu ? ['--enable-unsafe-webgpu'] : []), ...(opt.flags ? opt.flags.split(' ') : []), 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 const wsUrl = await new Promise((resolve, reject) => {
   let err = '';
@@ -86,6 +93,23 @@ const probe = `(() => {
   P.waiting = [];
   for (const type of ['pointermove', 'pointerdown', 'pointerup', 'wheel', 'keydown'])
     window.addEventListener(type, (e) => P.waiting.push(e.timeStamp), { capture: true, passive: true });
+  // Time in the page's own event listeners: eframe runs the whole app inside a pointerdown or
+  // pointerup listener (for the clipboard's user activation), outside any animation frame. Each
+  // frame counts the listener time since the frame before.
+  P.handler = 0;
+  const wrapped = new WeakMap();
+  const add = EventTarget.prototype.addEventListener, remove = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function (type, f, o) {
+    if (typeof f != 'function') return add.call(this, type, f, o);
+    if (!wrapped.has(f)) wrapped.set(f, function (...a) {
+      const s = performance.now();
+      try { return f.apply(this, a); } finally { P.handler += performance.now() - s; }
+    });
+    return add.call(this, type, wrapped.get(f), o);
+  };
+  EventTarget.prototype.removeEventListener = function (type, f, o) {
+    return remove.call(this, type, (typeof f == 'function' && wrapped.get(f)) || f, o);
+  };
   const raf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = (cb) => raf((t) => {
     P.drew = false; P.bytes = 0;
@@ -97,7 +121,8 @@ const probe = `(() => {
       // A drawn frame shows the input before it; an undrawn one leaves it waiting.
       if (!P.drew) P.waiting = input.concat(P.waiting);
       const lag = P.drew && input.length ? end - Math.min(...input) : NaN;
-      if (P.on) P.frames.push([t, end - s, P.drew, P.bytes, lag, P.drew ? input.length : 0]);
+      if (P.on) P.frames.push([t, end - s + P.handler, P.drew, P.bytes, lag, P.drew ? input.length : 0]);
+      P.handler = 0;
     }
   });
   const wrap = (proto, name, f) => {
@@ -129,9 +154,18 @@ await send('Page.enable');
 await send('Runtime.enable');
 await send('Emulation.setFocusEmulationEnabled', { enabled: true });
 await send('Page.addScriptToEvaluateOnNewDocument', { source: probe });
+// "Leave site?" when the next image's navigation leaves an edited one: a dialog blocks the page.
+listeners.push((m) => m.method == 'Page.javascriptDialogOpening' && post('Page.handleJavaScriptDialog', { accept: true }));
 
 const mouse = (type, x, y, extra = {}) =>
   post('Input.dispatchMouseEvent', { type, x, y, button: 'none', pointerType: 'mouse', ...extra });
+// A wheel event, unless the last one is still waiting for the page: CDP sends each wheel only after
+// the page handled the one before, so at 8 ms they would queue up behind slow frames, where a real
+// wheel's deltas coalesce in the browser.
+let wheeling = null;
+const wheel = (x, y, extra) => {
+  if (!wheeling) wheeling = mouse('mouseWheel', x, y, extra).finally(() => (wheeling = null));
+};
 const down = (x, y, button = 'left') =>
   send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, buttons: 1, clickCount: 1 });
 const up = (x, y, button = 'left') =>
@@ -157,9 +191,9 @@ const ctrl = (type) =>
   send('Input.dispatchKeyEvent', { type: type == 'keyDown' ? 'rawKeyDown' : type, key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, modifiers: type == 'keyDown' ? 2 : 0 });
 const typeText = async (s) => { for (const ch of s) await key(ch); };
 // Frames until the page has painted nothing new for `quiet` ms.
-async function settle(quiet = 600, max = 15000) {
+async function settle(quiet = 600, max = 15000, keep = false) {
   const t0 = Date.now();
-  await evaluate('__perf.frames = [], __perf.on = true');
+  await evaluate(keep ? '__perf.on = true' : '__perf.frames = [], __perf.on = true');
   for (;;) {
     await sleep(100);
     const last = await evaluate(`(() => { const d = __perf.frames.filter(f => f[2]); return d.length ? performance.now() - d[d.length - 1][0] : 1e9; })()`);
@@ -196,6 +230,33 @@ async function open(dpr, doc) {
   await shot('new-1');
   await key('Enter');
   await settle(1000);
+}
+
+// A menu opened by a click: the frames drawn from the press until the page goes quiet, their
+// longest and their main-thread time (the first open of a session pays for what it builds once).
+const opens = [];
+async function opening(name, x, y) {
+  mouse('mouseMoved', x, y);
+  await sleep(300);
+  await evaluate('__perf.frames = []; __perf.on = true; __perf.t0 = performance.now()');
+  if (opt.profile) {
+    await send('Profiler.enable');
+    await send('Profiler.setSamplingInterval', { interval: 100 });
+    await send('Profiler.start');
+  }
+  await down(x, y);
+  await sleep(100);
+  await up(x, y);
+  await sleep(100);
+  await settle(400, 20000, true);
+  const [t0, frames] = await evaluate('[__perf.t0, __perf.frames]');
+  if (opt.profile) report(`open ${name} ${opens.length + 1}`, (await send('Profiler.stop')).profile);
+  await shot(`open ${name} ${opens.length + 1}`);
+  const drawn = frames.filter((f) => f[2] && f[0] >= t0 - 20);
+  const row = { name: `${name} #${opens.filter((o) => o.name.startsWith(name)).length + 1}`,
+    longest: Math.max(0, ...drawn.map((f) => f[1])), busy: drawn.reduce((a, f) => a + f[1], 0), frames: drawn.length };
+  opens.push(row);
+  console.log(`open ${row.name}: longest frame ${row.longest.toFixed(1)} ms, ${row.busy.toFixed(0)} ms in ${row.frames} drawn frames`);
 }
 
 const C = { x: W * 0.45, y: H * 0.5 };
@@ -284,14 +345,22 @@ const scenarios = [
   ['move pixels', async () => { await key('a', 2); await key('m'); await down(C.x, C.y); },
     (i) => { const k = i % 120 < 60 ? i % 60 : 60 - (i % 60); mouse('mouseMoved', C.x + 3 * k, C.y + 2 * k, { buttons: 1 }); },
     async () => { await up(C.x, C.y); await key('z', 2); await key('d', 2); }],
+  // Down first: a view at its top doesn't scroll up.
   ['wheel pan', async () => mouse('mouseMoved', C.x, C.y),
-    (i) => mouse('mouseWheel', C.x, C.y, { deltaX: 0, deltaY: (i / 20) % 2 < 1 ? -20 : 20 })],
+    (i) => wheel(C.x, C.y, { deltaX: 0, deltaY: (i / 20) % 2 < 1 ? 20 : -20 })],
+  // A notch every 320 ms (each one a gesture of its own, which settles in between).
+  ['pan notch', async () => mouse('mouseMoved', C.x, C.y),
+    (i) => i % 40 == 0 && wheel(C.x, C.y, { deltaX: 0, deltaY: (i / 80) % 2 < 1 ? 60 : -60 })],
+  ['zoom notch', async () => { mouse('mouseMoved', C.x, C.y); await ctrl('keyDown'); },
+    (i) => i % 40 == 0 && wheel(C.x, C.y, { deltaX: 0, deltaY: (i / 80) % 2 < 1 ? -40 : 40, modifiers: 2 }),
+    async () => { await ctrl('keyUp'); await key('b', 2); }],
   // Ctrl held down first: eframe takes a Ctrl wheel without it for a trackpad pinch.
   ['ctrl+wheel zoom', async () => { mouse('mouseMoved', C.x, C.y); await ctrl('keyDown'); },
-    (i) => mouse('mouseWheel', C.x, C.y, { deltaX: 0, deltaY: (i / 10) % 2 < 1 ? -40 : 40, modifiers: 2 }),
+    (i) => wheel(C.x, C.y, { deltaX: 0, deltaY: (i / 10) % 2 < 1 ? -40 : 40, modifiers: 2 }),
     async () => { await ctrl('keyUp'); await key('b', 2); }],
-  ['effects menu', () => click(334, 46),
-    (i) => mouse('mouseMoved', 362, 70 + (i % 40) * 12),
+  // The web has no title bar: the menu bar is the top row (y 46 is the toolbar's Rulers button).
+  ['effects menu', () => opening('effects menu', 334, 16),
+    (i) => mouse('mouseMoved', 362, 40 + (i % 40) * 12),
     async () => key('Escape')],
   ['form drag', async () => { mouse('mouseMoved', opt.formx ?? W - 150, opt.formy ?? 106); await down(+(opt.formx ?? W - 150), +(opt.formy ?? 106)); },
     (i) => { const k = i % 120 < 60 ? i % 60 : 60 - (i % 60); mouse('mouseMoved', +(opt.formx ?? W - 150) - 3 * k, +(opt.formy ?? 106) + 2 * k, { buttons: 1 }); },
@@ -333,6 +402,8 @@ try {
   const f = (x) => (typeof x == 'number' && x === x ? x.toFixed(1) : '-');
   for (const r of rows)
     console.log(`| ${r.name} | ${r.fps.toFixed(0)} | ${f(r.mean)} | ${f(r.p95)} | ${f(r.max)} | ${f(r.gap95)} | ${f(r.lag)} | ${f(r.lag95)} | ${r.kib.toFixed(0)} |`);
+  if (opens.length) console.log('\n| menu opened | longest frame ms | main thread ms, drawn frames | frames |\n|---|---|---|---|');
+  for (const o of opens) console.log(`| ${o.name} | ${f(o.longest)} | ${f(o.busy)} | ${o.frames} |`);
   ws.close();
   chrome.kill();
   await sleep(300);

@@ -5,7 +5,7 @@ members = ["crates/pdn-core", "crates/paintrs", "crates/sam-worker"]
 exclude = ["crates/vendor/heic-rs"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"

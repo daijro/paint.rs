@@ -118,9 +118,11 @@ impl Rig {
                 self.start.elapsed().as_secs_f64()
             }),
             predicted_dt: 1.0 / 60.0,
-            max_texture_side: std::env::var("PERF_MAX_TEXTURE")
-                .ok()
-                .map(|v| v.parse().unwrap()),
+            // egui-wgpu's, natively and on the web (egui's own default, 2048, would split a view
+            // past it into tiles, which the real renderers never do).
+            max_texture_side: Some(
+                std::env::var("PERF_MAX_TEXTURE").map_or(8192, |v| v.parse().unwrap()),
+            ),
             focused: true,
             events,
             ..Default::default()
@@ -270,6 +272,53 @@ impl Rig {
             }
         }
         h.finish()
+    }
+
+    /// The canvas texture's id: the largest of the view's textures (`CanvasView::texture_pixels`,
+    /// so not while its copy is moved).
+    fn canvas_id(&self) -> egui::TextureId {
+        let (textures, _) = self.mirror.as_ref().expect("Rig::mirror");
+        let view = &self.app.shell.canvas_view;
+        let ids = textures
+            .keys()
+            .filter(|&&id| view.texture_pixels(id).is_some());
+        *ids.max_by_key(|id| textures[id].pixels.len())
+            .expect("a canvas texture")
+    }
+
+    /// The canvas as the last frame's meshes draw it from the mirrored texture `id`, by device px:
+    /// its quads in the canvas's clip rect, one texel per device pixel (whole, or a moved copy's
+    /// pieces).
+    fn drawn(&self, id: egui::TextureId) -> std::collections::BTreeMap<[i32; 2], [u8; 4]> {
+        let (textures, prims) = self.mirror.as_ref().expect("Rig::mirror");
+        let img = &textures[&id];
+        let px = |v: f32| (v * self.ppp).round() as i32;
+        let mut clip = None;
+        let mut out = std::collections::BTreeMap::new();
+        for p in prims {
+            let egui::epaint::Primitive::Mesh(m) = &p.primitive else {
+                continue;
+            };
+            // Not the windows' backdrops, which sample it too.
+            if m.texture_id != id || *clip.get_or_insert(p.clip_rect) != p.clip_rect {
+                continue;
+            }
+            for q in m.vertices.as_chunks::<4>().0 {
+                let rect = Rect::from_points(&q.iter().map(|v| v.pos).collect::<Vec<_>>());
+                let uv = Rect::from_points(&q.iter().map(|v| v.uv).collect::<Vec<_>>());
+                let c = rect.intersect(p.clip_rect);
+                let tx = (uv.min.x * img.width() as f32).round() as i32 - px(rect.min.x);
+                let ty = (uv.min.y * img.height() as f32).round() as i32 - px(rect.min.y);
+                for y in px(c.min.y)..px(c.max.y) {
+                    for x in px(c.min.x)..px(c.max.x) {
+                        let i = (y + ty) as usize * img.width() + (x + tx) as usize;
+                        out.insert([x, y], img.pixels[i].to_array());
+                    }
+                }
+            }
+        }
+        assert!(!out.is_empty(), "no canvas quads");
+        out
     }
 
     /// The middle of the window (the canvas, centred in the workspace).
@@ -543,16 +592,17 @@ fn idle_settles() {
 }
 
 /// One scenario's steady frames for a profiler: `PERF_SCENARIO` = idle | hover (the pointer over
-/// the canvas) | tools (over the Tools window's buttons) | brush | zoom | pan | menu |
-/// rect (a Rectangle Select drag) | bigrect (one out to two thirds of the window) | move (a Move
-/// Selected Pixels drag) | movepan (one that wheels the view each frame, as auto-scroll does),
-/// `PERF_DOC` = WxH, `PERF_PPP`, `PERF_IMAGE` =
-/// translucent (the background layer see-through), `PERF_LAYERS` = 2 (a second, active layer over
-/// it), `PERF_MAX_TEXTURE` = the renderer's largest texture side (2048 here; WebGL's and WebGPU's
-/// 8192 keep a large view in one tile), then `PERF_FRAMES` frames (or `PERF_SECS` seconds), 16 ms
-/// of app time apart. Instruction
-/// counts: `valgrind --tool=callgrind --toggle-collect=perf_frames::steady_frames <test binary>
-/// profile_loop --ignored`.
+/// the canvas) | tools (over the Tools window's buttons) | brush | zoom | pan | notch (a wheel
+/// notch every 12 frames) | menu | rect (a Rectangle Select drag) | bigrect (one out to two thirds
+/// of the window) | move (a Move Selected Pixels drag) | movepan, rectpan, mselpan, gridpan (a
+/// Move Selected Pixels, Rectangle Select or Move Selection drag that wheels the view each frame,
+/// as auto-scroll does; gridpan's selection is 864 separate rectangles), `PERF_DOC` = WxH,
+/// `PERF_PPP`, `PERF_IMAGE` = translucent (the background layer see-through), `PERF_LAYERS` = 2 (a
+/// second, active layer over it), `PERF_ZOOM` (1.0: 100 %; else the window's fit),
+/// `PERF_MAX_TEXTURE` = the renderer's largest texture side (8192, egui-wgpu's; before round 5 the
+/// rig used egui's 2048), then `PERF_FRAMES` frames (or `PERF_SECS` seconds), 16 ms of app time
+/// apart. Instruction counts: `valgrind --tool=callgrind --toggle-collect=perf_frames::steady_frames
+/// <test binary> profile_loop --ignored`.
 #[test]
 #[ignore = "profiling loop; run with --ignored"]
 fn profile_loop() {
@@ -587,6 +637,9 @@ fn profile_loop() {
                     (64 + (x + y) % 128) as u8,
                 ]);
             }
+        }
+        if let Ok(zoom) = env("PERF_ZOOM", "").parse() {
+            ws.view.set_zoom_center(zoom);
         }
         if env("PERF_LAYERS", "1") == "2" {
             let mut top = pdn_core::document::layer::Layer::create_layer(w, h, "Top");
@@ -698,6 +751,19 @@ fn steady_frames(r: &mut Rig, scenario: &str, c: Pos2, frames: usize, secs: f64)
                 };
                 vec![Event::PointerMoved(c), wheel(vec2(0.0, d), Modifiers::NONE)]
             }
+            // A wheel notch every 12 frames (192 ms apart: each one starts a gesture, which then
+            // settles).
+            "notch" => {
+                let d = if (i / 96).is_multiple_of(2) {
+                    -20.0
+                } else {
+                    20.0
+                };
+                match i % 12 {
+                    0 => vec![Event::PointerMoved(c), wheel(vec2(0.0, d), Modifiers::NONE)],
+                    _ => vec![],
+                }
+            }
             "menu" => vec![Event::PointerMoved(pos2(
                 362.0,
                 70.0 + (i % 40) as f32 * 12.0,
@@ -706,7 +772,11 @@ fn steady_frames(r: &mut Rig, scenario: &str, c: Pos2, frames: usize, secs: f64)
             // Up and down the Tools window's buttons.
             "tools" => {
                 let k = if i % 80 < 40 { i % 40 } else { 40 - i % 40 } as f32;
-                let x = if (i / 8) % 2 == 0 { 25.0 } else { 55.0 };
+                let x = if (i / 8).is_multiple_of(2) {
+                    25.0
+                } else {
+                    55.0
+                };
                 vec![Event::PointerMoved(pos2(x, 130.0 + 9.0 * k))]
             }
             "rect" | "move" => vec![Event::PointerMoved(c + vec2(3.0, 2.0) * (i % 100) as f32)],
@@ -795,11 +865,14 @@ fn output_fingerprint() {
 /// What the screen shows once each gesture has settled (a pan, a zoom, Move Selected Pixels
 /// drags: translate and rotate), on a virtual clock: equal before and after a change that draws
 /// only the frames inside a gesture differently. The image is a pattern, opaque in its top half
-/// and translucent below (the moved pixels' interior and the checkerboard show).
+/// and translucent below (the moved pixels' interior and the checkerboard show), then opaque
+/// throughout (whole-pixel pans are exact).
 #[test]
 #[ignore = "output fingerprint; run with --ignored --nocapture"]
 fn settled_fingerprint() {
-    for (ppp, doc) in [(1.0, (800, 600)), (1.25, (3000, 2000)), (1.5, (1200, 900))] {
+    for (ppp, doc, opaque) in [false, true].into_iter().flat_map(|o| {
+        [(1.0, (800, 600)), (1.25, (3000, 2000)), (1.5, (1200, 900))].map(|(p, d)| (p, d, o))
+    }) {
         let mut r = Rig::with(ppp, (doc != (800, 600)).then_some(doc), true);
         let ws = r.app.app.active_ws_mut().unwrap();
         let (w, h) = (ws.document.width, ws.document.height);
@@ -813,7 +886,7 @@ fn settled_fingerprint() {
             .enumerate()
         {
             let (x, y) = (i as u32 % w, i as u32 / w);
-            let a = if y < h / 2 {
+            let a = if opaque || y < h / 2 {
                 255
             } else {
                 (40 + (x * 3 + y) % 200) as u8
@@ -871,6 +944,107 @@ fn settled_fingerprint() {
         }
         r.frame(vec![right(false)]);
         settle(&mut r, &mut marks);
-        println!("{doc:?} @{ppp}: {marks:016x?}");
+        let tag = if opaque { " opaque" } else { "" };
+        println!("{doc:?} @{ppp}{tag}: {marks:016x?}");
+    }
+}
+
+/// A whole-pixel pan moves the canvas texture's copy and draws through it the strips it uncovers
+/// and what changes meanwhile (a brush preview moving between pan frames, across the copy's
+/// seams). The canvas as the meshes draw it equals itself once the gesture ends (uploaded whole),
+/// after a deselect or a new selection (review I-1: of a selection the view clips), and a full
+/// render's, in four directions.
+#[test]
+#[ignore = "pixel check; run with --ignored"]
+fn exact_pans_draw_the_canvas() {
+    use pdn_core::selection::{CombineMode, path::GraphicsPath};
+    use pdn_core::util::geom::Rectangle;
+    let path = |rects: &[[f64; 4]]| GraphicsPath {
+        polygons: rects
+            .iter()
+            .flat_map(|&[x, y, w, h]| GraphicsPath::from_rect(&Rectangle::new(x, y, w, h)).polygons)
+            .collect(),
+    };
+    for ppp in [1.0, 1.25, 1.5, 2.0] {
+        for dir in [
+            vec2(1.0, 1.0),
+            vec2(-1.0, 1.0),
+            vec2(1.0, -1.0),
+            vec2(-1.0, -1.0),
+        ] {
+            let mut r = Rig::with(ppp, Some((3000, 2000)), true);
+            // The ants hold their phase.
+            r.app.settings.set("ui.animations", false.into());
+            let ws = r.app.app.active_ws_mut().unwrap();
+            let w = ws.document.width;
+            let layer = ws.document.layers.get_at_mut(0).unwrap();
+            for (i, px) in layer
+                .surface
+                .data_mut()
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .enumerate()
+            {
+                let (x, y) = (i as u32 % w, i as u32 / w);
+                px.copy_from_slice(&[(x * 7) as u8, (y * 5) as u8, (x ^ y) as u8, 255]);
+            }
+            ws.view.set_zoom_center(1.0);
+            // A cross whose arms run past the view on every side.
+            let cross = path(&[[1400.0, 0.0, 200.0, 2000.0], [0.0, 950.0, 3000.0, 100.0]]);
+            ws.selection
+                .set_continuation_path(cross, CombineMode::Replace);
+            ws.selection.commit_continuation();
+            ws.invalidate(None);
+            r.app.app.set_active_tool_from_type(ToolType::PaintBrush);
+            let c = r.centre();
+            r.frame(vec![Event::PointerMoved(c)]);
+            let settle = |r: &mut Rig| (0..20).for_each(|_| _ = r.frame(vec![]));
+            settle(&mut r);
+            let id = r.canvas_id();
+            let pan = |r: &mut Rig, d: Vec2| {
+                for i in 0..8 {
+                    let at = c + vec2(9.0, 5.0) * i as f32;
+                    r.frame(vec![
+                        Event::PointerMoved(at),
+                        wheel(d * 20.0, Modifiers::NONE),
+                    ]);
+                    assert!(!r.app.shell.canvas_view.drafted(), "@{ppp} {d:?}: exact");
+                }
+                assert!(
+                    r.app.shell.canvas_view.texture_pixels(id).is_none(),
+                    "moved copy"
+                );
+                r.drawn(id)
+            };
+            let fresh = |r: &mut Rig| {
+                r.app.shell.canvas_view.refresh_all();
+                r.frame(vec![]);
+                r.drawn(id)
+            };
+            let panned = pan(&mut r, dir);
+            settle(&mut r);
+            assert!(
+                panned == r.drawn(id),
+                "@{ppp} {dir:?}: once the gesture ends"
+            );
+            if dir.x > 0.0 {
+                pdn_core::action::perform(&mut r.app.app, "menu.edit.deselect");
+            } else {
+                let ws = r.app.app.active_ws_mut().unwrap();
+                let small = path(&[[1450.0, 980.0, 60.0, 40.0]]);
+                ws.selection
+                    .set_continuation_path(small, CombineMode::Replace);
+                ws.selection.commit_continuation();
+            }
+            settle(&mut r);
+            let changed = r.drawn(id);
+            assert!(
+                changed == fresh(&mut r),
+                "@{ppp} {dir:?}: the selection changed"
+            );
+            let panned = pan(&mut r, -dir);
+            assert!(panned == fresh(&mut r), "@{ppp} {dir:?}: panned back");
+        }
     }
 }

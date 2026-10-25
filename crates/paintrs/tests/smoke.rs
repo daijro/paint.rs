@@ -2512,11 +2512,11 @@ fn status_bar_zoom_and_units() {
     );
 }
 
-/// Frames slower than the drafts' settle time (a large view on the web, a busy CPU) still pan in
+/// Frames slower than the drafts' settle time (a large view on the web, a busy CPU) still zoom in
 /// drafts: a view change in the frame after another is a gesture however long the frame took, and
-/// the view settles once a frame changes nothing.
+/// the view settles once a frame changes nothing. A pan by whole device px is exact: no draft.
 #[test]
-fn slow_frames_pan_in_drafts() {
+fn slow_frames_zoom_in_drafts() {
     let mut harness = app_harness();
     harness.state_mut().clock = paintrs::Clock::Virtual(0.0);
     let pos = egui::pos2(640.0, 400.0);
@@ -2534,25 +2534,35 @@ fn slow_frames_pan_in_drafts() {
         harness.event_modifiers(wheel(1.0, egui::Modifiers::CTRL), egui::Modifiers::CTRL);
         harness.run();
     }
-    let frame = |h: &mut Harness<'_, paintrs::PaintApp>, dy: f32| {
+    let frame = |h: &mut Harness<'_, paintrs::PaintApp>, dy: f32, m: egui::Modifiers| {
         if dy != 0.0 {
-            h.event(wheel(dy, egui::Modifiers::NONE));
+            h.event(wheel(dy, m));
         }
         h.state_mut().advance_clock(400);
         h.step();
         h.state().shell.canvas_view.drafted()
     };
-    assert!(!frame(&mut harness, 0.0));
+    let none = egui::Modifiers::NONE;
+    assert!(!frame(&mut harness, 0.0, none));
     let y = |h: &Harness<'_, paintrs::PaintApp>| h.state().app.active_ws().unwrap().view.viewport_y;
     let y0 = y(&harness);
+    assert!(!frame(&mut harness, -1.0, none));
+    assert_eq!(y(&harness), y0 + 120.0);
     assert!(
-        !frame(&mut harness, -1.0),
+        !frame(&mut harness, -1.0, none),
+        "a whole-pixel pan is exact"
+    );
+    assert!(!frame(&mut harness, 0.0, none));
+    let ctrl = egui::Modifiers::CTRL;
+    assert!(
+        !frame(&mut harness, 1.0, ctrl),
         "a gesture's first step renders exactly"
     );
-    assert_eq!(y(&harness), y0 + 120.0);
-    assert!(frame(&mut harness, -1.0));
-    assert!(frame(&mut harness, 1.0));
-    assert!(!frame(&mut harness, 0.0), "settled");
+    assert!(frame(&mut harness, 1.0, ctrl));
+    assert!(frame(&mut harness, -1.0, ctrl));
+    // (The view rounds its position in the frame after a zoom: a change too.)
+    frame(&mut harness, 0.0, none);
+    assert!(!frame(&mut harness, 0.0, none), "settled");
 }
 
 /// Task 21 (`ui-drawn-graphics.md §2.10` "Wheel"): a wheel line scrolls 120 device px, Ctrl+wheel

@@ -399,11 +399,14 @@ impl LayerMasks {
             true => outline_runs(polys, |p| local(p).map(|v| v + 0.5), rect.w, rect.h),
             false => vec![],
         };
+        // No outline reaches the rect (a selection larger than the view): its masks would be
+        // blank, and none is filled.
+        let blank = outline && runs.is_empty();
         // u = the UI scale; L = 8u px.
         let len = 8.0 * t.ui_scale.max(f64::MIN_POSITIVE);
         // Mask 0 is the interior, 1 the solid outline, 2 + f dashed frame f.
         let wanted: Vec<usize> = (0..frames + 2)
-            .filter(|&i| if i == 0 { tinting } else { outline })
+            .filter(|&i| if i == 0 { tinting } else { outline && !blank })
             .collect();
         #[cfg(not(target_arch = "wasm32"))]
         let bytes = fill_bytes(polys, &runs, len);
@@ -458,11 +461,15 @@ impl LayerMasks {
             rect,
             interior_runs: mask_runs(&interior, rect),
             interior,
-            solid: if outline { built.next()? } else { vec![] },
+            solid: if outline && !blank {
+                built.next()?
+            } else {
+                vec![]
+            },
             dashed: built.collect(),
-            spans: None,
+            spans: blank.then(Vec::new),
         };
-        if outline {
+        if outline && !blank {
             m.spans = m.find_spans();
         }
         Some(m)
@@ -2030,6 +2037,30 @@ mod tests {
 
     fn rect_poly(l: f64, tp: f64, r: f64, b: f64) -> Vec<[f64; 2]> {
         vec![[l, tp], [r, tp], [r, b], [l, b], [l, tp]]
+    }
+
+    /// A selection whose outline lies outside its mask rect (larger than the view: a select-all
+    /// zoomed in) fills no outline mask, lists no outline px and still tints; one edge in view
+    /// fills them.
+    #[test]
+    fn an_outline_outside_the_rect_fills_no_mask() {
+        let tt = t(1.0, [0.0, 0.0], [100, 80]);
+        let q = SelectionQuality::HighQuality;
+        let masks = |polys: &[Vec<[f64; 2]>]| {
+            let r = mask_rect(polys, &tt, q);
+            LayerMasks::new(polys, &tt, q, 8, r, (true, true), &|| true).expect("live")
+        };
+        let m = masks(&[rect_poly(-50.0, -50.0, 300.0, 300.0)]);
+        assert!(m.solid.is_empty() && m.dashed.is_empty());
+        assert_eq!(m.spans, Some(vec![]));
+        assert_eq!(m.interior.len(), 100 * 80);
+        assert!(m.interior.iter().all(|&v| v == 255));
+        let m = masks(&[rect_poly(40.0, -50.0, 300.0, 300.0)]);
+        assert_eq!(
+            (m.solid.len(), m.dashed.len()),
+            (m.rect.w as usize * m.rect.h as usize, 8)
+        );
+        assert!(m.spans.is_some_and(|s| !s.is_empty()));
     }
 
     /// §2.9 step 1: device bounds inflated by 1 px ∩ viewport; Aliased pixelates first.
