@@ -7,7 +7,7 @@
 //! re-renders.
 
 use super::RendererId;
-use super::display::{DisplayTarget, SPAN_GAP, SpanMask};
+use super::display::{DisplayTarget, SPAN_GAP, SpanMask, span_bands};
 use super::float::{Float, FloatPainter, Levels};
 use super::selection::{self, TintParts};
 use super::view::{self, CanvasStyle, MipChain, ViewTransform};
@@ -211,6 +211,11 @@ fn area(r: IntRect) -> u64 {
 }
 
 impl CanvasPixels {
+    /// The transform a draft shows (up to ½ px off the view's), while one shows.
+    pub fn draft_view(&self) -> Option<ViewTransform> {
+        self.drafted
+    }
+
     /// The upload pixels show a draft (`draft`), not the settled view.
     pub fn drafted(&self) -> bool {
         self.drafted.is_some()
@@ -513,6 +518,14 @@ impl CanvasPixels {
             ),
             _ => None,
         };
+        let moved_parts = |p: &Option<TintParts>| {
+            let p = p.as_ref()?;
+            Some(TintParts {
+                outline: moved(&Some(p.outline.clone()))?,
+                tint: moved(&Some(p.tint.clone()))?,
+                ..*p
+            })
+        };
         let mut old = std::mem::take(&mut self.layers);
         let (mut layers, mut redo) = (vec![], vec![]);
         for (id, k) in keys {
@@ -520,17 +533,31 @@ impl CanvasPixels {
                 .iter()
                 .position(|l| l.0 == id)
                 .map(|i| old.swap_remove(i));
-            let rects = match was {
-                Some((_, wk, rects, _)) if wk == k => moved(&rects),
+            let (rects, parts) = match was {
+                Some((_, wk, rects, parts)) if wk == k => (moved(&rects), moved_parts(&parts)),
                 was => {
-                    let now = ws.surface_box.overlay_paint_rects(ws, &t, id);
-                    let before = was.map_or(Some(vec![]), |w| moved(&w.2));
-                    redo.extend(before?);
-                    redo.extend(now.clone()?);
-                    now
+                    // As `overlay_changes`: a tinting selection's tint where both frames tint
+                    // shows the same pixels (the base under it moved with them).
+                    let parts = ws.surface_box.overlay_tint_parts(ws, &t, id);
+                    let now = match &parts {
+                        Some(p) => Some([&p.outline[..], &p.tint[..]].concat()),
+                        None => ws.surface_box.overlay_paint_rects(ws, &t, id),
+                    };
+                    match (was.as_ref().and_then(|w| moved_parts(&w.3)), &parts) {
+                        (Some(old), Some(new)) if old.highlight == new.highlight => {
+                            redo.extend(old.outline);
+                            redo.extend_from_slice(&new.outline);
+                            redo.extend(selection::xor_runs(&old.tint, &new.tint));
+                        }
+                        _ => {
+                            redo.extend(was.map_or(Some(vec![]), |w| moved(&w.2))?);
+                            redo.extend(now.clone()?);
+                        }
+                    }
+                    (now, parts)
                 }
             };
-            layers.push((id, k, rects, None));
+            layers.push((id, k, rects, parts));
         }
         for (_, _, gone, _) in &old {
             redo.extend(moved(gone)?);
@@ -584,12 +611,27 @@ impl CanvasPixels {
             return Upload::Half;
         };
         let all = IntRect::new(0, 0, w, h);
-        let redo = redo.iter().map(|r| r.intersect(&all));
-        let regions: Vec<IntRect> = strips
-            .into_iter()
-            .chain(redo)
-            .filter(|r| !r.is_empty())
-            .collect();
+        // The overlays' rects (a tinted selection's outline and tint runs: thousands of one-row
+        // rects) as spans, drawn in one pass and uploaded in row bands (a band of more than four
+        // rects as one); past half of the view, the whole view, strips included.
+        let spans = match redo.is_empty() {
+            true => Some(vec![]),
+            false => sparse(redo, all, area(all)),
+        };
+        let (drawn, bands) = match &spans {
+            Some(spans) => {
+                let bands = span_bands(spans, 32);
+                let bands = (bands.chunk_by(|a, b| a.y == b.y)).flat_map(|band| match band.len() {
+                    ..=4 => band.to_vec(),
+                    _ => vec![band.iter().fold(band[0], |u, r| u.union(r))],
+                });
+                (strips, bands.collect())
+            }
+            None => (vec![all], vec![]),
+        };
+        let drawn: Vec<IntRect> = drawn.into_iter().filter(|r| !r.is_empty()).collect();
+        // What goes up (and what the translucent planes draw again).
+        let regions: Vec<IntRect> = drawn.iter().copied().chain(bands).collect();
         // The checkerboard is fixed to the viewport: where the image is translucent it does not
         // move with the pixels.
         if !self.composite_opaque(ws) {
@@ -618,7 +660,16 @@ impl CanvasPixels {
         };
         let target = self.target.insert(target);
         let paint = ws.surface_box.overlay_painter(ws, &t, style.mode);
-        for &r in &regions {
+        // The overlays' changes in one pass (in parallel row bands natively).
+        if let Some(spans) = spans.filter(|s| !s.is_empty()) {
+            let bounds = spans.iter().fold(spans[0], |u, r| u.union(r));
+            target.set_clip(Some(bounds));
+            ws.surface_box
+                .render_base_in(ws, target, &t, &style, Some(&spans));
+            target.set_clip(None);
+            target.write_rgba8_over(all, Some(&spans), out, &conv, &paint);
+        }
+        for &r in &drawn {
             target.set_clip(Some(r));
             ws.surface_box.render_base_in(ws, target, &t, &style, None);
             target.set_clip(None);
@@ -1087,6 +1138,208 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A Move Selection drag while the view scrolls (the wheel, auto-scroll): each pan draft
+    /// redraws the outlines and the runs one frame alone tints, in row bands (a tinted selection's
+    /// outline and tint runs were thousands of one-row regions, each drawn and uploaded on its
+    /// own), and shows what a full render at its transform shows.
+    #[test]
+    fn pan_drafts_redraw_a_moving_tint_in_bands() {
+        for mode in [RenderMode::Hardware, RenderMode::Software] {
+            let mut app = AppWorkspace {
+                view_width: 320.0,
+                view_height: 240.0,
+                ..Default::default()
+            };
+            app.create_blank_document_in_new_workspace(800, 600, 96.0, true);
+            let ws = app.active_ws_mut().unwrap();
+            (ws.view.ppp, ws.view.zoom_to_window, ws.view.zoom) = (1.0, false, 1.0);
+            ws.view.center_view();
+            // Over two thirds of the view, its top left corner inside.
+            let r = Rectangle::new(60.0, 40.0, 700.0, 500.0);
+            ws.selection
+                .set_continuation_path(GraphicsPath::from_rect(&r), CombineMode::Replace);
+            ws.selection.commit_continuation();
+            let mut check = Check::new(mode);
+            check.frame(&mut app, 0);
+            check.canvas.draft = true;
+            app.set_active_tool_from_type(ToolType::MoveSelection);
+            let at = |app: &AppWorkspace, x: f64, y: f64| {
+                let t = app.active_ws().unwrap().view.view_transform();
+                (x * t.scale + t.origin[0], y * t.scale + t.origin[1])
+            };
+            let (x, y) = at(&app, 200.0, 150.0);
+            app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
+            for i in 0..4 {
+                // Far enough that the old and new outlines' bands don't merge over what changed.
+                let (x, y) = at(&app, 240.0 + 40.0 * i as f64, 152.0 + i as f64);
+                app.on_mouse_move(x, y, &input(x, y));
+                let v = &mut app.active_ws_mut().unwrap().view;
+                v.set_view_position(v.viewport_x + 6.0, v.viewport_y + 4.0);
+                app.now_ms += 16.0;
+                let now = app.now_ms;
+                app.on_frame(now);
+                for e in app.drain_events() {
+                    if let AppEvent::DocumentInvalidated { rects } = e {
+                        check.canvas.invalidate(&rects);
+                    }
+                }
+                let ws = app.active_ws().unwrap();
+                assert!(ws.selection_renderer().tinting, "Move Selection tints");
+                let t = ws.view.view_transform();
+                let (style, out) = (check.style, &mut check.out);
+                let up = check
+                    .canvas
+                    .render(ws, &t, &style, 0, || &mut out[..], |p| p);
+                let Upload::Panned { rects, .. } = up else {
+                    panic!("{mode:?} frame {i}: {up:?}");
+                };
+                // Two strips, then at most a few rects per 32-row band; once both frames tint (the
+                // press starts it), under half of the view.
+                let bands = t.viewport[1].div_ceil(32) as usize;
+                assert!(
+                    rects.len() <= 2 + 3 * bands,
+                    "{mode:?} {i}: {}",
+                    rects.len()
+                );
+                let drawn: u64 = rects.iter().map(|r| area(*r)).sum();
+                let view = (t.viewport[0] * t.viewport[1]) as u64;
+                assert!(
+                    i == 0 || drawn * 2 < view,
+                    "{mode:?} {i}: {drawn} of {view} px"
+                );
+                let shown = check.canvas.drafted.expect("a draft");
+                let mut fresh = vec![[0u8; 4]; check.out.len()];
+                CanvasPixels::default().render(ws, &shown, &style, 0, || &mut fresh[..], |p| p);
+                let stale = check.out.iter().zip(&fresh).filter(|(a, b)| a != b).count();
+                assert_eq!(stale, 0, "{mode:?} frame {i}");
+            }
+        }
+    }
+
+    /// The same drag in every frame's pixels: a selection with all four edges in view moving far
+    /// enough that its bands don't merge over what changed (the old outline, inside the new tint,
+    /// must be drawn again), then a jump that redraws the whole view instead; over a patterned
+    /// opaque image at 100 % and 170 % and over a translucent one (the draft's planes); and a grid
+    /// of many small parts (a band of more than four rects goes up as one). Every frame shows what
+    /// a full render at its transform shows, texel by texel in the view's style or (where the
+    /// draft drew them) a draft's.
+    #[test]
+    fn pan_drafts_redraw_tints_exactly() {
+        for (mode, zoom, translucent, grid) in [
+            (RenderMode::Hardware, 1.0, false, false),
+            (RenderMode::Software, 1.0, false, false),
+            (RenderMode::Hardware, 1.7, false, false),
+            (RenderMode::Hardware, 1.0, true, false),
+            (RenderMode::Hardware, 1.0, false, true),
+        ] {
+            let mut app = AppWorkspace {
+                view_width: 640.0,
+                view_height: 480.0,
+                ..Default::default()
+            };
+            app.create_blank_document_in_new_workspace(1200, 900, 96.0, true);
+            let ws = app.active_ws_mut().unwrap();
+            let px = ws.document.layers.get_at_mut(0).unwrap().surface.data_mut();
+            for (i, p) in px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (x, y) = (i % 1200, i / 1200);
+                let a = if translucent { 60 + (x + y) % 150 } else { 255 };
+                *p = [(x * 7) as u8, (y * 5) as u8, (x ^ y) as u8, a as u8];
+            }
+            ws.invalidate(None);
+            (ws.view.ppp, ws.view.zoom_to_window, ws.view.zoom) = (1.0, false, zoom);
+            ws.view.center_view();
+            let t = ws.view.view_transform();
+            // Image px under device px (x, y) now.
+            let img = |x: f64, y: f64| ((x - t.origin[0]) / t.scale, (y - t.origin[1]) / t.scale);
+            let (x0, y0) = img(60.0, 50.0);
+            let path = match grid {
+                // 5 × 5 cells of 20 × 12 px, 110 × 80 px apart.
+                true => GraphicsPath {
+                    polygons: (0..25)
+                        .map(|k| {
+                            let (x, y) = (x0 + 110.0 * (k % 5) as f64, y0 + 80.0 * (k / 5) as f64);
+                            let c = [(x, y), (x + 20.0, y), (x + 20.0, y + 12.0), (x, y + 12.0)];
+                            c.map(|(x, y)| Point::new(x, y)).to_vec()
+                        })
+                        .collect(),
+                },
+                false => {
+                    GraphicsPath::from_rect(&Rectangle::new(x0, y0, 500.0 / zoom, 360.0 / zoom))
+                }
+            };
+            ws.selection
+                .set_continuation_path(path, CombineMode::Replace);
+            ws.selection.commit_continuation();
+            let mut check = Check::new(mode);
+            check.frame(&mut app, 0);
+            check.canvas.draft = true;
+            app.set_active_tool_from_type(ToolType::MoveSelection);
+            let at = |app: &AppWorkspace, x: f64, y: f64| {
+                let t = app.active_ws().unwrap().view.view_transform();
+                (x * t.scale + t.origin[0], y * t.scale + t.origin[1])
+            };
+            let (px, py) = img(200.0, 150.0);
+            let (x, y) = at(&app, px, py);
+            app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
+            let mut whole = 0;
+            for (i, dx) in [40.0, 80.0, 120.0, 520.0].into_iter().enumerate() {
+                let (x, y) = at(&app, px + dx / zoom, py + (1 + i) as f64 / zoom);
+                app.on_mouse_move(x, y, &input(x, y));
+                let v = &mut app.active_ws_mut().unwrap().view;
+                v.set_view_position(v.viewport_x + 6.0, v.viewport_y + 4.0);
+                app.now_ms += 16.0;
+                let now = app.now_ms;
+                app.on_frame(now);
+                for e in app.drain_events() {
+                    if let AppEvent::DocumentInvalidated { rects } = e {
+                        check.canvas.invalidate(&rects);
+                    }
+                }
+                let ws = app.active_ws().unwrap();
+                let t = ws.view.view_transform();
+                let (style, out) = (check.style, &mut check.out);
+                let up = check
+                    .canvas
+                    .render(ws, &t, &style, 0, || &mut out[..], |p| p);
+                let bands = t.viewport[1].div_ceil(32) as usize;
+                match up {
+                    Upload::Panned { rects, .. } => {
+                        // The strips, at most four rects a 32-row band, or the whole view alone.
+                        let all = IntRect::new(0, 0, t.viewport[0], t.viewport[1]);
+                        whole += rects.contains(&all) as usize;
+                        assert!(rects.len() <= 2 + 4 * bands, "{i}: {}", rects.len());
+                        let banded = rects.get(2..).unwrap_or_default();
+                        for band in banded.chunk_by(|a, b| a.y == b.y) {
+                            assert!(band.len() <= 4, "{i}: {band:?}");
+                        }
+                        assert!(!rects.contains(&all) || rects.len() == 1, "{rects:?}");
+                    }
+                    Upload::All => assert!(translucent, "{up:?}"),
+                    up => panic!("{mode:?} {zoom} frame {i}: {up:?}"),
+                }
+                let shown = check.canvas.drafted.unwrap_or(t);
+                let fresh = |style: CanvasStyle| {
+                    let mut px = vec![[0u8; 4]; check.out.len()];
+                    CanvasPixels::default().render(ws, &shown, &style, 0, || &mut px[..], |p| p);
+                    px
+                };
+                let draft = CanvasStyle {
+                    draft: true,
+                    ..style
+                };
+                let (exact, drafted) = (fresh(style), fresh(draft));
+                let stale = (0..exact.len())
+                    .filter(|&k| check.out[k] != exact[k] && check.out[k] != drafted[k])
+                    .count();
+                assert_eq!(stale, 0, "{mode:?} {zoom} {translucent} frame {i}");
+            }
+            assert!(
+                translucent || grid || whole > 0,
+                "{mode:?} {zoom}: never the whole view"
+            );
         }
     }
 

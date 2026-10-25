@@ -10,8 +10,11 @@
 //! active layer, selection bounds and the gesture under way go to the others ([`presence`]), who see them on the
 //! canvas, as dots on its tab and on the Layers row of their layer ([`peers`]).
 //!
-//! What another person sends is checked before anything is decoded or allocated, and bounded: at most [`MAX_IMAGES`]
-//! images of [`MAX_LAYERS`] layers and [`MAX_PIXELS`] pixel bytes in all. Reading it never panics, whatever it holds.
+//! What another person sends is counted before it is parsed: at most [`MAX_BYTES`] bytes, [`MAX_TILES`] tiles,
+//! [`MAX_VALUES`] JSON values and [`MAX_NESTS`] objects and as many arrays. Parsing then allocates a fixed size for
+//! each of those and a string's length for each string. Once parsed it is checked before any image is decoded: at most
+//! [`MAX_IMAGES`] images of [`MAX_LAYERS`] layers and [`MAX_PIXELS`] pixel bytes in all. A tile holds only the PNG
+//! chunks this build writes and decodes within a fixed allocation. Reading it never panics, whatever it holds.
 //! Taking a set in reserves its memory fallibly first, so one that doesn't fit is an error that changes nothing. This
 //! person's images pass the same checks to join the set ([`check_image`]): one that doesn't stays open here alone,
 //! never proposed, replaced or closed by the session, and says why on its canvas ([`Why`]). Nothing the session holds
@@ -23,8 +26,9 @@
 //! shell doesn't say whose a change is, so this person's own session Undo or Redo of it, or a draft of theirs opened
 //! again, counts as someone else's. Undo and Redo of a shared image go to the session, whose Undo is the set's: it may
 //! take back an edit in another tab, which then shows. One that takes an image this person opened out of the set leaves
-//! it open here alone, with what they did in it. While the shell's session isn't live (catching up, paused,
-//! read-only), they go to it and do nothing, as the shell's contract has them.
+//! it open here alone, with what they did in it. One that takes back their rejoin of an image that left the set leaves
+//! their tab as it is, alone ([`Why::Undone`]), until it changes. While the shell's session isn't live (catching up,
+//! paused, read-only), they go to it and do nothing, as the shell's contract has them.
 //!
 //! Checkpoint layout (integers little-endian):
 //! - `paintrs-live 1\n`;
@@ -56,7 +60,7 @@ use pdn_core::document::workspace::DocumentWorkspace;
 use pdn_core::history::HistoryMemento;
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// The shell's document limit (`shell/document-delta.js`).
 pub const MAX_BYTES: usize = 128 << 20;
@@ -67,6 +71,12 @@ const MAX_SIDE: u32 = pdn_core::io::ops::MAX_SIDE;
 /// The most tiles a checkpoint holds, counted before they are read: a tile is at least one pixel, an edge tile at least
 /// a 64th of its layer's width or height, so [`MAX_PIXELS`] of layers come to about 2 million.
 const MAX_TILES: usize = 1 << 22;
+/// The most JSON values a checkpoint holds, counted before it is parsed: a set at its limits has about 64 images ×
+/// 1,000 layers × 30 values.
+const MAX_VALUES: usize = 4 << 20;
+/// The most objects, and the most arrays, a checkpoint holds, counted before it is parsed. A set at its limits has at
+/// most 3 of each per layer (64,000 layers), 1 per image and 1 more. An object costs hundreds of bytes once parsed.
+const MAX_NESTS: usize = 256 << 10;
 /// The most images in a set and layers in an image: every peer installs them all, a tab and a Layers row each.
 const MAX_IMAGES: usize = 64;
 const MAX_LAYERS: usize = 1000;
@@ -84,6 +94,13 @@ const RESOLUTIONS: std::ops::RangeInclusive<f64> = 0.01..=100_000.0;
 /// How soon after this person's Undo or Redo goes to the session the change it brings is taken in, at most: then that
 /// change shows its image.
 const FOCUS_MS: f64 = 2000.0;
+/// How long after this person's Undo or Redo goes to the session the next change taken in may be it, at most: only
+/// that change can take back their rejoin of an image ([`Shared::back`]).
+const UNDO_MS: f64 = 10_000.0;
+/// How soon an image refused for its bytes is encoded again, at its first change since, at the earliest: after the
+/// try, and twice as long after each refusal since, up to [`MAX_RETRY_MS`].
+const RETRY_MS: f64 = 5000.0;
+const MAX_RETRY_MS: f64 = 60_000.0;
 /// The history entry an image starts from after a change made elsewhere.
 const HISTORY: (&str, &str) = (
     "liveSession.historyMementoName",
@@ -190,13 +207,50 @@ fn decode(bytes: &[u8], tw: u32, th: u32) -> Result<Vec<u8>, String> {
     if (size(16), size(20)) != (Some(tw), Some(th)) {
         return Err(invalid("tile size"));
     }
-    let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-        .map_err(invalid)?
-        .into_rgba8();
+    if !png_chunks_ok(bytes) {
+        return Err(invalid("tile chunks"));
+    }
+    // A tile decodes to at most 64×64×8 bytes (16 bits a channel). The decoder may use twice that.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(u64::from(TILE * TILE) * 8 * 2);
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
+    reader.limits(limits);
+    let img = reader.decode().map_err(invalid)?.into_rgba8();
     if img.dimensions() != (tw, th) {
         return Err(invalid("tile size"));
     }
     Ok(img.into_raw())
+}
+
+/// Whether a PNG holds only the chunks this build writes: IHDR first, then IDAT (one, or a few from another encoder),
+/// then IEND last. Anything else (an ICC profile, text, …) could make the decoder inflate far more than a tile's
+/// pixels, and many small IDATs decode hundreds of times slower.
+fn png_chunks_ok(bytes: &[u8]) -> bool {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let Some(mut rest) = bytes.strip_prefix(SIGNATURE) else {
+        return false;
+    };
+    let (mut last, mut idats) = (None, 0);
+    while let [a, b, c, d, t0, t1, t2, t3, tail @ ..] = rest {
+        let n = u32::from_be_bytes([*a, *b, *c, *d]) as usize;
+        let kind = [*t0, *t1, *t2, *t3];
+        // Its data and its CRC.
+        let Some(after) = tail.get(n.saturating_add(4)..) else {
+            return false;
+        };
+        match (&kind, last.as_ref()) {
+            (b"IHDR", None) | (b"IDAT", Some(b"IHDR" | b"IDAT")) | (b"IEND", Some(b"IDAT")) => {}
+            _ => return false,
+        }
+        idats += usize::from(&kind == b"IDAT");
+        if idats > 4 {
+            return false;
+        }
+        last = Some(kind);
+        rest = after;
+    }
+    rest.is_empty() && last == Some(*b"IEND")
 }
 
 /// The three-way merge of one tile's pixels, both sides having changed it: each pixel takes the side that changed it;
@@ -501,6 +555,29 @@ fn check_image(image: &Value, tiles: impl Fn(u64) -> Option<usize>) -> Result<u6
     Ok(pixels(w, h, all.len()))
 }
 
+/// Whether JSON (in `pieces`) holds at most [`MAX_VALUES`] values and [`MAX_NESTS`] objects and arrays each, counted
+/// before it is parsed: each `[`, `{` and `,` outside strings starts a value. For a few input bytes, a parsed value
+/// costs up to about 180 bytes (an object's member) and an object hundreds. A string costs its length.
+fn few_values(pieces: &[&[u8]]) -> bool {
+    let (mut values, mut objects, mut arrays) = (0usize, 0usize, 0usize);
+    let (mut string, mut escaped) = (false, false);
+    for &b in pieces.iter().flat_map(|p| p.iter()) {
+        match (string, b) {
+            (true, _) if escaped => escaped = false,
+            (true, b'\\') => escaped = true,
+            (true, b'"') | (false, b'"') => string = !string,
+            (false, b'{') => objects += 1,
+            (false, b'[') => arrays += 1,
+            (false, b',') => values += 1,
+            _ => continue,
+        }
+        if values + objects + arrays > MAX_VALUES || objects.max(arrays) > MAX_NESTS {
+            return false;
+        }
+    }
+    true
+}
+
 /// A canonical checkpoint taken apart; anything else is refused. Tiles are checked as they decode.
 fn read(bytes: &[u8]) -> Result<Parts, String> {
     if bytes.len() > MAX_BYTES {
@@ -532,6 +609,9 @@ fn read(bytes: &[u8]) -> Result<Parts, String> {
     }
     if r.at != bytes.len() {
         return Err(invalid("trailing bytes"));
+    }
+    if !few_values(&json) {
+        return Err(invalid("too many values"));
     }
     let doc = template::parse(&json.concat())?;
     if pieces(&doc)
@@ -744,12 +824,21 @@ enum Why {
     Full,
     /// It was shared, and a change here took it past a limit: the set keeps its version from before.
     Left,
+    /// It was shared, left as [`Why::Left`] and rejoined, and this person's Undo took back the rejoin: it rejoins as
+    /// [`Why::Left`] does, at its next change.
+    Undone,
     /// It was shared, and this person's Undo took it out of the set (it was what they added last): it stays open here
     /// with what they did in it.
     Removed,
 }
 
 impl Why {
+    /// Whether it left the set's image of its id ([`Why::Left`], [`Why::Undone`]): it rejoins only while no one else
+    /// has changed that since.
+    fn left(self) -> bool {
+        matches!(self, Why::Left | Why::Undone)
+    }
+
     /// What the canvas says of it (`peers`).
     fn text(self) -> String {
         pdn_core::i18n::t(match self {
@@ -758,6 +847,7 @@ impl Why {
             Why::Format => "liveSession.notShared.format",
             Why::Full => "liveSession.notShared.full",
             Why::Left => "liveSession.notShared.left",
+            Why::Undone => "liveSession.notShared.undone",
             Why::Removed => "liveSession.notShared.removed",
         })
     }
@@ -887,6 +977,60 @@ fn entry_of(parts: &Parts, uid: u64, image: &Value) -> Entry {
         pixels: pixels(w, h, layers(image).count()),
         bytes,
     }
+}
+
+/// Whether `now` takes back the change from `was` to `made`: it has `was`'s version of every field, layer and tile that
+/// change changed. Others' changes elsewhere may be in it. A change that changed nothing is taken back by nothing.
+fn undoes(was: &Entry, made: &Entry, now: &Entry) -> bool {
+    fn by_id(e: &Entry) -> HashMap<u64, &Value> {
+        layers(&e.doc).collect()
+    }
+    fn ids(e: &Entry) -> Vec<u64> {
+        layers(&e.doc).map(|(lid, _)| lid).collect()
+    }
+    let changed = std::cell::Cell::new(false);
+    // Unchanged by the change, or back to `was`.
+    let back = |w, m, n| {
+        w == m || {
+            changed.set(true);
+            n == w
+        }
+    };
+    let field = |e: &'_ Entry, k: &str| e.doc.get(k).filter(|_| k != "layers").cloned();
+    let keys: HashSet<&String> = (was.doc.as_object().into_iter().chain(made.doc.as_object()))
+        .flat_map(|m| m.keys())
+        .collect();
+    let (w, m, n) = (by_id(was), by_id(made), by_id(now));
+    keys.iter()
+        .all(|k| back(field(was, k), field(made, k), field(now, k)))
+        && back(
+            Some(ids(was).into()),
+            Some(ids(made).into()),
+            Some(ids(now).into()),
+        )
+        && w.keys().chain(m.keys()).all(|id| {
+            let tiles = (was.tiles.get(id), made.tiles.get(id), now.tiles.get(id));
+            back(
+                w.get(id).copied().cloned(),
+                m.get(id).copied().cloned(),
+                n.get(id).copied().cloned(),
+            ) && match tiles {
+                // Tile by tile while the layer keeps its size.
+                (Some(tw), Some(tm), tn) if tw.len() == tm.len() => (0..tw.len()).all(|i| {
+                    tw[i] == tm[i] || {
+                        changed.set(true);
+                        tn.is_some_and(|tn| tn.len() == tw.len() && tn[i] == tw[i])
+                    }
+                }),
+                (tw, tm, tn) => {
+                    tw == tm || {
+                        changed.set(true);
+                        tn == tw
+                    }
+                }
+            }
+        })
+        && changed.get()
 }
 
 /// What taking in an image does to a layer's pixels: keeps them, patches decoded tiles in (their pixels one after
@@ -1083,13 +1227,17 @@ struct Shared {
     /// Its id in the set, the same for everyone.
     uid: u64,
     /// The workspace showing it here (`DocumentWorkspace::id`); none once this person closed its tab (the others keep
-    /// it) or a change here took it past a limit ([`Why::Left`]).
+    /// it), a change here took it past a limit ([`Why::Left`]) or their Undo took back its rejoin ([`Why::Undone`]).
     local: Option<u64>,
     /// What its entry was made from.
     seen: Option<Sig>,
     entry: Rc<Entry>,
     /// Opened here, and no one else's change to it has come in: closing its tab takes it out of the set.
     mine: bool,
+    /// This person's rejoin ([`Why::Left`]), as the version it replaced and the one it made. The first change taken in
+    /// after their Undo or Redo, when it takes the rejoin back ([`undoes`]), is their Undo of it: their tab then stays
+    /// as it is, alone ([`Why::Undone`]), until it changes. Their Redo of that is recognised the same way.
+    back: Option<(Rc<Entry>, Rc<Entry>)>,
 }
 
 /// An image open here that the set doesn't have, and why ([`Why`]). The session never proposes, replaces or closes
@@ -1100,11 +1248,11 @@ struct Alone {
     uid: u64,
     seen: Option<Sig>,
     why: Why,
-    /// For [`Why::Left`]: the set's version of it when it left.
-    left: Option<Rc<Entry>>,
-    /// A try refused for its bytes (its own, or with the set's): its pixel bytes and the bytes of the set's other images
-    /// then. It isn't encoded again until one of those is smaller.
-    refused: Option<(u64, usize)>,
+    /// For [`Why::Left`] and [`Why::Undone`]: the set's version of it when it left.
+    left: Option<Weak<Entry>>,
+    /// A try refused for its bytes (its own, or with the set's): when it ended (app ms) and how long it isn't encoded
+    /// again for ([`RETRY_MS`]).
+    refused: Option<(f64, f64)>,
 }
 
 #[derive(Default)]
@@ -1118,6 +1266,8 @@ struct Live {
     /// When (app ms) this person's Undo or Redo went to the session: a change taken in within [`FOCUS_MS`] shows its
     /// image, unless this person changed an image since.
     focus: Option<f64>,
+    /// The same, until the next change taken in ([`UNDO_MS`]): local changes don't clear it.
+    undoing: Option<f64>,
     /// The set's checkpoint as last written, and as last reported changed.
     encoded: Option<Checkpoint>,
     reported: Option<Checkpoint>,
@@ -1198,26 +1348,17 @@ fn max_bytes() -> usize {
     MAX_BYTES
 }
 
-/// The checkpoint bytes of the set's images but `uid`.
-fn others_bytes(live: &Live, uid: u64) -> usize {
-    (live.docs.iter())
-        .filter(|s| s.uid != uid)
-        .map(|s| s.entry.bytes)
-        .sum()
-}
-
-/// A try to share `ws` as the set's image `uid`, refused why, and for a refusal over bytes (found only once encoded)
-/// its pixel bytes and the set's other bytes then.
-type Tried = Result<Entry, (Why, Option<(u64, usize)>)>;
+/// A try to share `ws` as the set's image `uid`, refused why, and for its bytes (found only once encoded) how long the
+/// encoding took, in ms.
+type Tried = Result<Entry, (Why, Option<f64>)>;
 
 /// `ws` as the set's image `uid` if it fits: an image's own limits first (layers, pixels: no encoding), then the set's
-/// counts and pixels, then its encoded bytes. A try that fails leaves nothing in the cache for an image the set doesn't
-/// have.
+/// counts and pixels, then its encoded bytes. A try that fails leaves nothing of the image in the cache.
 fn try_entry(live: &mut Live, ws: &DocumentWorkspace, uid: u64) -> Tried {
     let d = &ws.document;
     let n = d.layers.size();
     let px = pixels(d.width, d.height, n);
-    let mut encoded = false;
+    let mut encoded = None;
     let why = 'refused: {
         if n > MAX_LAYERS {
             break 'refused Why::Layers;
@@ -1228,7 +1369,7 @@ fn try_entry(live: &mut Live, ws: &DocumentWorkspace, uid: u64) -> Tried {
         if let Err(why) = fits(live, uid, px, 0) {
             break 'refused why;
         }
-        encoded = true;
+        encoded = Some(web_time::Instant::now());
         let e = match entry(&mut live.cache, ws, uid) {
             Ok(e) => e,
             Err(why) => break 'refused why,
@@ -1238,12 +1379,9 @@ fn try_entry(live: &mut Live, ws: &DocumentWorkspace, uid: u64) -> Tried {
             Err(why) => why,
         }
     };
-    if !live.docs.iter().any(|s| s.uid == uid) {
-        live.cache.retain(|k, _| k.0 != uid);
-    }
-    let refused =
-        (encoded && matches!(why, Why::Bytes | Why::Full)).then(|| (px, others_bytes(live, uid)));
-    Err((why, refused))
+    live.cache.retain(|k, _| k.0 != uid);
+    let took = encoded.filter(|_| matches!(why, Why::Bytes | Why::Full));
+    Err((why, took.map(|t| t.elapsed().as_secs_f64() * 1000.0)))
 }
 
 /// The set's checkpoint: the images open here that fit it (one opened since joins it) and those closed here as last
@@ -1264,7 +1402,7 @@ fn shared(live: &mut Live, app: &AppWorkspace) -> Checkpoint {
     // An image alone closed here goes. One that left the set takes the set's version with it when that is still this
     // person's (no one else changed it).
     let gone: Vec<u64> = (live.alone.iter())
-        .filter(|a| !open(a.local) && a.why == Why::Left)
+        .filter(|a| !open(a.local) && a.why.left())
         .map(|a| a.uid)
         .collect();
     live.alone.retain(|a| open(a.local));
@@ -1286,11 +1424,12 @@ fn shared(live: &mut Live, app: &AppWorkspace) -> Checkpoint {
                     (s.entry, s.seen) = (Rc::new(e), Some(sig(ws)));
                     changed = true;
                 }
-                Err((_, refused)) => {
+                Err((_, took)) => {
                     let s = &mut live.docs[i];
                     s.local = None;
-                    let left = Some(s.entry.clone());
-                    let (seen, why) = (Some(sig(ws)), Why::Left);
+                    let left = Some(Rc::downgrade(&s.entry));
+                    let (seen, why, refused) =
+                        (Some(sig(ws)), Why::Left, retry(live, app, took, None));
                     let local = ws.id;
                     live.alone.push(Alone {
                         local,
@@ -1306,17 +1445,16 @@ fn shared(live: &mut Live, app: &AppWorkspace) -> Checkpoint {
         }
         let a = live.alone.iter().position(|a| a.local == ws.id);
         if let Some(x) = a.map(|a| &live.alone[a]) {
-            let d = &ws.document;
+            // One refused for its bytes is tried again only after a while, at its first change since.
+            if x.refused.is_some_and(|(at, wait)| app.now_ms - at < wait) {
+                continue;
+            }
             let waits = unchanged(x.seen.as_ref(), ws)
-                // One that left rejoins only while the set's version is the one it left.
-                || (x.why == Why::Left
-                    && !(live.docs.iter()).any(|s| {
-                        s.uid == x.uid && x.left.as_ref().is_some_and(|l| Rc::ptr_eq(l, &s.entry))
-                    }))
-                // One refused for its bytes isn't encoded again until it or the rest of the set is smaller.
-                || x.refused.is_some_and(|(px, rest)| {
-                    pixels(d.width, d.height, d.layers.size()) >= px && others_bytes(live, x.uid) >= rest
-                });
+                // One that left rejoins only while the set's version is the one it left (or the set has none).
+                || (x.why.left()
+                    && (live.docs.iter().find(|s| s.uid == x.uid)).is_some_and(|s| {
+                        x.left.as_ref().is_none_or(|l| l.as_ptr() != Rc::as_ptr(&s.entry))
+                    }));
             if waits {
                 live.alone[a.unwrap_or_default()].seen = Some(sig(ws));
                 continue;
@@ -1332,26 +1470,32 @@ fn shared(live: &mut Live, app: &AppWorkspace) -> Checkpoint {
                 let (seen, entry) = (Some(sig(ws)), Rc::new(e));
                 match live.docs.iter_mut().find(|s| s.uid == uid) {
                     // Back from leaving: its content goes in as a change of the set's version (no one else's since).
-                    Some(s) => (s.local, s.seen, s.entry) = (Some(ws.id), seen, entry),
+                    Some(s) => {
+                        (s.local, s.seen) = (Some(ws.id), seen);
+                        let made = entry.clone();
+                        s.back = Some((std::mem::replace(&mut s.entry, entry), made));
+                    }
                     None => live.docs.push(Shared {
                         uid,
                         local: Some(ws.id),
                         seen,
                         entry,
                         mine: true,
+                        back: None,
                     }),
                 }
                 changed = true;
             }
-            (Err((why, refused)), Some(a)) => {
+            (Err((why, took)), Some(a)) => {
+                let refused = retry(live, app, took, live.alone[a].refused);
                 let x = &mut live.alone[a];
                 (x.seen, x.refused) = (Some(sig(ws)), refused);
-                if x.why != Why::Left {
-                    x.why = why;
-                }
+                // One that left and still doesn't fit is past a limit again.
+                x.why = if x.why.left() { Why::Left } else { why };
             }
-            (Err((why, refused)), None) => {
-                let (local, seen, left) = (ws.id, Some(sig(ws)), None);
+            (Err((why, took)), None) => {
+                let (local, seen, left, refused) =
+                    (ws.id, Some(sig(ws)), None, retry(live, app, took, None));
                 live.alone.push(Alone {
                     local,
                     uid,
@@ -1369,6 +1513,22 @@ fn shared(live: &mut Live, app: &AppWorkspace) -> Checkpoint {
         prune(live);
     }
     live.encoded.clone().unwrap_or_else(|| Err("busy".into()))
+}
+
+/// For a try refused for its bytes after `took` ms of encoding: when it ended and how long it waits (twice the `last`
+/// wait), and a frame once that is over.
+fn retry(
+    live: &Live,
+    app: &AppWorkspace,
+    took: Option<f64>,
+    last: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let took = took?;
+    let wait = last.map_or(RETRY_MS, |(_, w)| (2.0 * w).min(MAX_RETRY_MS));
+    if let Some(ctx) = &live.ctx {
+        ctx.request_repaint_after(std::time::Duration::from_millis((took + wait) as u64));
+    }
+    Some((app.now_ms + took, wait))
 }
 
 /// Only the layers of the set's images stay cached: a layer deleted, an image closed or replaced, leaves nothing behind.
@@ -1409,7 +1569,7 @@ pub fn disconnect() {
     let waiting = LIVE.with_borrow_mut(|live| {
         live.connected = false;
         (live.docs, live.alone, live.encoded, live.reported) = (Vec::new(), Vec::new(), None, None);
-        (live.cache, live.focus) = (HashMap::new(), None);
+        (live.cache, live.focus, live.undoing) = (HashMap::new(), None, None);
         (live.presence, live.others, live.selection, live.held) =
             (Value::Null, Vec::new(), None, None);
         #[cfg(target_arch = "wasm32")]
@@ -1470,7 +1630,7 @@ fn undo(app: &AppWorkspace, take: Option<bool>) -> bool {
         // The session's Undo is the set's, not the image's: it may take back an edit in another tab. The change it
         // brings is the next one taken in, soon after, which then shows its image.
         if taken && take.is_some() {
-            live.focus = Some(app.now_ms);
+            (live.focus, live.undoing) = (Some(app.now_ms), Some(app.now_ms));
         }
         #[cfg(test)]
         if let (true, Some(redo)) = (taken, take) {
@@ -1809,11 +1969,18 @@ fn open(
 /// Makes the session's images those of `set`: each open one takes its new content (keeping this person's views), one
 /// someone else opened opens as a tab in the background, one closed here stays closed, and one no longer in the set
 /// (another whole set adopted: `whole`) closes; one this person opened that their own Undo takes out of the set stays
-/// open here alone, with what they did in it ([`Why::Removed`]). Images the set doesn't have ([`Alone`]) are left as
-/// they are. When the image shown closes, the set's first one shows; after this person's Undo or Redo went to the
-/// session, the image it changed shows.
+/// open here alone, with what they did in it ([`Why::Removed`]), and their Redo of that installs into it again. Their
+/// Undo of a rejoin keeps their tab as it is, alone ([`Shared::back`]). Images the set doesn't have ([`Alone`]) are
+/// left as they are. When the image shown closes, the set's first one shows; after this person's Undo or Redo went to
+/// the session, the image it changed shows.
 fn install(app: &mut AppWorkspace, set: &Parts, whole: bool) -> Result<(), String> {
     let shown = app.active_ws().map(|ws| ws.id);
+    // Only the first change taken in after this person's Undo or Redo may be it: anyone else's change, however it
+    // looks, loads as theirs.
+    let own = !whole
+        && LIVE
+            .with_borrow_mut(|live| live.undoing.take())
+            .is_some_and(|at| app.now_ms - at <= UNDO_MS);
     raise_ids(order(&set.doc).iter().map(|k| k.1).max().unwrap_or(0));
     // Every image that changed is decoded and its memory reserved first: one that doesn't load changes nothing.
     let mut changed = Vec::new();
@@ -1821,16 +1988,30 @@ fn install(app: &mut AppWorkspace, set: &Parts, whole: bool) -> Result<(), Strin
     let mut surfaces = 0u64;
     for (uid, image) in documents(&set.doc) {
         let entry = entry_of(set, uid, image);
-        let known = LIVE.with_borrow(|live| {
-            let s = live.docs.iter().find(|s| s.uid == uid)?;
-            let same = s.entry.doc == entry.doc && s.entry.tiles == entry.tiles;
-            Some((s.local, same))
-        });
-        let load = match known {
-            Some((_, true)) => continue,
-            Some((None, false)) => None,
-            Some((Some(id), false)) => Some(Some(id)),
-            None => Some(None),
+        let same = |e: &Entry| e.doc == entry.doc && e.tiles == entry.tiles;
+        // Where it loads: into a tab, into a new one, nowhere (closed here, or `back`).
+        let Some((load, back)) = LIVE.with_borrow(|live| {
+            Some(match live.docs.iter().find(|s| s.uid == uid) {
+                Some(s) if same(&s.entry) => return None,
+                Some(s)
+                    if own
+                        && s.back
+                            .as_ref()
+                            .is_some_and(|(was, made)| undoes(was, made, &entry)) =>
+                {
+                    (None, true)
+                }
+                Some(s) => (s.local.map(Some), false),
+                // An image alone with its id: one this person's Undo took out loads into its tab again. One changed
+                // since stays as it is (it rejoins at its next change).
+                None => match live.alone.iter().find(|a| a.uid == uid) {
+                    Some(a) if a.why == Why::Removed => (Some(Some(a.local)), false),
+                    Some(_) => (None, false),
+                    None => (Some(None), false),
+                },
+            })
+        }) else {
+            continue;
         };
         let plan = match load {
             Some(target) => {
@@ -1846,7 +2027,7 @@ fn install(app: &mut AppWorkspace, set: &Parts, whole: bool) -> Result<(), Strin
             }
             None => None,
         };
-        changed.push((uid, Rc::new(entry), plan));
+        changed.push((uid, Rc::new(entry), plan, back));
     }
     if surfaces > 0 {
         let extra = usize::try_from(surfaces)
@@ -1876,7 +2057,7 @@ fn install(app: &mut AppWorkspace, set: &Parts, whole: bool) -> Result<(), Strin
         gone
     });
     let mut first_changed = None;
-    for (uid, entry, plan) in changed {
+    for (uid, entry, plan, back) in changed {
         let mut local = None;
         if let Some((target, plan)) = plan {
             let name = entry.doc["name"].as_str().map(str::to_owned);
@@ -1899,17 +2080,46 @@ fn install(app: &mut AppWorkspace, set: &Parts, whole: bool) -> Result<(), Strin
             .map(sig);
         // Someone else changed it (or opened it): closing it here no longer takes it out of the set.
         LIVE.with_borrow_mut(|live| match live.docs.iter_mut().find(|s| s.uid == uid) {
+            // This person's Undo of their rejoin (or Redo of that): their tab keeps what they did, alone, and rejoins
+            // at its next change while the set's version is this one.
+            Some(s) if back => {
+                let left = Some(Rc::downgrade(&entry));
+                match s.local.take() {
+                    Some(local) => live.alone.push(Alone {
+                        local,
+                        uid,
+                        seen: s.seen.clone(),
+                        why: Why::Undone,
+                        left,
+                        refused: None,
+                    }),
+                    None => (live.alone.iter_mut())
+                        .filter(|a| a.uid == uid && a.why.left())
+                        .for_each(|a| a.left = left.clone()),
+                }
+                let made = entry.clone();
+                s.back = Some((std::mem::replace(&mut s.entry, entry), made));
+            }
             Some(s) => {
                 s.local = local.or(s.local);
                 (s.seen, s.entry, s.mine) = (seen.or(s.seen.take()), entry, false);
             }
-            None => live.docs.push(Shared {
-                uid,
-                local,
-                seen,
-                entry,
-                mine: false,
-            }),
+            None => {
+                // The tab loaded into is shared again. Any other alone with its id is now a change of this version.
+                live.alone
+                    .retain(|a| a.uid != uid || Some(a.local) != local);
+                for a in live.alone.iter_mut().filter(|a| a.uid == uid) {
+                    (a.why, a.left) = (Why::Left, Some(Rc::downgrade(&entry)));
+                }
+                live.docs.push(Shared {
+                    uid,
+                    local,
+                    seen,
+                    entry,
+                    mine: false,
+                    back: None,
+                });
+            }
         });
     }
     for id in gone {

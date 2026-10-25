@@ -352,6 +352,74 @@ struct Scene {
     shapes: Vec<([i32; 4], Shape)>,
     /// Per image quad: its texture, the texture's version and the texels the quad reads.
     textures: Vec<(TextureId, u64, IntRect)>,
+    /// The live textures (`set_live`) when it was collected.
+    live: Vec<TextureId>,
+}
+
+/// A scene's shape as its key sees it: a run of image quads of one live texture, which replay as
+/// unknown, by the device rect they tile (a pan moves where the canvas's wrapped quads split every
+/// frame); any other shape as it is.
+#[derive(PartialEq)]
+enum Keyed<'a> {
+    Shape(&'a [i32; 4], &'a Shape),
+    Live(TextureId, [i32; 4]),
+}
+
+fn keyed<'a>(shapes: &'a [([i32; 4], Shape)], live: &[TextureId], ppp: f32) -> Vec<Keyed<'a>> {
+    let live_quad = |s: &Shape| match s {
+        Shape::Mesh(m) if live.contains(&m.texture_id) => Some(m.texture_id),
+        _ => None,
+    };
+    let mut out = vec![];
+    let mut i = 0;
+    while i < shapes.len() {
+        let Some(id) = live_quad(&shapes[i].1) else {
+            out.push(Keyed::Shape(&shapes[i].0, &shapes[i].1));
+            i += 1;
+            continue;
+        };
+        // The device px each one replays as unknown (`replay`'s `unknown`).
+        let run: Vec<[i32; 4]> = shapes[i..]
+            .iter()
+            .map_while(|(clip, s)| {
+                let b = match s {
+                    Shape::Mesh(m) if m.texture_id == id => m.calc_bounds(),
+                    _ => return None,
+                };
+                let d = [
+                    (b.min.x * ppp).floor() as i32,
+                    (b.min.y * ppp).floor() as i32,
+                    (b.max.x * ppp).ceil() as i32,
+                    (b.max.y * ppp).ceil() as i32,
+                ];
+                Some(intersect(d, *clip))
+            })
+            .collect();
+        let size = |r: &[i32; 4]| (r[2] - r[0]).max(0) as i64 * (r[3] - r[1]).max(0) as i64;
+        let bounds = run.iter().fold(run[0], |a, r| {
+            [
+                a[0].min(r[0]),
+                a[1].min(r[1]),
+                a[2].max(r[2]),
+                a[3].max(r[3]),
+            ]
+        });
+        let disjoint = run
+            .iter()
+            .enumerate()
+            .all(|(j, a)| run[j + 1..].iter().all(|b| size(&intersect(*a, *b)) == 0));
+        if disjoint && run.iter().map(size).sum::<i64>() == size(&bounds) {
+            out.push(Keyed::Live(id, bounds));
+        } else {
+            out.extend(
+                shapes[i..i + run.len()]
+                    .iter()
+                    .map(|(c, s)| Keyed::Shape(c, s)),
+            );
+        }
+        i += run.len();
+    }
+    out
 }
 
 impl Scene {
@@ -362,7 +430,8 @@ impl Scene {
         self.area == old.area
             && self.ppp == old.ppp
             && self.textures.len() == old.textures.len()
-            && self.shapes == old.shapes
+            && self.live == old.live
+            && keyed(&self.shapes, &self.live, self.ppp) == keyed(&old.shapes, &old.live, old.ppp)
             && self.textures.iter().zip(&old.textures).all(|(new, old)| {
                 let ((id, version, texels), (old_id, old_version, old_texels)) = (*new, *old);
                 id == old_id
@@ -474,6 +543,7 @@ impl Snapshot {
                 ppp,
                 shapes,
                 textures,
+                live,
             }),
             painted,
         }
@@ -1239,11 +1309,45 @@ mod tests {
             ppp: 1.0,
             shapes,
             textures: vec![],
+            live: vec![],
         };
         let (under, group) = (scene(vec![fill(1), fill(2)]), scene(vec![fill(3)]));
         let none: TexturePixels = &|_| None;
         let back = replay_scene(&under, &[], [0; 4], none);
         let px = replay_group(&back, &under, &group, &[], none).px;
         assert_eq!(px, [Some([3; 3]); 2]);
+    }
+
+    /// Review M1: a pan moves where the canvas's wrapped quads split. While their texture is live
+    /// (replayed as unknown) a scene keys them by the rect they tile, so its shadows and veils
+    /// keep their images; quads that leave a gap, or of a texture not live, compare as they are.
+    #[test]
+    fn live_quads_key_by_the_rect_they_tile() {
+        let ctx = Context::default();
+        let id = TextureId::Managed(7);
+        let quad = |x0: f32, x1: f32, u0: f32| {
+            let mut m = egui::Mesh::with_texture(id);
+            let uv = Rect::from_min_max(Pos2::new(u0, 0.0), Pos2::new(u0 + (x1 - x0) / 100.0, 1.0));
+            m.add_rect_with_uv(
+                Rect::from_min_max(Pos2::new(x0, 0.0), Pos2::new(x1, 10.0)),
+                uv,
+                Color32::WHITE,
+            );
+            ([0, 0, 100, 10], Shape::mesh(m))
+        };
+        let scene = |shapes, live: &[TextureId]| Scene {
+            area: [0, 0, 100, 10],
+            ppp: 1.0,
+            shapes,
+            textures: vec![],
+            live: live.to_vec(),
+        };
+        let a = [quad(0.0, 30.0, 0.7), quad(30.0, 100.0, 0.0)];
+        let b = [quad(0.0, 55.0, 0.45), quad(55.0, 100.0, 0.0)];
+        assert!(scene(a.to_vec(), &[id]).same_as(&scene(b.to_vec(), &[id]), &ctx));
+        assert!(!scene(a.to_vec(), &[]).same_as(&scene(b.to_vec(), &[]), &ctx));
+        let c = [quad(0.0, 30.0, 0.7), quad(40.0, 100.0, 0.0)];
+        let d = [quad(0.0, 35.0, 0.7), quad(40.0, 100.0, 0.0)];
+        assert!(!scene(c.to_vec(), &[id]).same_as(&scene(d.to_vec(), &[id]), &ctx));
     }
 }

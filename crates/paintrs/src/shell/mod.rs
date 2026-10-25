@@ -1429,6 +1429,7 @@ impl Shell {
                 app,
                 px::snap_rect(rects.canvas, ctx.pixels_per_point()).min,
                 ctx.pixels_per_point(),
+                canvas_view.draft_view(),
             );
             let input = crate::forms::FormsInput {
                 view: rects.view,
@@ -2156,8 +2157,8 @@ mod arrow_nudge_tests {
         assert_eq!(row(&h), before);
     }
 
-    /// R227: each Shift+arrow stamps the pixels where its step lands; the start is vacated. Shift
-    /// let go between the taps does not split the burst.
+    /// R227, R253: Shift+arrows stamp the pixels where the burst started and where each step
+    /// lands, so the start keeps its copy. Shift let go between the taps does not split the burst.
     #[test]
     fn shift_arrows_leave_the_trail_in_the_pixels() {
         let mut h = picked(ToolType::Move);
@@ -2166,7 +2167,7 @@ mod arrow_nudge_tests {
             arrow(&mut h, Modifiers::SHIFT);
         }
         idle(&mut h);
-        assert_eq!(row(&h), expect(11..17, 10..11));
+        assert_eq!(row(&h), expect(10..17, 0..0));
         assert_eq!(undo_len(&h), before + 1);
     }
 

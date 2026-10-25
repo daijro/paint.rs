@@ -31,8 +31,9 @@ struct Rig {
     virtual_time: bool,
     /// Running hash of every frame's texture uploads and tessellated meshes.
     hash: u64,
-    /// Texture bytes uploaded by `profile_loop`'s measured frames.
+    /// Texture bytes and uploads of `profile_loop`'s measured frames.
     tex_bytes: usize,
+    tex_ops: usize,
     /// Every texture's pixels as the uploads left them, and the last frame's meshes: what the
     /// screen shows ([`Rig::screen`]; deterministic rigs).
     mirror: Option<(
@@ -91,6 +92,7 @@ impl Rig {
             virtual_time,
             hash: 0,
             tex_bytes: 0,
+            tex_ops: 0,
             mirror: deterministic.then(Default::default),
         };
         for _ in 0..5 {
@@ -608,14 +610,38 @@ fn profile_loop() {
             r.frame(vec![Event::PointerMoved(effects)]);
             r.frame(vec![press(effects, true), press(effects, false)]);
         }
-        "rect" | "bigrect" | "move" | "movepan" => {
+        "rect" | "rectpan" | "bigrect" | "move" | "movepan" | "mselpan" | "gridpan" => {
             let c = match scenario.as_str() {
                 "bigrect" => pos2(WINDOW.x * 0.2, WINDOW.y * 0.2),
                 _ => c,
             };
-            if !scenario.ends_with("rect") {
+            if scenario == "gridpan" {
+                // 36 × 24 rectangles of 20 × 12 px, 80 px apart (a Magic Wand global pick on a
+                // pattern): many separate parts.
+                let mut path = pdn_core::selection::path::GraphicsPath::default();
+                for (i, j) in (0..36).flat_map(|i| (0..24).map(move |j| (i, j))) {
+                    let (x, y) = (40.0 + 80.0 * i as f64, 40.0 + 80.0 * j as f64);
+                    let p = |x, y| pdn_core::util::geom::Point::new(x, y);
+                    path.polygons.push(vec![
+                        p(x, y),
+                        p(x + 20.0, y),
+                        p(x + 20.0, y + 12.0),
+                        p(x, y + 12.0),
+                    ]);
+                }
+                let ws = r.app.app.active_ws_mut().unwrap();
+                ws.selection
+                    .set_continuation_path(path, pdn_core::selection::CombineMode::Replace);
+                ws.selection.commit_continuation();
+                r.app.app.set_active_tool_from_type(ToolType::MoveSelection);
+            } else if !scenario.contains("rect") {
                 pdn_core::action::perform(&mut r.app.app, "menu.edit.selectAll");
-                r.app.app.set_active_tool_from_type(ToolType::Move);
+                r.app
+                    .app
+                    .set_active_tool_from_type(match scenario.as_str() {
+                        "mselpan" => ToolType::MoveSelection,
+                        _ => ToolType::Move,
+                    });
             } else {
                 r.app
                     .app
@@ -635,7 +661,10 @@ fn profile_loop() {
     let i = steady_frames(&mut r, &scenario, c, frames, secs);
     let ms = start.elapsed().as_secs_f64() * 1e3 / i.max(1) as f64;
     let kib = r.tex_bytes as f64 / 1024.0 / i.max(1) as f64;
-    println!("{scenario}: {i} frames, {ms:.2} ms a frame, {kib:.0} KiB of textures a frame");
+    let ops = r.tex_ops as f64 / i.max(1) as f64;
+    println!(
+        "{scenario}: {i} frames, {ms:.2} ms a frame, {kib:.0} KiB of textures in {ops:.1} uploads a frame"
+    );
 }
 
 /// The measured loop of [`profile_loop`] (a separate symbol for `callgrind --toggle-collect`).
@@ -689,7 +718,8 @@ fn steady_frames(r: &mut Rig, scenario: &str, c: Pos2, frames: usize, secs: f64)
                     WINDOW.y * (0.2 + k),
                 ))]
             }
-            "movepan" => {
+            // A drag while the wheel scrolls the view (as auto-scroll does).
+            "movepan" | "rectpan" | "mselpan" | "gridpan" => {
                 let d = if (i / 20).is_multiple_of(2) {
                     -20.0
                 } else {
@@ -705,6 +735,7 @@ fn steady_frames(r: &mut Rig, scenario: &str, c: Pos2, frames: usize, secs: f64)
         };
         let s = r.frame(events);
         r.tex_bytes += s.tex_bytes;
+        r.tex_ops += s.tex_ops;
         i += 1;
     }
     i

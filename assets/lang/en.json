@@ -1594,11 +1594,12 @@
         "historyMementoName": "Live Session",
         "notShared": {
             "format": "This image isn't shared live: its resolution or a text layer is outside what a live session takes (0.01 to 100,000 pixels per inch, text up to 65,536 characters in sizes up to 2,000).",
-            "full": "This image isn't shared live: it would take the session past its limits (64 images and 512 MiB of pixels, counting images closed in it). Closing images you opened that nobody else changed makes room.",
+            "full": "This image isn't shared live: it would take the session past its limits (64 images, 512 MiB of pixels and 128 MiB once compressed, counting images closed in it). Closing images you opened that nobody else changed makes room.",
             "layers": "This image isn't shared live: it has more than the 1,000 layers a live session shares.",
             "left": "Your changes to this image aren't shared live: they took it past a live session's limits. The others keep the version from before them. Once it fits again it rejoins, unless someone changed their version meanwhile.",
             "removed": "This image left the live session: your Undo took back adding it. Your work in it stays here, and it rejoins when you change it.",
-            "size": "This image isn't shared live: it is larger than a live session shares (512 MiB of pixels, or 128 MiB once compressed)."
+            "size": "This image isn't shared live: it is larger than a live session shares (512 MiB of pixels, or 128 MiB once compressed).",
+            "undone": "Your Undo took back sharing your changes to this image. They stay here, and they're shared again when you next change it, unless someone changes their version first."
         },
         "waiting": "Others' changes arrive when you finish"
     },

@@ -1194,7 +1194,7 @@ fn an_image_the_others_would_refuse_stays_alone_and_never_poisons_the_set() {
 }
 
 #[test]
-fn an_image_refused_for_its_bytes_is_not_encoded_again_until_it_could_fit() {
+fn an_image_refused_for_its_bytes_is_tried_again_after_a_while_at_its_next_change() {
     MAX_BYTES_HERE.set(Some(48 << 10));
     let mut app = app();
     session(&mut app);
@@ -1228,24 +1228,38 @@ fn an_image_refused_for_its_bytes_is_not_encoded_again_until_it_could_fit() {
         fill(&mut app, 0, (i, i, 1, 1), [1, 2, 3, 255]);
         step(&mut app, true, None);
     }
-    assert_eq!(
-        ENCODES.get(),
-        encodes,
-        "not encoded again while it can't be smaller"
-    );
+    assert_eq!(ENCODES.get(), encodes, "not encoded again so soon");
     assert_eq!((alone(), cached()), (Some((uid, Why::Bytes)), 0));
-    // Smaller now: it is tried again, fits, and joins under the same id.
-    pdn_core::io::ops::resize_image(
-        &mut app,
-        40,
-        40,
-        pdn_core::resample::ResizeMode::Bilinear,
-        pdn_core::resample::Gamma::Linear,
-        96.0,
-    )
-    .unwrap();
+    // A while after the try, the changes since are tried: still too large. The next wait is twice as long.
+    let wait = || {
+        LIVE.with_borrow(|live| {
+            live.alone
+                .iter()
+                .find(|a| a.local == noisy)?
+                .refused
+                .map(|r| r.1)
+        })
+    };
+    assert_eq!(wait(), Some(RETRY_MS));
+    app.now_ms += RETRY_MS + 1000.0;
     step(&mut app, true, None);
     assert_eq!(ENCODES.get(), encodes + 1);
+    assert_eq!(
+        (alone(), cached(), wait()),
+        (Some((uid, Why::Bytes)), 0, Some(2.0 * RETRY_MS))
+    );
+    step(&mut app, true, None);
+    assert_eq!(ENCODES.get(), encodes + 1, "nothing new to try");
+    // One colour over the noise: as many pixels, few bytes. Tried once the wait is over, it fits and joins under the
+    // same id.
+    fill(&mut app, 0, (0, 0, 160, 160), [1, 2, 3, 255]);
+    app.now_ms += RETRY_MS + 1000.0;
+    step(&mut app, true, None);
+    assert_eq!(ENCODES.get(), encodes + 1);
+    assert_eq!(alone(), Some((uid, Why::Bytes)));
+    app.now_ms += RETRY_MS;
+    step(&mut app, true, None);
+    assert_eq!(ENCODES.get(), encodes + 2);
     assert_eq!(alone(), None);
     assert_eq!(uid_here(&app, noisy), uid);
     MAX_BYTES_HERE.set(None);
@@ -1565,4 +1579,411 @@ fn malformed_sets_never_panic_in_full() {
     let found = panics(&base, &inputs, 1);
     eprintln!("{} inputs, {} panics", inputs.len(), found.len());
     assert!(found.is_empty(), "{:?}", &found[..found.len().min(10)]);
+}
+
+/// A PNG chunk, with its CRC.
+fn chunk(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    let mut crc = !0u32;
+    for &b in kind.iter().chain(body) {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                0xedb8_8320 ^ (crc >> 1)
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    let mut out = (body.len() as u32).to_be_bytes().to_vec();
+    out.extend(kind.iter().chain(body));
+    out.extend((!crc).to_be_bytes());
+    out
+}
+
+#[test]
+fn a_tile_with_any_chunk_but_those_this_build_writes_is_refused_before_it_is_decoded() {
+    let noise = pdn_core::testing::fixture_rgba(TILE, TILE, 3);
+    let png = encode(&noise, TILE, TILE);
+    assert_eq!(decode(&png, TILE, TILE).unwrap(), noise);
+    // An ICC profile after the header: a small valid one here, though its zlib stream could inflate to gigabytes.
+    let data = [0u8; 64];
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &data {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    let mut iccp = b"icc\0\0\x78\x01\x01\x40\x00\xbf\xff".to_vec();
+    iccp.extend(data);
+    iccp.extend(((b << 16) | a).to_be_bytes());
+    let header = 8 + 25;
+    let mut with = png[..header].to_vec();
+    with.extend(chunk(b"iCCP", &iccp));
+    with.extend(&png[header..]);
+    let e = decode(&with, TILE, TILE).unwrap_err();
+    assert!(e.contains("tile chunks"), "{e}");
+    // Text after the image data, and bytes after the end, are refused too.
+    let end = png.len() - 12;
+    let mut text = png[..end].to_vec();
+    text.extend(chunk(b"tEXt", b"a\0b"));
+    text.extend(&png[end..]);
+    assert!(decode(&text, TILE, TILE).is_err());
+    let trailing = [&png[..], b"x"].concat();
+    assert!(decode(&trailing, TILE, TILE).is_err());
+    // The image data in a few IDATs decodes, in many it is refused: each costs a decoder pass.
+    let idats = |n: usize| {
+        let at = header + 8;
+        let len = u32::from_be_bytes(png[header..header + 4].try_into().unwrap()) as usize;
+        let data = &png[at..at + len];
+        let mut out = png[..header].to_vec();
+        for part in data.chunks(data.len().div_ceil(n)) {
+            out.extend(chunk(b"IDAT", part));
+        }
+        out.extend(&png[at + len + 4..]);
+        decode(&out, TILE, TILE)
+    };
+    assert_eq!(idats(4).unwrap(), noise);
+    assert!(idats(5).unwrap_err().contains("tile chunks"));
+}
+
+#[test]
+fn a_set_of_too_many_values_is_refused_before_it_is_parsed() {
+    // 16 MiB of `0,`: a parse would hold 8 M values, hundreds of megabytes.
+    let json = format!("[{}0]", "0,".repeat(8 << 20));
+    let mut bytes = MAGIC.to_vec();
+    put(&mut bytes, json.as_bytes());
+    bytes.extend(u32::MAX.to_le_bytes());
+    let e = read(&bytes).map(|_| ()).unwrap_err();
+    assert!(e.contains("too many values"), "{e}");
+    // Commas in a string aren't values.
+    assert!(few_values(&[b"[\"", &[b','; MAX_VALUES + 1], b"\"]"]));
+    assert!(!few_values(&[&[b','; MAX_VALUES + 1]]));
+}
+
+#[test]
+fn a_set_of_too_many_objects_or_arrays_is_refused_before_it_is_parsed() {
+    let refused = |json: String| {
+        let mut bytes = MAGIC.to_vec();
+        put(&mut bytes, json.as_bytes());
+        bytes.extend(u32::MAX.to_le_bytes());
+        let e = read(&bytes).map(|_| ()).unwrap_err();
+        assert!(e.contains("too many values"), "{e}");
+    };
+    // Objects of one key, a few bytes each and hundreds parsed: flat, and nested 120 deep.
+    let n = MAX_NESTS + 1;
+    refused(format!("[{}0]", "{\"\":0},".repeat(n)));
+    let deep = format!("{}0{}", "{\"\":".repeat(120), "}".repeat(120));
+    refused(format!("[{}0]", format!("{deep},").repeat(n / 120 + 1)));
+    let deep = format!("{}0{}", "[".repeat(120), "]".repeat(120));
+    refused(format!("[{}0]", format!("{deep},").repeat(n / 120 + 1)));
+    // A set at the limits stays within them: 64 images of 1,000 text layers.
+    let mut app = fresh_doc(1, 1, None);
+    let ws = app.active_ws_mut().unwrap();
+    ws.document.layers.get_at_mut(0).unwrap().text = Some(TextSpec::default());
+    for i in 1..MAX_LAYERS {
+        let mut layer = Layer::create_layer(1, 1, &format!("Layer {i}"));
+        layer.text = Some(TextSpec::default());
+        ws.document.add_layer(layer);
+    }
+    let set = bytes(&app);
+    let image = read(&set).unwrap();
+    let json = pieces(&image.doc).concat();
+    let count = |c: u8| json.iter().filter(|&&b| b == c).count();
+    assert!(count(b'{').max(count(b'[')) * MAX_IMAGES < MAX_NESTS);
+}
+
+#[test]
+fn undoing_a_rejoin_keeps_the_work_done_while_the_image_was_out_of_the_set() {
+    let mut app = app();
+    session(&mut app);
+    let id = app.active_ws().unwrap().id;
+    let uid = uid_here(&app, id);
+    for i in 0..MAX_LAYERS {
+        let layer = Layer::create_layer(300, 200, &format!("Layer {i}"));
+        app.active_ws_mut().unwrap().document.add_layer(layer);
+    }
+    step(&mut app, true, None);
+    let before = checkpoint(&app).unwrap().to_vec();
+    // Work while it is out, with native Undo: back within the limits, it rejoins.
+    while app.active_ws().unwrap().document.layers.size() > 2 {
+        app.active_ws_mut().unwrap().document.remove_layer_at(2);
+    }
+    fill(&mut app, 1, (1, 1, 1, 1), [3, 3, 3, 255]);
+    pdn_core::action::perform(&mut app, "menu.layers.duplicate.layer");
+    step(&mut app, true, None);
+    assert_eq!(uid_here(&app, id), uid);
+    let rejoined = checkpoint(&app).unwrap().to_vec();
+    let why = || LIVE.with_borrow(|live| live.alone.iter().find(|a| a.local == id).map(|a| a.why));
+    let kept = |app: &AppWorkspace, x: u32| {
+        let d = &ws(app, id).document;
+        (
+            d.layers.size(),
+            d.layers.get_at(1).unwrap().surface.pixel(x, x),
+        )
+    };
+    let layers_in_set = |app: &AppWorkspace| {
+        let set = read(&checkpoint(app).unwrap()).unwrap();
+        let (_, d) = documents(&set.doc).find(|(u, _)| *u == uid).unwrap();
+        d["layers"].as_array().unwrap().len()
+    };
+    // This person's Undo of the rejoin: the others have the version from before it again, and the tab keeps the work
+    // and its native Undo, alone.
+    pdn_core::action::perform(&mut app, "menu.edit.undo");
+    let done = queued(Some(rejoined.clone()), before.clone());
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    assert_eq!(kept(&app, 1), (3, [3, 3, 3, 255]));
+    assert_eq!(layers_in_set(&app), 2);
+    assert!(ws(&app, id).history.can_undo());
+    assert_eq!(why(), Some(Why::Undone));
+    assert!(!pdn_core::live::takes_undo(&app, false, false));
+    // Their Redo of that (from another tab): the tab still waits for its next change, and then rejoins.
+    redo_from_another_tab(&app);
+    let done = queued(Some(before), rejoined.clone());
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    assert_eq!(
+        (kept(&app, 1), why()),
+        ((3, [3, 3, 3, 255]), Some(Why::Undone))
+    );
+    fill(&mut app, 1, (2, 2, 1, 1), [4, 4, 4, 255]);
+    step(&mut app, true, None);
+    assert_eq!((why(), uid_here(&app, id)), (None, uid));
+    // A later change and the rejoin, undone one after the other: the tab keeps what it had at the rejoin.
+    let again = checkpoint(&app).unwrap().to_vec();
+    fill(&mut app, 1, (5, 5, 1, 1), [5, 5, 5, 255]);
+    step(&mut app, true, None);
+    let later = checkpoint(&app).unwrap().to_vec();
+    pdn_core::action::perform(&mut app, "menu.edit.undo");
+    let done = queued(Some(later), again.clone());
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    assert_eq!(
+        kept(&app, 5),
+        (3, [20, 40, 60, 255]),
+        "the later change undone"
+    );
+    pdn_core::action::perform(&mut app, "menu.edit.undo");
+    let done = queued(Some(again), rejoined);
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    assert_eq!(
+        (kept(&app, 2), why()),
+        ((3, [4, 4, 4, 255]), Some(Why::Undone))
+    );
+    disconnect();
+}
+
+#[test]
+fn undoing_a_rejoin_after_someone_elses_change_keeps_the_work_and_their_change() {
+    let mut app = app();
+    session(&mut app);
+    let id = app.active_ws().unwrap().id;
+    for i in 0..MAX_LAYERS {
+        let layer = Layer::create_layer(300, 200, &format!("Layer {i}"));
+        app.active_ws_mut().unwrap().document.add_layer(layer);
+    }
+    step(&mut app, true, None);
+    let before = checkpoint(&app).unwrap().to_vec();
+    while app.active_ws().unwrap().document.layers.size() > 2 {
+        app.active_ws_mut().unwrap().document.remove_layer_at(2);
+    }
+    fill(&mut app, 1, (1, 1, 1, 1), [3, 3, 3, 255]);
+    pdn_core::action::perform(&mut app, "menu.layers.duplicate.layer");
+    step(&mut app, true, None);
+    let rejoined = checkpoint(&app).unwrap().to_vec();
+    // Someone else changes the Background, which the rejoin didn't change.
+    let theirs = theirs(&app, |doc| {
+        doc["documents"][0]["layers"][0]["opacity"] = 9.into()
+    });
+    let done = queued(Some(rejoined.clone()), theirs);
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    // This person's Undo of the rejoin, over that change: the others keep it and get the version from before the
+    // rejoin. The tab keeps both, alone.
+    pdn_core::action::perform(&mut app, "menu.edit.undo");
+    let done = queued(Some(rejoined), before);
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    let d = &ws(&app, id).document;
+    let opacity = |d: &Document| d.layers.get_at(0).unwrap().properties.opacity;
+    assert_eq!(
+        (
+            d.layers.size(),
+            d.layers.get_at(1).unwrap().surface.pixel(1, 1),
+            opacity(d)
+        ),
+        (3, [3, 3, 3, 255], 9)
+    );
+    let why = LIVE.with_borrow(|live| live.alone.iter().find(|a| a.local == id).map(|a| a.why));
+    assert_eq!(why, Some(Why::Undone));
+    let set = image(&checkpoint(&app).unwrap());
+    assert_eq!((set.layers.size(), opacity(&set)), (2, 9));
+    disconnect();
+}
+
+#[test]
+fn redoing_an_undone_join_loads_the_image_into_its_tab_again() {
+    let mut app = app();
+    session(&mut app);
+    app.create_blank_document_in_new_workspace(16, 16, 96.0, false);
+    let id = app.active_ws().unwrap().id;
+    step(&mut app, true, None);
+    let with = checkpoint(&app).unwrap().to_vec();
+    let uid = uid_here(&app, id);
+    let without = theirs_of(&with, |doc| {
+        doc["documents"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|d| d["id"] != uid)
+    });
+    let done = queued(Some(with.clone()), without.clone());
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    let tabs = app.documents.len();
+    let done = queued(Some(without), with);
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    assert_eq!(
+        (app.documents.len(), uid_here(&app, id)),
+        (tabs, uid),
+        "no second tab"
+    );
+    assert!(LIVE.with_borrow(|live| live.alone.is_empty()));
+    disconnect();
+}
+
+#[test]
+fn an_image_out_of_the_set_rejoins_once_this_persons_undo_took_its_version_out() {
+    let mut app = app();
+    session(&mut app);
+    app.create_blank_document_in_new_workspace(4, 4, 96.0, false);
+    let id = app.active_ws().unwrap().id;
+    step(&mut app, true, None);
+    let with = checkpoint(&app).unwrap().to_vec();
+    let uid = uid_here(&app, id);
+    for i in 0..MAX_LAYERS {
+        let layer = Layer::create_layer(4, 4, &format!("Layer {i}"));
+        app.active_ws_mut().unwrap().document.add_layer(layer);
+    }
+    step(&mut app, true, None);
+    // This person's Undo of the join takes the set's version of it out.
+    let without = theirs_of(&with, |doc| {
+        doc["documents"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|d| d["id"] != uid)
+    });
+    let done = queued(Some(with), without);
+    step(&mut app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    while app.active_ws().unwrap().document.layers.size() > 1 {
+        app.active_ws_mut().unwrap().document.remove_layer_at(1);
+    }
+    fill(&mut app, 0, (1, 1, 1, 1), [2, 2, 2, 255]);
+    step(&mut app, true, None);
+    assert_eq!(uid_here(&app, id), uid);
+    disconnect();
+}
+
+/// This person's Redo going to the session from another tab (the tab of an undone rejoin has native Undo and Redo).
+fn redo_from_another_tab(app: &AppWorkspace) {
+    LIVE.with_borrow_mut(|live| live.undoing = Some(app.now_ms));
+}
+
+/// The 300×200 image of [`app`] after it left the set over the layer limit and rejoined with `change`, made while it
+/// was out.
+fn rejoined(change: impl FnOnce(&mut DocumentWorkspace)) -> (AppWorkspace, u64) {
+    let mut app = app();
+    session(&mut app);
+    let id = app.active_ws().unwrap().id;
+    let ws = app.active_ws_mut().unwrap();
+    for i in 0..MAX_LAYERS {
+        let layer = Layer::create_layer(300, 200, &format!("Layer {i}"));
+        ws.document.add_layer(layer);
+    }
+    step(&mut app, true, None);
+    let ws = app.active_ws_mut().unwrap();
+    while ws.document.layers.size() > 2 {
+        ws.document.remove_layer_at(2);
+    }
+    change(ws);
+    step(&mut app, true, None);
+    assert!(LIVE.with_borrow(|live| live.alone.is_empty()), "rejoined");
+    (app, id)
+}
+
+/// Someone else's change to the image's layers, with no Undo of this person's in flight: it loads into the tab, which
+/// stays shared, and it stays in the set after this person's next stroke. The image as the set then has it.
+fn theirs_loads(app: &mut AppWorkspace, id: u64, edit: impl FnOnce(&mut Vec<Value>)) -> Document {
+    let before = checkpoint(app).unwrap().to_vec();
+    let edited = theirs_of(&before, |doc| {
+        edit(doc["documents"][0]["layers"].as_array_mut().unwrap())
+    });
+    let done = queued(Some(before), edited);
+    step(app, true, None);
+    assert_eq!(*done.borrow(), Some(Ok(None)));
+    let why = LIVE.with_borrow(|live| live.alone.iter().find(|a| a.local == id).map(|a| a.why));
+    assert_eq!(why, None, "still shared");
+    fill(app, 1, (7, 7, 1, 1), [7, 7, 7, 255]);
+    step(app, true, None);
+    image(&checkpoint(app).unwrap())
+}
+
+fn opacity(d: &Document) -> u8 {
+    d.layers.get_at(0).unwrap().properties.opacity
+}
+
+fn visible(d: &Document, i: usize) -> bool {
+    d.layers.get_at(i).unwrap().properties.visible
+}
+
+#[test]
+fn someone_elses_change_after_a_rejoin_and_its_revert_here_loads_as_theirs() {
+    // The rejoin hid Layer 2, and this person shows it again. Someone else then changes the Background's opacity.
+    let (mut app, id) =
+        rejoined(|ws| ws.document.layers.get_at_mut(1).unwrap().properties.visible = false);
+    app.active_ws_mut()
+        .unwrap()
+        .document
+        .layers
+        .get_at_mut(1)
+        .unwrap()
+        .properties
+        .visible = true;
+    step(&mut app, true, None);
+    let set = theirs_loads(&mut app, id, |layers| layers[0]["opacity"] = 9.into());
+    let d = &ws(&app, id).document;
+    assert_eq!((opacity(d), visible(d, 1)), (9, true));
+    assert_eq!((opacity(&set), visible(&set, 1)), (9, true));
+    disconnect();
+}
+
+#[test]
+fn someone_elses_change_that_reverts_a_rejoin_loads_as_theirs() {
+    let (mut app, id) =
+        rejoined(|ws| ws.document.layers.get_at_mut(1).unwrap().properties.visible = false);
+    let set = theirs_loads(&mut app, id, |layers| {
+        layers[1]["visible"] = true.into();
+        layers[0]["opacity"] = 9.into();
+    });
+    let d = &ws(&app, id).document;
+    assert_eq!((opacity(d), visible(d, 1)), (9, true));
+    assert_eq!((opacity(&set), visible(&set, 1)), (9, true));
+    disconnect();
+}
+
+#[test]
+fn someone_else_deleting_the_layer_a_rejoin_added_loads_as_theirs() {
+    let (mut app, id) = rejoined(|ws| {
+        let copy = Layer::create_layer(300, 200, "Copy");
+        ws.document.add_layer(copy);
+    });
+    let set = theirs_loads(&mut app, id, |layers| {
+        layers.remove(2);
+        layers[0]["opacity"] = 9.into();
+    });
+    let d = &ws(&app, id).document;
+    assert_eq!((d.layers.size(), opacity(d)), (2, 9));
+    assert_eq!((set.layers.size(), opacity(&set)), (2, 9));
+    disconnect();
 }

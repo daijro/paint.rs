@@ -165,7 +165,8 @@ behaviour from a written specification; no BoltBait code or artwork is included.
 
 Playground live editing: `crates/paintrs/src/live/playground_live.rs` is Playground's shared
 live-editing template (github.com/daijro/openplayground, `patches/live/playground_live.rs`),
-reformatted by rustfmt and otherwise unmodified.
+reformatted by rustfmt, with one test's time limit raised for slower test machines, and otherwise
+unmodified.
 It is by paint.rs's author, and Playground licenses it under each app's own licence, here
 GPL-3.0-or-later (Playground's `patches/README.md`). `crates/paintrs/src/live.rs` and
 `crates/paintrs/src/live/peers.rs` are adapted from Playground's live-editing patch for PhotoCraft

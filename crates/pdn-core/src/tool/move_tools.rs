@@ -182,6 +182,16 @@ pub type Quad = [[f64; 2]; 4];
 /// S§4.6: a trail stamp, M and the quad it had.
 pub type Stamp = (Matrix, Option<Quad>);
 
+/// S§4.6, R253: a Shift step from `at` to `to` stamps both, so the place trailing began keeps a
+/// copy too; a place the last stamp already holds is skipped.
+fn push_stamps(trail: &mut Vec<Stamp>, at: Stamp, to: Stamp) {
+    for s in [at, to] {
+        if trail.last() != Some(&s) {
+            trail.push(s);
+        }
+    }
+}
+
 /// `m` as a homography (both keep x′ = e00·x + e01·y + e02).
 fn hom(m: &Matrix) -> Homography {
     let [a, b, c] = m.elements;
@@ -613,8 +623,8 @@ struct Drag {
     /// The record at the press (its trail grows with the drag's stamps).
     from: MoveToolContext,
     gesture: Gesture,
-    /// S§4.6: the last stamp, the press's placement at first (so the start is not a new offset).
-    stamp: Stamp,
+    /// S§4.6: where the last applied step put the pixels, the press's placement at first.
+    at: Stamp,
 }
 
 /// The gesture feeding the open Drawing or pointer edit.
@@ -935,13 +945,13 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
                 e.translate(tx, ty);
                 r.m = then(&d.from.m, &e);
                 r.edit_quad(&e);
-                // S§4.6 (Extra): Shift stamps each new integer offset.
+                // S§4.6 (Extra), R253: Shift stamps where trailing began and each new offset.
                 let stamp = (r.m, r.quad);
-                if Self::trails(shift) && stamp != d.stamp {
-                    d.stamp = stamp;
-                    d.from.trail.push(stamp);
-                    r.trail.push(stamp);
+                if Self::trails(shift) {
+                    push_stamps(&mut d.from.trail, d.at, stamp);
+                    push_stamps(&mut r.trail, d.at, stamp);
                 }
+                d.at = stamp;
             }
             // The corner follows the pointer until the quad would fold (`keep_convex`, either
             // winding: a flipped F winds the other way); a quad with no homography is refused.
@@ -1056,7 +1066,7 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
     }
 
     /// An arrow key: 1 px (Ctrl: 10 px) through the keyboard edit (§2.8 "Nudge"); with Shift,
-    /// a trail stamp where the step lands, as the drag's (R227), unless the last stamp is there.
+    /// trail stamps where the step starts and lands, as the drag's (R227, R253).
     fn nudge(&mut self, app: &mut AppWorkspace, dx: f64, dy: f64, shift: bool) {
         if !matches!(self.live, Some(Live::Nudge(_))) {
             self.live = None;
@@ -1077,9 +1087,8 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         e.translate(dx, dy);
         n.m = then(&n.m, &e);
         n.edit_quad(&e);
-        let stamp = (n.m, n.quad);
-        if Self::trails(shift) && n.trail.last() != Some(&stamp) {
-            n.trail.push(stamp);
+        if Self::trails(shift) {
+            push_stamps(&mut n.trail, (r.m, r.quad), (n.m, n.quad));
         }
         transacted::update(self, app, n);
         self.live = Some(Live::Nudge(app.now_ms));
@@ -1516,7 +1525,7 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
             button: b,
             start: p,
             last: p,
-            stamp: (from.m, from.quad),
+            at: (from.m, from.quad),
             from,
             gesture,
         })));
@@ -1983,9 +1992,9 @@ mod tests {
         app.tool.as_ref().unwrap().shift_trail_hint()
     }
 
-    /// S§4.6: Shift held from the press leaves a copy at each new offset (1..=10); the press's
-    /// own offset is not new, so the square's first column is vacated (no Ctrl). The status hint
-    /// shows while the translate drags.
+    /// S§4.6, R253: Shift held from the press leaves a copy where the move started and at each
+    /// new offset (0..=10), so the square's original place stays whole (no Ctrl needed). The
+    /// status hint shows while the translate drags.
     #[test]
     fn shift_drag_leaves_a_trail() {
         let mut app = red_square(ToolType::Move);
@@ -2002,12 +2011,53 @@ mod tests {
         app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
         assert!(!hint(&app), "released");
         let r = row(&app, 11);
-        assert_eq!((r[9], r[10], r[24]), (white, [0; 4], white));
-        assert!(r[11..=23].iter().all(|&p| p == RED), "{:?}", &r[8..26]);
+        assert_eq!((r[9], r[24]), (white, white));
+        assert!(r[10..=23].iter().all(|&p| p == RED), "{:?}", &r[8..26]);
+        assert!(original_kept(&app), "the copy where the move started");
         assert_eq!(
             trail(&mut app),
-            (1..=10).map(|k| (k as f64, 0.0)).collect::<Vec<_>>()
+            (0..=10).map(|k| (k as f64, 0.0)).collect::<Vec<_>>()
         );
+    }
+
+    /// R253: Shift pressed partway through a drag stamps where the pixels are at that moment,
+    /// then each later offset, and nothing before it: the place the move started empties. Shift
+    /// seen first by a step (no modifier event) stamps the place the step left the same way.
+    #[test]
+    fn shift_partway_through_a_drag_stamps_where_it_began() {
+        for event in [true, false] {
+            let mut app = red_square(ToolType::Move);
+            let white = row(&app, 11)[0];
+            let path = rightwards(5);
+            let (x, y) = view(&app, path[0]);
+            app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
+            for &p in &path[1..=3] {
+                move_to(&mut app, p);
+            }
+            if event {
+                app.set_modifier_keys(false, true, false);
+            } else {
+                app.shift_key_down = true;
+            }
+            for &p in &path[4..] {
+                move_to(&mut app, p);
+            }
+            let (x, y) = view(&app, path[5]);
+            app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
+            assert_eq!(
+                trail(&mut app),
+                [(3.0, 0.0), (4.0, 0.0), (5.0, 0.0)],
+                "event {event}"
+            );
+            for (x, p) in row(&app, 11).into_iter().enumerate() {
+                let want = match x {
+                    10..13 => [0; 4],
+                    13..19 => RED,
+                    _ => white,
+                };
+                assert_eq!(p, want, "event {event}: {x}");
+            }
+        }
     }
 
     /// Ctrl latched at the press keeps the original; the trail follows as with Shift alone.
@@ -2020,10 +2070,10 @@ mod tests {
         let r = row(&app, 11);
         assert_eq!((r[9], r[24]), (white, white));
         assert!(r[10..=23].iter().all(|&p| p == RED), "{:?}", &r[8..26]);
-        assert_eq!(trail(&mut app).len(), 10);
+        assert_eq!(trail(&mut app).len(), 11);
     }
 
-    /// An offset equal to the last stamp (the press's, a repeated move, a modifier change) adds
+    /// An offset equal to the last stamp (the start's, a repeated move, a modifier change) adds
     /// nothing; a revisited one stamps again.
     #[test]
     fn trail_deduplicates_repeated_offsets() {
@@ -2037,11 +2087,14 @@ mod tests {
             app.set_modifier_keys(false, true, true);
             app.set_modifier_keys(false, true, false);
         }
-        assert_eq!(trail(&mut app), [(1.0, 0.0), (2.0, 0.0), (1.0, 0.0)]);
+        assert_eq!(
+            trail(&mut app),
+            [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (1.0, 0.0)]
+        );
     }
 
-    /// The whole Shift drag is its one Draw entry: undo restores the layer bit for bit, redo
-    /// brings the trail back from the record.
+    /// The whole Shift drag is its one Draw entry: undo restores the layer bit for bit, the copy
+    /// where the move started included (R253); redo brings the trail back from the record.
     #[test]
     fn trail_drag_is_one_history_item() {
         let mut app = red_square(ToolType::Move);
@@ -2062,10 +2115,13 @@ mod tests {
         let after = surface(&app);
         assert!(after != before);
         assert_eq!(app.active_ws().unwrap().history.undo.len(), entries + 1);
+        assert!(original_kept(&app), "the copy where the move started");
         assert!(app.undo());
         assert!(surface(&app) == before, "undo restores exactly");
+        assert!(trail(&mut app).is_empty());
         assert!(app.redo());
         assert!(surface(&app) == after, "redo renders the trail again");
+        assert_eq!(trail(&mut app).len(), 7, "the start and 6 steps");
     }
 
     /// A Shift drag `n` px right, 1 px a frame, from `app`'s record: each frame's work.
@@ -2163,7 +2219,7 @@ mod tests {
         move_to(&mut stamped, (80.5, 45.5));
         stamped.set_modifier_keys(false, false, false);
         move_to(&mut stamped, (90.5, 45.5));
-        assert_eq!(trail(&mut stamped).len(), 1);
+        assert_eq!(trail(&mut stamped).len(), 2, "the start and +20");
         let mut solid = 0;
         for y in 6..18 {
             let (a, b) = (row(&live, y), row(&stamped, y));
@@ -2210,8 +2266,9 @@ mod tests {
         app.on_frame(now);
     }
 
-    /// R227: each Shift+arrow stamps where its step lands, as the drag's stamps (1..=3); the status
-    /// hint shows through the burst.
+    /// R227, R253: Shift+arrows stamp where the burst started and where each step lands, as the
+    /// drag's stamps (0..=3), so the original place stays whole; the status hint shows through
+    /// the burst.
     #[test]
     fn shift_arrows_leave_a_trail() {
         let mut app = red_square(ToolType::Move);
@@ -2220,48 +2277,62 @@ mod tests {
             press(&mut app, "ArrowRight", true, false);
             assert!(hint(&app), "a nudge burst");
         }
-        assert_eq!(trail(&mut app), [(1.0, 0.0), (2.0, 0.0), (3.0, 0.0)]);
+        assert_eq!(
+            trail(&mut app),
+            [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)]
+        );
         let r = row(&app, 11);
-        assert_eq!((r[9], r[10], r[17]), (white, [0; 4], white));
-        assert!(r[11..=16].iter().all(|&p| p == RED), "{:?}", &r[8..19]);
-    }
-
-    /// As with a Shift drag (no Ctrl at the press), the column the square left is vacated: no
-    /// stamp at the original position.
-    #[test]
-    fn shift_arrow_burst_empties_the_original_position() {
-        let mut app = red_square(ToolType::Move);
-        for _ in 0..3 {
-            press(&mut app, "ArrowRight", true, false);
-        }
+        assert_eq!((r[9], r[17]), (white, white));
+        assert!(r[10..=16].iter().all(|&p| p == RED), "{:?}", &r[8..19]);
         idle(&mut app);
-        for y in 10..14 {
-            assert_eq!(row(&app, y)[10], [0; 4], "(10, {y})");
-        }
+        assert!(original_kept(&app), "the copy where the burst started");
     }
 
-    /// R227: Ctrl+Shift+arrow steps 10 px, a stamp where each lands. Ctrl on a key is the step,
-    /// never the copy-behind (R69), so the original position is vacated.
+    /// R253: Shift pressed partway through a burst stamps where the pixels are at that moment,
+    /// then each later step; the places before it empty as in a plain nudge.
     #[test]
-    fn ctrl_shift_arrows_step_10_px() {
+    fn shift_partway_through_a_burst_stamps_where_it_began() {
         let mut app = red_square(ToolType::Move);
         let white = row(&app, 11)[0];
-        press(&mut app, "ArrowRight", true, true);
-        press(&mut app, "ArrowRight", true, true);
-        assert_eq!(trail(&mut app), [(10.0, 0.0), (20.0, 0.0)]);
+        press(&mut app, "ArrowRight", false, false);
+        press(&mut app, "ArrowRight", false, false);
+        press(&mut app, "ArrowRight", true, false);
+        press(&mut app, "ArrowRight", true, false);
+        assert_eq!(trail(&mut app), [(2.0, 0.0), (3.0, 0.0), (4.0, 0.0)]);
         for (x, p) in row(&app, 11).into_iter().enumerate() {
             let want = match x {
-                10..14 => [0; 4],
-                20..24 | 30..34 => RED,
+                10..12 => [0; 4],
+                12..18 => RED,
                 _ => white,
             };
             assert_eq!(p, want, "{x}");
         }
     }
 
+    /// R227, R253: Ctrl+Shift+arrow steps 10 px, a stamp where the burst started and where each
+    /// step lands. Ctrl on a key is the step, never the copy-behind (R69): the original place
+    /// keeps the start's stamp.
+    #[test]
+    fn ctrl_shift_arrows_step_10_px() {
+        let mut app = red_square(ToolType::Move);
+        let white = row(&app, 11)[0];
+        press(&mut app, "ArrowRight", true, true);
+        press(&mut app, "ArrowRight", true, true);
+        assert_eq!(trail(&mut app), [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]);
+        for (x, p) in row(&app, 11).into_iter().enumerate() {
+            let want = match x {
+                10..14 | 20..24 | 30..34 => RED,
+                _ => white,
+            };
+            assert_eq!(p, want, "{x}");
+        }
+        idle(&mut app);
+        assert!(original_kept(&app), "the start's stamp");
+    }
+
     /// The copy-behind a Ctrl drag latched stays for the Shift+arrow burst that edits it: the
-    /// original stays, as at the origin of a Ctrl+Shift drag; the drag's end, never stamped, is
-    /// background.
+    /// original stays, as at the origin of a Ctrl+Shift drag; the drag's end, where the burst
+    /// starts trailing, keeps a stamp (R253).
     #[test]
     fn shift_arrows_after_a_ctrl_drag_keep_the_original() {
         let mut app = red_square(ToolType::Move);
@@ -2271,9 +2342,9 @@ mod tests {
         app.set_modifier_keys(false, false, false);
         press(&mut app, "ArrowRight", true, true);
         press(&mut app, "ArrowRight", true, true);
-        assert_eq!(trail(&mut app), [(20.0, 0.0), (30.0, 0.0)]);
+        assert_eq!(trail(&mut app), [(10.0, 0.0), (20.0, 0.0), (30.0, 0.0)]);
         for (x, p) in row(&app, 11).into_iter().enumerate() {
-            let red = matches!(x, 10..14 | 30..34 | 40..44);
+            let red = matches!(x, 10..14 | 20..24 | 30..34 | 40..44);
             assert_eq!(p, if red { RED } else { white }, "{x}");
         }
     }
@@ -2327,7 +2398,7 @@ mod tests {
         assert!(original_kept(&app), "a plain drag");
         app.set_modifier_keys(false, true, false);
         drag(&mut app, MouseButton::Left, &[far[0], far[1], (92.5, 50.5)]);
-        assert_eq!(trail(&mut app).len(), 2);
+        assert_eq!(trail(&mut app).len(), 3, "the start and 2 steps");
         assert!(original_kept(&app), "a Shift drag");
         app.set_modifier_keys(false, false, true);
         drag_br(&mut app, 1.0, 1.0);
@@ -2344,7 +2415,7 @@ mod tests {
         press(&mut app, "ArrowDown", false, true);
         idle(&mut app);
         assert!(original_kept(&app), "arrows");
-        assert_eq!(trail(&mut app).len(), 2, "the stamps stay");
+        assert_eq!(trail(&mut app).len(), 3, "the stamps stay");
         assert!(app.with_tool(|t, app| t.commit_pending(app)).unwrap());
         assert!(original_kept(&app), "the Finish");
     }
@@ -2390,7 +2461,9 @@ mod tests {
     }
 
     /// R227: a Shift+arrow burst is one entry with its stamps; undo takes the burst's moves and
-    /// stamps back together, the earlier burst's staying.
+    /// stamps back together, the earlier burst's staying, and the first burst's undo restores the
+    /// original exactly. The second burst starts where the first one's last stamp is, so it adds
+    /// no stamp there (R253).
     #[test]
     fn shift_arrow_burst_is_one_history_item() {
         let mut app = red_square(ToolType::Move);
@@ -2405,10 +2478,10 @@ mod tests {
         press(&mut app, "ArrowDown", true, false);
         idle(&mut app);
         assert_eq!(app.active_ws().unwrap().history.undo.len(), entries + 2);
-        assert_eq!(trail(&mut app).len(), 4);
+        assert_eq!(trail(&mut app).len(), 5);
         let second = crate::testing::layer_bytes(&app, None);
         assert!(app.undo());
-        assert_eq!(trail(&mut app), [(1.0, 0.0), (2.0, 0.0)]);
+        assert_eq!(trail(&mut app), [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]);
         assert!(
             crate::testing::layer_bytes(&app, None) == first,
             "the first burst"
@@ -2424,16 +2497,11 @@ mod tests {
             crate::testing::layer_bytes(&app, None) == second,
             "redo bakes the trail"
         );
-    }
-
-    /// As in a drag, landing on the last stamp (back after a plain arrow) adds nothing.
-    #[test]
-    fn shift_arrow_does_not_restamp_the_last_stamp() {
-        let mut app = red_square(ToolType::Move);
-        press(&mut app, "ArrowRight", true, false);
-        press(&mut app, "ArrowRight", false, false);
-        press(&mut app, "ArrowLeft", true, false);
-        assert_eq!(trail(&mut app), [(1.0, 0.0)]);
+        assert_eq!(trail(&mut app).len(), 5);
+        assert!(
+            original_kept(&app),
+            "the first burst's start keeps its copy"
+        );
     }
 
     /// Plain and Ctrl arrows nudge without stamps, as before.
@@ -2924,7 +2992,8 @@ mod tests {
     }
 
     /// The quad goes along with later gestures: a translate drag and a nudge move it by their
-    /// offsets, and the selection with it; a Shift translate stamps the quad.
+    /// offsets, and the selection with it; a Shift translate stamps the quad where it starts and
+    /// where it lands (R253).
     #[test]
     fn later_moves_carry_the_quad() {
         let mut app = gradient_square();
@@ -2950,7 +3019,8 @@ mod tests {
         crate::testing::with_tool(&mut app, |m: &mut MoveTool, _| {
             stamps = m.context().unwrap().trail.clone()
         });
-        assert_eq!(stamps.len(), 1);
-        assert!(close(stamps[0].1.unwrap(), shifted(6.0, 4.0)));
+        assert_eq!(stamps.len(), 2);
+        assert!(close(stamps[0].1.unwrap(), shifted(6.0, 3.0)));
+        assert!(close(stamps[1].1.unwrap(), shifted(6.0, 4.0)));
     }
 }

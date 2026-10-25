@@ -844,7 +844,8 @@ mod tests {
         e2["items"][20]["v"] = json!("e");
         let started = std::time::Instant::now();
         assert!(m(many(50_000), c2, e2).is_ok());
-        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        // A quadratic merge would take minutes, and a busy debug-build runner needs over 5 s.
+        assert!(started.elapsed().as_secs() < 60, "{:?}", started.elapsed());
         // 1 was edited on one side and removed on the other.
         let edited_one = json!({"items": [item(1, "A"), item(2, "b"), item(3, "c")], "next_id": 4});
         let removed_one = json!({"items": [item(2, "b"), item(3, "c")], "next_id": 4});

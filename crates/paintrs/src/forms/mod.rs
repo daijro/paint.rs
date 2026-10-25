@@ -411,13 +411,19 @@ impl Forms {
 /// The screen rects where the active document's canvas overlays actually draw (ruling R67): the
 /// selection outline's device spans, one device px wider (its whole layer rect when it has too
 /// many), each tool handle's box (which already holds its anti-aliasing) and the brush outline's and
-/// picker square's boxes. `canvas_min` is the canvas box's device-snapped top-left.
-pub fn overlay_rects(app: &AppWorkspace, canvas_min: Pos2, ppp: f32) -> Vec<Rect> {
+/// picker square's boxes. `canvas_min` is the canvas box's device-snapped top-left; `shown` the
+/// transform a pan or zoom draft shows, if one does (the outline's masks are built for it already).
+pub fn overlay_rects(
+    app: &AppWorkspace,
+    canvas_min: Pos2,
+    ppp: f32,
+    shown: Option<pdn_core::render::view::ViewTransform>,
+) -> Vec<Rect> {
     use pdn_core::render::{Renderer, nubs};
     let Some(ws) = app.active_ws() else {
         return vec![];
     };
-    let t = ws.view.view_transform();
+    let t = shown.unwrap_or_else(|| ws.view.view_transform());
     ws.surface_box
         .renderers
         .iter()

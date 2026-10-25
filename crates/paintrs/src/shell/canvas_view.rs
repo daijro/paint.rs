@@ -232,6 +232,11 @@ impl CanvasView {
         self.canvas.drafted()
     }
 
+    /// The transform a draft shows, while one shows (`CanvasPixels::draft_view`).
+    pub fn draft_view(&self) -> Option<pdn_core::render::view::ViewTransform> {
+        self.canvas.draft_view()
+    }
+
     /// The next render redraws everything (tests compare it with what the frames redrew).
     pub fn refresh_all(&mut self) {
         self.canvas = CanvasPixels::default();
