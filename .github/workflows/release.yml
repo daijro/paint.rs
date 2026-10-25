@@ -22,7 +22,9 @@ env:
 # which runs on any 64-bit CPU, and `-avx2` (x86-64-v3: Haswell / Excavator or newer). Apple
 # Silicon builds use the default aarch64 target, which has NEON.
 # checkout v7.0.1, the same pin as ci.yml. Uploads use the gh CLI that every runner ships, not a third-party
-# action, so there is nothing else to pin.
+# action. Downloads are pinned by version: binaryen in the web job, the dav1d source in the Linux and macOS
+# jobs (scripts/ci/build-dav1d.sh), and appimagetool and the AppImage runtime in the Linux job. All but binaryen
+# are checked by SHA-256 too.
 jobs:
   release:
     runs-on: ubuntu-24.04
@@ -32,9 +34,11 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 (.tar.gz), Windows x86_64 (.zip), macOS arm64 and x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 (.AppImage and .tar.gz), Windows x86_64 (.zip), macOS arm64 and x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
 
           The plain x86-64 downloads run on any x86-64 CPU. The -avx2 ones are faster but need AVX2 (most Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If unsure, take the plain one.
+
+          The Linux .AppImage is the whole app in one file: make it executable (chmod +x) and run it. It needs FUSE, which most desktops have. Without FUSE, run it with --appimage-extract-and-run. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).
 
           The macOS and Windows builds are unsigned and not notarized: macOS Gatekeeper and Windows SmartScreen will warn on first launch."
 
@@ -46,33 +50,94 @@ jobs:
         include:
           - {suffix: '', rustflags: ''}
           - {suffix: '-avx2', rustflags: -Ctarget-cpu=x86-64-v3}
-    runs-on: ubuntu-24.04
+    # The oldest runner, so the Linux downloads run on glibc 2.35 or newer (Ubuntu 22.04, Debian 12). Its
+    # libdav1d is too old for dav1d-sys (1.3 or newer), so the job builds a pinned dav1d and links it
+    # statically: the tarball and the AppImage then need no libdav1d from the system.
+    runs-on: ubuntu-22.04
+    env:
+      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-linux-x86_64${{ matrix.suffix }}
+      APPIMAGETOOL_VERSION: 1.9.1
+      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      APPIMAGE_RUNTIME_VERSION: '20251108'
+      APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
-      - name: Install native codecs
+      - name: Install native build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang pkg-config libdav1d-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+          sudo apt-get install -y build-essential cmake clang pkg-config meson ninja-build nasm libxkbcommon-dev libwayland-dev libgtk-3-dev python3.11
+      - name: Build dav1d
+        run: sh scripts/ci/build-dav1d.sh "$RUNNER_TEMP"
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs
         env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
-      - name: Package and upload
+      - name: Package the tarball
         run: |
           set -euo pipefail
-          dir="paint.rs-$TAG-linux-x86_64${{ matrix.suffix }}"
-          mkdir -p "$dir"
-          cp target/dist/paintrs LICENSE LICENSE.md NOTICE.md "$dir/"
+          mkdir -p "$DIST"
+          cp target/dist/paintrs LICENSE LICENSE.md NOTICE.md "$DIST/"
           # scripts/linux-install-desktop.sh adds the launcher entry and the Wayland taskbar icon.
-          mkdir -p "$dir/scripts" "$dir/packaging/linux" "$dir/assets"
-          cp scripts/linux-install-desktop.sh "$dir/scripts/"
-          cp packaging/linux/paint-rs.desktop packaging/linux/paint-rs.xml "$dir/packaging/linux/"
-          cp assets/app-icon.svg assets/app-icon.png "$dir/assets/"
+          mkdir -p "$DIST/scripts" "$DIST/packaging/linux" "$DIST/assets"
+          cp scripts/linux-install-desktop.sh "$DIST/scripts/"
+          cp packaging/linux/paint-rs.desktop packaging/linux/paint-rs.xml "$DIST/packaging/linux/"
+          cp assets/app-icon.svg assets/app-icon.png "$DIST/assets/"
+          cp -R assets/font assets/fonts "$DIST/assets/"
+          test -f "$DIST/assets/font/carlito/Carlito-Regular.ttf"
+          test -f "$DIST/assets/fonts/noto-color-emoji/NotoColorEmoji.ttf"
           cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
-          python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license /usr/share/doc/libdav1d7/copyright
-          tar -czf "$dir.tar.gz" "$dir"
-          gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+          # The notices script needs Python 3.11 (tomllib). The runner's python3 is 3.10.
+          python3.11 scripts/ci/collect_notices.py "$DIST/notices" --kind native --metadata metadata.json --dav1d-license "$RUNNER_TEMP/dav1d-notice"
+          tar -czf "$DIST.tar.gz" "$DIST"
+      # Before the AppImage steps, so a failure in its tooling can't cost the tarball.
+      - name: Upload the tarball
+        run: gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+      - name: Assemble the AppDir
+        run: |
+          set -euo pipefail
+          # The AppImage layout: AppRun, the desktop file and its icon at the root, the rest under usr/.
+          share=AppDir/usr/share
+          mkdir -p AppDir/usr/bin "$share/applications" "$share/icons/hicolor/scalable/apps" \
+            "$share/icons/hicolor/512x512@2/apps" "$share/mime/packages" "$share/doc/paint.rs" "$share/paint.rs"
+          cp target/dist/paintrs AppDir/usr/bin/
+          ln -s usr/bin/paintrs AppDir/AppRun
+          cp packaging/linux/paint-rs.desktop AppDir/
+          cp packaging/linux/paint-rs.desktop "$share/applications/"
+          cp assets/app-icon.png AppDir/paint-rs.png
+          # .DirIcon, the file managers' thumbnail, at the AppDir convention's 256 px. appimagetool keeps a
+          # .DirIcon that is a file and otherwise links the 1024 px icon above.
+          if command -v convert >/dev/null && convert assets/app-icon.png -resize 256x256 png:AppDir/.DirIcon; then :
+          else echo '::warning::ImageMagick is missing or failed, so .DirIcon is the 1024 px icon'; fi
+          cp assets/app-icon.svg AppDir/paint-rs.svg
+          cp assets/app-icon.svg "$share/icons/hicolor/scalable/apps/paint-rs.svg"
+          cp assets/app-icon.png "$share/icons/hicolor/512x512@2/apps/paint-rs.png"
+          cp packaging/linux/paint-rs.xml "$share/mime/packages/"
+          cp -R LICENSE LICENSE.md NOTICE.md "$DIST/notices" "$share/doc/paint.rs/"
+          # The tarball's install script in the layout it expects: after --appimage-extract,
+          # squashfs-root/usr/share/paint.rs/scripts/linux-install-desktop.sh adds the launcher entry.
+          cp -R "$DIST/scripts" "$DIST/packaging" "$DIST/assets" "$share/paint.rs/"
+          test -f "$share/paint.rs/assets/font/carlito/Carlito-Regular.ttf"
+          test -f "$share/paint.rs/assets/fonts/noto-color-emoji/NotoColorEmoji.ttf"
+          # Nothing to bundle: every library paintrs links is one the AppImage excludelist leaves to the
+          # system (glibc, libstdc++, libgcc_s). The graphics stack, X11 and Wayland are loaded at run time.
+          if ldd AppDir/usr/bin/paintrs | awk '{print $1}' |
+            grep -vxE 'linux-vdso\.so\.1|/lib64/ld-linux-x86-64\.so\.2|lib(c|m|dl|pthread|rt|gcc_s|stdc\+\+)\.so\.[0-9]+'; then
+            echo 'paintrs links a library above that the AppImage would have to bundle' >&2
+            exit 1
+          fi
+      - name: Make the AppImage
+        run: |
+          set -euo pipefail
+          curl --retry 3 -sSfLo "$RUNNER_TEMP/appimagetool" "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
+          curl --retry 3 -sSfLo "$RUNNER_TEMP/runtime" "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_VERSION/runtime-x86_64"
+          printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$RUNNER_TEMP/appimagetool" "$APPIMAGE_RUNTIME_SHA256" "$RUNNER_TEMP/runtime" | sha256sum -c
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          # VERSION becomes the desktop file's X-AppImage-Version. Extract-and-run needs no FUSE on the runner.
+          ARCH=x86_64 VERSION="${TAG#v}" "$RUNNER_TEMP/appimagetool" --appimage-extract-and-run \
+            --runtime-file "$RUNNER_TEMP/runtime" AppDir "$DIST.AppImage"
+      - name: Upload the AppImage
+        run: gh release upload "$TAG" "$DIST.AppImage" --clobber --repo "$GITHUB_REPOSITORY"
 
   windows-x86_64:
     needs: release
@@ -108,9 +173,20 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/dist/paintrs.exe, LICENSE, LICENSE.md, NOTICE.md $dir
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*dav1d*.dll" $dir
+          New-Item -ItemType Directory "$dir/assets" | Out-Null
+          Copy-Item -Recurse assets/font, assets/fonts "$dir/assets"
+          foreach ($f in 'font/carlito/Carlito-Regular.ttf', 'fonts/noto-color-emoji/NotoColorEmoji.ttf') {
+            if (-not (Test-Path -PathType Leaf "$dir/assets/$f")) { throw "the zip has no assets/$f" }
+          }
           cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/dav1d/copyright"
+          # The vcpkg DLL's licence is dav1d's COPYING only, and its x86 assembly is built with x86inc.asm (x264
+          # project, ISC) too. scripts/ci/dav1d-x86inc-notice.txt is that file's licence header, copied from the
+          # x86inc.asm in rav1d 1.1.0 (crates.io, commit 782dab21), dav1d's Rust port.
+          $notice = "$env:RUNNER_TEMP/dav1d-notice"
+          $copying = Get-Content "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/dav1d/copyright"
+          @($copying) + '' + @(Get-Content scripts/ci/dav1d-x86inc-notice.txt) | Set-Content $notice
+          python scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license $notice
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
           gh release upload $env:TAG "$dir.zip" --clobber --repo $env:GITHUB_REPOSITORY
@@ -138,15 +214,20 @@ jobs:
             suffix: '-avx2'
             rustflags: -Ctarget-cpu=x86-64-v3
     runs-on: ${{ matrix.runner }}
+    # The static dav1d and the Rust code both build for macOS 11, not the runner's macOS 15.
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
-      - name: Install native codecs and Rust
+      - name: Install native build tools and Rust
         run: |
           test "$(uname -m)" = '${{ matrix.arch }}'
-          brew install dav1d pkgconf cmake
+          brew install meson ninja nasm pkgconf cmake
           rustup toolchain install 1.99.1 --profile minimal --target '${{ matrix.target }}'
-          echo "PKG_CONFIG_PATH=$(brew --prefix dav1d)/lib/pkgconfig" >> "$GITHUB_ENV"
+      # R244: dav1d is linked statically, as on Linux. Homebrew's libdav1d.dylib would not be in the bundle.
+      - name: Build dav1d
+        run: sh scripts/ci/build-dav1d.sh "$RUNNER_TEMP"
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target '${{ matrix.target }}'
         env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
       - name: Package unsigned app and upload
@@ -157,9 +238,14 @@ jobs:
           sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/dist/paintrs' "$dir/paint.rs.app"
           plutil -lint "$dir/paint.rs.app/Contents/Info.plist"
           lipo "$dir/paint.rs.app/Contents/MacOS/paintrs" -verify_arch '${{ matrix.arch }}'
+          libs=$(otool -L "$dir/paint.rs.app/Contents/MacOS/paintrs")
+          if echo "$libs" | grep -E 'dav1d|/opt/homebrew|/usr/local'; then
+            echo 'paintrs links a library above that the bundle does not carry' >&2; exit 1; fi
+          test -f "$dir/paint.rs.app/Contents/Resources/assets/font/carlito/Carlito-Regular.ttf"
+          test -f "$dir/paint.rs.app/Contents/Resources/assets/fonts/noto-color-emoji/NotoColorEmoji.ttf"
           cp LICENSE LICENSE.md NOTICE.md "$dir/"
           cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
-          python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$(brew --prefix dav1d)/COPYING"
+          python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$RUNNER_TEMP/dav1d-notice"
           # tar keeps the executable modes inside the bundle.
           tar -czf "$dir.tar.gz" "$dir"
           gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"

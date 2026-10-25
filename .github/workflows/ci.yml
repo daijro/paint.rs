@@ -34,7 +34,8 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - run: cargo +1.99.1 fmt --all -- --check
-      - run: cargo +1.99.1 clippy --locked --workspace --all-features -- -D warnings
+      # With the tests: code built only for the web and the tests (the live-editing module) is linted too.
+      - run: cargo +1.99.1 clippy --locked --workspace --all-features --tests -- -D warnings
       - run: cargo +1.99.1 test --locked --workspace --all-features --no-fail-fast
       - run: python3 -m unittest discover -s tests/ci -v
 

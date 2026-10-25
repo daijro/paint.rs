@@ -1394,6 +1394,13 @@ impl<K: BrushKind> Tool for BrushTool<K> {
         K::TOOL
     }
 
+    fn live_gesture(&self, _app: &AppWorkspace) -> Option<super::LiveGesture> {
+        let record = self.tx.record().filter(|_| self.drag.is_some())?;
+        let size = record.get("width").and_then(Value::as_f64).unwrap_or(1.0);
+        let points = record.points.iter().map(|&(x, y, _)| [x, y]).collect();
+        Some(super::LiveGesture::Stroke { size, points })
+    }
+
     /// Adds the brush preview layer (hidden until the pointer moves over the canvas), and the
     /// Spot Healing Brush's trail (empty).
     fn on_activate(&mut self, app: &mut AppWorkspace) {

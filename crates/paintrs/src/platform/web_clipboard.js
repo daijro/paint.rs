@@ -15,14 +15,17 @@ function enqueueWrite(value,text=false) {
 }
 function startWrite(job) {
  writeActive=job;
- let result;
- try {
+ const write=token=>{
   const data={'image/png':job.value};
-  if(job.token)data[ownType]=new Blob([job.token],{type:'application/x-paintrs-clipboard'});
-  result=job.text ? navigator.clipboard.writeText(job.value)
-   : navigator.clipboard.write([new ClipboardItem(data)]);
- }
+  if(token)data[ownType]=new Blob([token],{type:'application/x-paintrs-clipboard'});
+  return navigator.clipboard.write([new ClipboardItem(data)]);
+ };
+ let result;
+ try {result=job.text ? navigator.clipboard.writeText(job.value) : write(job.token);}
  catch(error) {result=Promise.reject(error);}
+ // Chrome refuses a custom format (an unsanitized write) without the site's clipboard permission, even in a
+ // gesture, and allows the plain PNG: send that once, unowned.
+ if(job.token)result=Promise.resolve(result).catch(()=>{job.token=null;return write(null);});
  Promise.resolve(result).then(()=>{
   // The marker and PNG are published atomically; never infer ownership from a later readback.
   if(job.token && job.generation===generation)

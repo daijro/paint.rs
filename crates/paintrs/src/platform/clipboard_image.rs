@@ -221,6 +221,10 @@ impl super::Clipboard {
             #[wasm_bindgen(catch, js_name = writeClipboardImage)]
             fn write(bytes: &[u8]) -> Result<js_sys::Promise, JsValue>;
         }
+        #[wasm_bindgen(js_namespace = console)]
+        extern "C" {
+            fn warn(message: &str);
+        }
         let result =
             encode_web_copy(image).and_then(|bytes| write(&bytes).map_err(|e| format!("{e:?}")));
         wasm_bindgen_futures::spawn_local(async move {
@@ -231,13 +235,11 @@ impl super::Clipboard {
                     .map_err(|e| format!("{e:?}")),
                 Err(error) => Err(error),
             };
-            // A superseded write cannot report an obsolete failure over the current copy.
+            // A superseded write cannot report an obsolete failure over the current copy. The copy inside
+            // paint.rs already succeeded, so a browser refusing the system clipboard is no error to show.
             if let Some(completion) = weak.upgrade() {
                 if let Err(error) = &result {
-                    crate::forms::error::ErrorForm::report(
-                        "Clipboard image write failed. The copied image remains available inside paint.rs.",
-                        error.clone(),
-                    );
+                    warn(&format!("paint.rs: clipboard image write failed: {error}"));
                 }
                 *completion.lock().expect("clipboard image write") = Some(result);
             }

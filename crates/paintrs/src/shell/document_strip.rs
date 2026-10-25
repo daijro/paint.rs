@@ -101,6 +101,8 @@ pub struct DocumentStrip {
     shown_active: Option<u64>,
     scaler: Scaler,
     selection_scroll: Option<(f32, f32, f64)>,
+    /// Each tab shown last frame: its document id and rectangle (a live session's dots for who is on it).
+    pub tabs: Vec<(u64, Rect)>,
 }
 
 impl Default for DocumentStrip {
@@ -113,6 +115,7 @@ impl Default for DocumentStrip {
             shown_active: None,
             scaler: Scaler::default(),
             selection_scroll: None,
+            tabs: Vec::new(),
         }
     }
 }
@@ -514,6 +517,7 @@ impl DocumentStrip {
         if ids.is_empty() || rect.width() <= 0.0 {
             // updateNavigation: no documents → no list button, no list.
             self.list_open = false;
+            self.tabs.clear();
             return None;
         }
         let item_h = rect.height();
@@ -578,6 +582,12 @@ impl DocumentStrip {
         // Item rects: layout x, the reorder slide, the drag translate.
         let dragging = self.list.dragging();
         let rects = self.list.layout(ui, list, &ids, item_w, now);
+        self.tabs.clear();
+        (self.tabs).extend(
+            ids.iter()
+                .zip(&rects)
+                .map(|(id, r)| (*id, r.intersect(list))),
+        );
 
         let mut action = None;
         // `#documentsList { overflow-x: auto }` clips the items.

@@ -19,7 +19,7 @@ author's copyright statement or silently substitute another release's text.
 
 `rust/inventory.json` in each artifact records package metadata and notice
 provenance. Its scope is explicitly a metadata superset, not the linked dependency
-closure. Existing native codec notices and the actual system dav1d license remain
+closure. Existing native codec notices and the actual dav1d license remain
 required separately.
 
 ## R134 dispatch exception

@@ -35,7 +35,7 @@ def collect_project(root, destination):
 def collect_native(packages, destination, dav1d_license):
     packages = {p['name']: p for p in packages if p['name'] in NATIVE_CRATES}
     if set(packages) != NATIVE_CRATES or not dav1d_license.is_file():
-        raise ValueError('Missing native codec package or system dav1d license')
+        raise ValueError('Missing native codec package or dav1d license')
     for name, package in packages.items():
         root = Path(package['manifest_path']).parent
         notices = [path for path in root.rglob('*') if path.is_file() and is_notice(path)]
@@ -43,7 +43,7 @@ def collect_native(packages, destination, dav1d_license):
             raise ValueError(f'Missing codec notices: {name}')
         for source in notices:
             copy(source, destination / 'codecs' / name / source.relative_to(root))
-    copy(dav1d_license, destination / 'codecs/system-dav1d/COPYING')
+    copy(dav1d_license, destination / 'codecs/libdav1d/COPYING')
 
 
 def supplemental_notices(package, supplement_root):
@@ -160,7 +160,7 @@ def collect(root, metadata, destination, kind, dav1d_license=None):
     collect_project(root, destination)
     if kind == 'native':
         if dav1d_license is None:
-            raise ValueError('Native distributions require the actual system dav1d license')
+            raise ValueError('Native distributions require the actual dav1d license')
         collect_native(metadata['packages'], destination, dav1d_license)
     collect_dependencies(metadata, destination)
 

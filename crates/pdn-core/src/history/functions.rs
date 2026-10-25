@@ -62,6 +62,7 @@ pub fn duplicate_layer(target: &mut UndoTarget) -> Option<HistoryMemento> {
         return None;
     }
     let mut new_layer = d.layers.get_at(layer_index)?.clone();
+    new_layer.id = Layer::fresh_id();
     new_layer.properties.is_background = false;
     // quirk: the memento records the SOURCE index, so undo removes the original layer (B-H1).
     let memento = HistoryMemento::new(

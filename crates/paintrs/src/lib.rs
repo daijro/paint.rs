@@ -6,6 +6,9 @@ pub mod forms;
 pub mod icon_pack;
 pub mod kit;
 pub mod language;
+// Live editing in a Playground session (web only).
+#[cfg(any(target_arch = "wasm32", test))]
+pub mod live;
 pub use language::apply_language;
 pub mod platform;
 pub mod prefs;
@@ -887,6 +890,12 @@ impl eframe::App for PaintApp {
         // Synthetic capture releases do not release a physically held button (PointerGone).
         // Keep the sampled frame-end state for polling and next frame's event-local replay.
         self.app.mouse_buttons = buttons;
+        // A Playground live session: the others' changes go in, this person's go out, and the others are drawn.
+        #[cfg(target_arch = "wasm32")]
+        {
+            live::frame(self, &ctx);
+            live::draw(self, ui);
+        }
     }
 }
 

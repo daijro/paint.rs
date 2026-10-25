@@ -324,6 +324,7 @@ pub fn resize_image(
             }
             // S§4.5: the image-wide commands rasterize a text layer silently, inside their entry.
             doc.layers.add_layer(Layer {
+                id: l.id,
                 properties: l.properties.clone(),
                 surface: Surface::from_data(w, h, data),
                 text: None,
@@ -372,6 +373,7 @@ pub fn change_canvas_size(
             }
             copy_at(&mut s, &l.surface, dx, dy);
             doc.layers.add_layer(Layer {
+                id: l.id,
                 properties: l.properties.clone(),
                 surface: s,
                 text: None,
@@ -423,6 +425,7 @@ pub fn crop_to_selection(app: &mut AppWorkspace) -> bool {
                 }
             }
             doc.layers.add_layer(Layer {
+                id: l.id,
                 properties: l.properties.clone(),
                 surface: s,
                 text: None,
@@ -471,6 +474,7 @@ pub fn transform_document(app: &mut AppWorkspace, t: Transform) -> Result<(), Op
             let mut s = try_surface(w, h)?;
             transform_into(l.surface.data(), d.width, d.height, t, s.data_mut());
             doc.layers.add_layer(Layer {
+                id: l.id,
                 properties: l.properties.clone(),
                 surface: s,
                 text: None,
@@ -547,6 +551,7 @@ pub fn flatten_document(app: &mut AppWorkspace) -> bool {
         let mut doc = Document::new(d.width, d.height, d.resolution);
         let name = i18n::t("layer.backgroundLayer.defaultName");
         doc.layers.add_layer(Layer {
+            id: Layer::fresh_id(),
             properties: LayerProperties::new(&name, true, true, 255),
             surface: d.composite(),
             text: None,
@@ -572,6 +577,83 @@ mod tests {
     use super::*;
     use crate::canvas::ImageData;
     use crate::testing::{fresh_doc, layer_bytes};
+
+    /// Each layer's id (bottom first): a live editing session merges layers by it.
+    fn layer_ids(app: &AppWorkspace) -> Vec<u64> {
+        let ws = app.active_ws().unwrap();
+        ws.document.layers.iter().map(|l| l.id).collect()
+    }
+
+    /// A live session raises the id counter past the ids it takes in, but never from an id near the end of the range:
+    /// the counter must not wrap onto ids in use.
+    #[test]
+    fn an_id_near_the_end_of_the_range_never_raises_the_layer_id_counter() {
+        let before = Layer::fresh_id();
+        Layer::ensure_ids_above(u64::MAX - 1);
+        Layer::ensure_ids_above(u64::MAX / 2);
+        let after = Layer::fresh_id();
+        assert!(
+            after > before && after < u64::MAX / 2,
+            "{before} then {after}"
+        );
+        Layer::ensure_ids_above(after + 10);
+        assert!(Layer::fresh_id() > after + 10);
+    }
+
+    /// Image-wide operations rebuild every layer and keep its id (so a live session merges their pixels instead of
+    /// deleting and adding layers); Duplicate Layer gives the copy an id of its own.
+    #[test]
+    fn image_wide_operations_keep_layer_ids_and_a_duplicate_gets_its_own() {
+        let mut app = fresh_doc(40, 30, Some(7));
+        app.active_ws_mut()
+            .unwrap()
+            .add_layer(Layer::create_layer(40, 30, "Top"));
+        let ids = layer_ids(&app);
+        resize_image(
+            &mut app,
+            20,
+            15,
+            crate::resample::ResizeMode::Bilinear,
+            crate::resample::Gamma::Linear,
+            96.0,
+        )
+        .unwrap();
+        assert_eq!(layer_ids(&app), ids, "Resize");
+        change_canvas_size(
+            &mut app,
+            30,
+            25,
+            Anchor::Middle,
+            CanvasFill::Transparent,
+            96.0,
+        )
+        .unwrap();
+        assert_eq!(layer_ids(&app), ids, "Canvas Size");
+        transform_document(&mut app, Transform::Rot90CW).unwrap();
+        assert_eq!(layer_ids(&app), ids, "Rotate");
+        crate::testing::drive_tool(
+            &mut app,
+            crate::tool::ToolType::RectangleSelect,
+            &[
+                crate::testing::Ev::Down(2.0, 2.0, crate::tool::MouseButton::Left),
+                crate::testing::Ev::Move(12.0, 10.0),
+                // A selection made faster than this is a click (§2.5).
+                crate::testing::Ev::Wait(60.0),
+                crate::testing::Ev::Up(12.0, 10.0, crate::tool::MouseButton::Left),
+            ],
+        );
+        assert!(crop_to_selection(&mut app));
+        assert_eq!(layer_ids(&app), ids, "Crop to Selection");
+        crate::action::perform(&mut app, "menu.layers.duplicate.layer");
+        let after = layer_ids(&app);
+        assert_eq!(after.len(), 3);
+        assert!(
+            after
+                .iter()
+                .all(|id| after.iter().filter(|x| *x == id).count() == 1),
+            "{after:?}"
+        );
+    }
 
     fn grid(w: u32, h: u32) -> ImageData {
         ImageData {
@@ -1170,6 +1252,7 @@ impl ImportBatch {
             let ws = app.active_ws_mut().unwrap();
             let index = ws.document.layers.size();
             ws.document.add_layer(Layer {
+                id: Layer::fresh_id(),
                 properties,
                 surface,
                 text: None,

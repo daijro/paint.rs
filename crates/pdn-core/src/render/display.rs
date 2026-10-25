@@ -350,14 +350,9 @@ impl DisplayTarget {
     /// The upload bytes of one pixel: Hardware `linear_to_srgb8` per channel (the DWM conversion,
     /// round to nearest), Software the stored bytes; alpha is the stored coverage.
     // calibrate: B-C8 — the DWM's f16 scRGB → 8-bit rounding (±1 proposed).
-    fn rgba8(&self, p: [f32; 4]) -> [u8; 4] {
+    fn rgba8(&self, t: &ToSrgb8, p: [f32; 4]) -> [u8; 4] {
         match self.mode {
-            RenderMode::Hardware => [
-                to_srgb8(p[0]),
-                to_srgb8(p[1]),
-                to_srgb8(p[2]),
-                quantize(p[3]),
-            ],
+            RenderMode::Hardware => [t.get(p[0]), t.get(p[1]), t.get(p[2]), quantize(p[3])],
             RenderMode::Software => p.map(quantize),
         }
     }
@@ -391,6 +386,7 @@ impl DisplayTarget {
         }
         let w = self.width as usize;
         let rows = area.y as usize..area.bottom() as usize;
+        let t = &*TO_SRGB8;
         for_bands(out, w, rows, 32, |y0, band| {
             let mut row = vec![];
             let y1 = (y0 + band.len() / w) as i32;
@@ -402,7 +398,7 @@ impl DisplayTarget {
                     paint(y as i32, r.x, &mut row);
                     let dst = &mut band[(y - y0) * w..][x0..x1];
                     for (o, &p) in dst.iter_mut().zip(&row) {
-                        *o = conv(self.rgba8(p));
+                        *o = conv(self.rgba8(t, p));
                     }
                 }
             }
@@ -418,12 +414,15 @@ impl DisplayTarget {
 }
 
 /// `linear_to_srgb8` through its decision thresholds: `thr[k]` is the least f32 with output ≥ k,
-/// `start[i]` the output at the f32 with bits i << 12 (positive f32s order like their bits); the
-/// f64 curve per channel would cost three `powf` a pixel.
+/// `start[i]` the output at the f32 with bits i << START_SHIFT (positive f32s order like their
+/// bits); the f64 curve per channel would cost three `powf` a pixel. A bucket of 2^15 f32s spans
+/// at most one threshold, so `start` stays small (32 KiB) and one compare usually settles it.
 struct ToSrgb8 {
     thr: [f32; 256],
     start: Vec<u8>,
 }
+
+const START_SHIFT: u32 = 15;
 
 static TO_SRGB8: LazyLock<ToSrgb8> = LazyLock::new(|| {
     let mut thr = [0f32; 256];
@@ -440,27 +439,32 @@ static TO_SRGB8: LazyLock<ToSrgb8> = LazyLock::new(|| {
         }
         *t = f32::from_bits(lo);
     }
-    let start = (0..=1f32.to_bits() >> 12)
-        .map(|i| linear_to_srgb8(f32::from_bits(i << 12)))
+    let start = (0..=1f32.to_bits() >> START_SHIFT)
+        .map(|i| linear_to_srgb8(f32::from_bits(i << START_SHIFT)))
         .collect();
     ToSrgb8 { thr, start }
 });
 
+impl ToSrgb8 {
+    /// Exactly `linear_to_srgb8(l)`.
+    #[inline]
+    fn get(&self, l: f32) -> u8 {
+        let b = l.to_bits();
+        // Not in (0, 1): NaN, negatives and 0 give 0; 1 and above 255.
+        if b.wrapping_sub(1) >= 1f32.to_bits() - 1 {
+            return if l >= 1.0 { 255 } else { 0 };
+        }
+        let mut k = self.start[(b >> START_SHIFT) as usize];
+        while k < 255 && l >= self.thr[k as usize + 1] {
+            k += 1;
+        }
+        k
+    }
+}
+
 /// Exactly `linear_to_srgb8(l)`.
 pub(crate) fn to_srgb8(l: f32) -> u8 {
-    // NaN, negatives and 0 give 0; 1 and above 255.
-    if l.is_nan() || l <= 0.0 {
-        return 0;
-    }
-    if l >= 1.0 {
-        return 255;
-    }
-    let t = &*TO_SRGB8;
-    let mut k = t.start[(l.to_bits() >> 12) as usize];
-    while k < 255 && l >= t.thr[k as usize + 1] {
-        k += 1;
-    }
-    k
+    TO_SRGB8.get(l)
 }
 
 #[cfg(test)]

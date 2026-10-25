@@ -1664,9 +1664,16 @@ pub fn is_executable(app: &AppWorkspace, id: &str) -> bool {
         "menu.file.new" | "menu.file.open" | "menu.edit.pasteInToNewImage" => true,
         "menu.file.save" | "menu.file.saveAs" | "menu.file.print" | "menu.file.close" => has_ws,
         "menu.file.saveAll" => app.documents.iter().any(|w| w.dirty),
-        "menu.edit.undo" => ws.is_some_and(|w| not_null(w.history.undo.last())),
+        // A live session takes them while it shares the image (`live`).
+        "menu.edit.undo" => {
+            crate::live::takes_undo(app, false, false)
+                || ws.is_some_and(|w| not_null(w.history.undo.last()))
+        }
         // quirk: Redo checks the far end of the redo stack, not the next memento.
-        "menu.edit.redo" => ws.is_some_and(|w| not_null(w.history.redo.back())),
+        "menu.edit.redo" => {
+            crate::live::takes_undo(app, true, false)
+                || ws.is_some_and(|w| not_null(w.history.redo.back()))
+        }
         // Extra: only while the newest history item is an effect or adjustment.
         "menu.edit.fade" => ws.is_some_and(|w| w.can_fade()),
         "menu.edit.eraseSelection"
@@ -1871,12 +1878,17 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
             Done
         }
         // Through the app, so the active tool's history hooks run.
+        // A live session takes them while it shares the image (`live`).
         "menu.edit.undo" => {
-            app.undo();
+            if !crate::live::takes_undo(app, false, true) {
+                app.undo();
+            }
             Done
         }
         "menu.edit.redo" => {
-            app.redo();
+            if !crate::live::takes_undo(app, true, true) {
+                app.redo();
+            }
             Done
         }
         // selection-and-move.md §2.6; Invert, Fill and Erase read the shared rendering quality.

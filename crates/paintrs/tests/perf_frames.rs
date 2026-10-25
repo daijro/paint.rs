@@ -31,6 +31,8 @@ struct Rig {
     virtual_time: bool,
     /// Running hash of every frame's texture uploads and tessellated meshes.
     hash: u64,
+    /// Texture bytes uploaded by `profile_loop`'s measured frames.
+    tex_bytes: usize,
     /// Every texture's pixels as the uploads left them, and the last frame's meshes: what the
     /// screen shows ([`Rig::screen`]; deterministic rigs).
     mirror: Option<(
@@ -88,6 +90,7 @@ impl Rig {
             deterministic,
             virtual_time,
             hash: 0,
+            tex_bytes: 0,
             mirror: deterministic.then(Default::default),
         };
         for _ in 0..5 {
@@ -113,6 +116,9 @@ impl Rig {
                 self.start.elapsed().as_secs_f64()
             }),
             predicted_dt: 1.0 / 60.0,
+            max_texture_side: std::env::var("PERF_MAX_TEXTURE")
+                .ok()
+                .map(|v| v.parse().unwrap()),
             focused: true,
             events,
             ..Default::default()
@@ -534,11 +540,15 @@ fn idle_settles() {
     }
 }
 
-/// One scenario's steady frames for a profiler: `PERF_SCENARIO` = idle | brush | zoom | pan | menu |
-/// rect (a Rectangle Select drag) | move (a Move Selected Pixels drag) | movepan (one that wheels
-/// the view each frame, as auto-scroll does), `PERF_DOC` = WxH, `PERF_PPP`, `PERF_IMAGE` =
+/// One scenario's steady frames for a profiler: `PERF_SCENARIO` = idle | hover (the pointer over
+/// the canvas) | tools (over the Tools window's buttons) | brush | zoom | pan | menu |
+/// rect (a Rectangle Select drag) | bigrect (one out to two thirds of the window) | move (a Move
+/// Selected Pixels drag) | movepan (one that wheels the view each frame, as auto-scroll does),
+/// `PERF_DOC` = WxH, `PERF_PPP`, `PERF_IMAGE` =
 /// translucent (the background layer see-through), `PERF_LAYERS` = 2 (a second, active layer over
-/// it), then `PERF_FRAMES` frames (or `PERF_SECS` seconds), 16 ms of app time apart. Instruction
+/// it), `PERF_MAX_TEXTURE` = the renderer's largest texture side (2048 here; WebGL's and WebGPU's
+/// 8192 keep a large view in one tile), then `PERF_FRAMES` frames (or `PERF_SECS` seconds), 16 ms
+/// of app time apart. Instruction
 /// counts: `valgrind --tool=callgrind --toggle-collect=perf_frames::steady_frames <test binary>
 /// profile_loop --ignored`.
 #[test]
@@ -598,8 +608,12 @@ fn profile_loop() {
             r.frame(vec![Event::PointerMoved(effects)]);
             r.frame(vec![press(effects, true), press(effects, false)]);
         }
-        "rect" | "move" | "movepan" => {
-            if scenario != "rect" {
+        "rect" | "bigrect" | "move" | "movepan" => {
+            let c = match scenario.as_str() {
+                "bigrect" => pos2(WINDOW.x * 0.2, WINDOW.y * 0.2),
+                _ => c,
+            };
+            if !scenario.ends_with("rect") {
                 pdn_core::action::perform(&mut r.app.app, "menu.edit.selectAll");
                 r.app.app.set_active_tool_from_type(ToolType::Move);
             } else {
@@ -620,7 +634,8 @@ fn profile_loop() {
     let start = Instant::now();
     let i = steady_frames(&mut r, &scenario, c, frames, secs);
     let ms = start.elapsed().as_secs_f64() * 1e3 / i.max(1) as f64;
-    println!("{scenario}: {i} frames, {ms:.2} ms a frame");
+    let kib = r.tex_bytes as f64 / 1024.0 / i.max(1) as f64;
+    println!("{scenario}: {i} frames, {ms:.2} ms a frame, {kib:.0} KiB of textures a frame");
 }
 
 /// The measured loop of [`profile_loop`] (a separate symbol for `callgrind --toggle-collect`).
@@ -658,7 +673,22 @@ fn steady_frames(r: &mut Rig, scenario: &str, c: Pos2, frames: usize, secs: f64)
                 362.0,
                 70.0 + (i % 40) as f32 * 12.0,
             ))],
+            "hover" => vec![Event::PointerMoved(c + vec2(a.cos(), a.sin()) * 150.0)],
+            // Up and down the Tools window's buttons.
+            "tools" => {
+                let k = if i % 80 < 40 { i % 40 } else { 40 - i % 40 } as f32;
+                let x = if (i / 8) % 2 == 0 { 25.0 } else { 55.0 };
+                vec![Event::PointerMoved(pos2(x, 130.0 + 9.0 * k))]
+            }
             "rect" | "move" => vec![Event::PointerMoved(c + vec2(3.0, 2.0) * (i % 100) as f32)],
+            // Out to two thirds of the window and back.
+            "bigrect" => {
+                let k = if i % 120 < 60 { i % 60 } else { 60 - i % 60 } as f32 / 100.0;
+                vec![Event::PointerMoved(pos2(
+                    WINDOW.x * (0.2 + k),
+                    WINDOW.y * (0.2 + k),
+                ))]
+            }
             "movepan" => {
                 let d = if (i / 20).is_multiple_of(2) {
                     -20.0
@@ -673,7 +703,8 @@ fn steady_frames(r: &mut Rig, scenario: &str, c: Pos2, frames: usize, secs: f64)
             }
             _ => vec![],
         };
-        r.frame(events);
+        let s = r.frame(events);
+        r.tex_bytes += s.tex_bytes;
         i += 1;
     }
     i

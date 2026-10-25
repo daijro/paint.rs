@@ -71,9 +71,9 @@ impl Renderer {
     /// These cover all painted pixels, not only the ants-dependent ones (`overlay_spans`).
     fn paint_rects(&self, ws: &DocumentWorkspace, t: &ViewTransform) -> Option<Vec<IntRect>> {
         match self {
-            // ponytail: a tint's interior is not listed (the overlay rect refreshes instead); list
-            // its spans if tinted moves need it.
-            Renderer::Selection(s) if s.visible && s.tinting => None,
+            Renderer::Selection(s) if s.visible && s.tinting => {
+                s.tint_parts(ws, t).map(|p| [p.outline, p.tint].concat())
+            }
             Renderer::Selection(s) => s.outline_spans(ws, t),
             Renderer::Handles(h) => Some(h.iter().filter_map(|h| nubs::device_box(t, h)).collect()),
             Renderer::BrushPreview(p) => Some(p.device_box(t).into_iter().collect()),
@@ -337,6 +337,20 @@ impl SurfaceBox {
         match self.renderer(id) {
             Some(r) if r.visible() => r.paint_rects(ws, t),
             _ => Some(vec![]),
+        }
+    }
+
+    /// Overlay `id`'s outline and tint runs when it is a tinting selection layer
+    /// (`SelectionRenderer::tint_parts`).
+    pub fn overlay_tint_parts(
+        &self,
+        ws: &DocumentWorkspace,
+        t: &ViewTransform,
+        id: RendererId,
+    ) -> Option<selection::TintParts> {
+        match self.renderer(id) {
+            Some(Renderer::Selection(s)) => s.tint_parts(ws, t),
+            _ => None,
         }
     }
 

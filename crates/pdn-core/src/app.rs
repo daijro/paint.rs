@@ -1274,6 +1274,10 @@ impl AppWorkspace {
     /// `HistoryStack.stepTo(id)` on the active document, one step at a time; false when no step
     /// ran.
     pub fn step_to(&mut self, id: u64) -> bool {
+        // A live session's Undo takes back this person's edits, not History steps.
+        if crate::live::takes_undo(self, false, false) {
+            return false;
+        }
         let Some(h) = self.active_ws().map(|ws| &ws.history) else {
             return false;
         };

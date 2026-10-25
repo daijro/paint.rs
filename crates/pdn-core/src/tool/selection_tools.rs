@@ -576,6 +576,26 @@ impl<S: SelectionShape> Tool for SelectionTool<S> {
         S::TOOL
     }
 
+    fn live_gesture(&self, app: &AppWorkspace) -> Option<super::LiveGesture> {
+        if !self.tracking || self.trace.len() < S::MIN_POINTS.max(1) {
+            return None;
+        }
+        let shape = S::shape(&self.trace, app);
+        let points = shape.iter().map(|p| [p.x, p.y]);
+        if S::TOOL == ToolType::LassoSelect {
+            return Some(super::LiveGesture::Lasso(points.collect()));
+        }
+        let rect = points.fold(None, |r: Option<[f64; 4]>, [x, y]| {
+            Some(r.map_or([x, y, x, y], |r| {
+                [r[0].min(x), r[1].min(y), r[2].max(x), r[3].max(y)]
+            }))
+        })?;
+        Some(super::LiveGesture::Band {
+            rect,
+            ellipse: S::TOOL == ToolType::EllipseSelect,
+        })
+    }
+
     /// [`add_live_layer`].
     fn on_activate(&mut self, app: &mut AppWorkspace) {
         self.update_cursor(app);

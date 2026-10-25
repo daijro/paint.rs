@@ -75,6 +75,11 @@ pub struct LayerForm {
     scaled: Scaled,
     /// Per row (document, layer index).
     rows: HashMap<(u64, usize), RowThumb>,
+    /// The rows shown, as each one's layer index and rectangle, the window's layer and the pass that showed them: where
+    /// a live session's dots for who is on which layer go (`crate::live`).
+    pub shown: Vec<(usize, Rect)>,
+    pub shown_layer: Option<egui::LayerId>,
+    pub shown_pass: u64,
 }
 
 impl Default for LayerForm {
@@ -84,6 +89,9 @@ impl Default for LayerForm {
             scaler: Scaler::default(),
             scaled: HashMap::new(),
             rows: HashMap::new(),
+            shown: Vec::new(),
+            shown_layer: None,
+            shown_pass: 0,
         }
     }
 }
@@ -254,6 +262,13 @@ impl LayerForm {
             .active_ws()
             .map_or_else(Vec::new, |ws| row_keys(&ws.document.layers));
         let slots = self.list.layout(ui, area, &keys, extent, now);
+        self.shown.clear();
+        self.shown.extend(
+            (slots.iter().enumerate())
+                .filter(|(_, slot)| slot.intersects(area))
+                .map(|(r, slot)| (n - 1 - r, slot.intersect(area))),
+        );
+        (self.shown_layer, self.shown_pass) = (Some(ui.layer_id()), ctx.cumulative_pass_nr());
         let dragging = self.list.dragging();
         let painter = ui.painter().with_clip_rect(area.intersect(ui.clip_rect()));
         let spec = FontSpec::new(FORM_FONT_SIZE);

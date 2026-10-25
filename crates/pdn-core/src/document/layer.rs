@@ -115,8 +115,13 @@ impl LayerProperties {
     }
 }
 
+static NEXT_LAYER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 #[derive(Clone)]
 pub struct Layer {
+    /// Identity, kept by copies of the layer (history, an image-wide rebuild); Duplicate Layer gives
+    /// the copy a fresh one. A live editing session merges layers by it.
+    pub id: u64,
     pub properties: LayerProperties,
     pub surface: Surface,
     /// A text layer's spec (S§4.5); `surface` is its rendered cache. `None`: a raster layer.
@@ -130,9 +135,23 @@ impl Layer {
             surface.clear(fill);
         }
         Self {
+            id: Self::fresh_id(),
             properties: LayerProperties::new("", true, false, 255),
             surface,
             text: None,
+        }
+    }
+
+    /// A new layer identity.
+    pub fn fresh_id() -> u64 {
+        NEXT_LAYER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// New layer identities from now on are above `id` (a live session takes in others' layers).
+    /// An `id` in the upper half of the range is ignored: the counter must never wrap onto ids in use.
+    pub fn ensure_ids_above(id: u64) {
+        if id < u64::MAX / 2 {
+            NEXT_LAYER_ID.fetch_max(id + 1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

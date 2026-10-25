@@ -22,7 +22,8 @@ const externalReads=reads;assert.deepEqual(await bytes(requestClipboardImage(327
 current=[own];assert.deepEqual(await bytes(requestClipboardImage(32768,100)),[124],'observed external replacement retires old token');
 await publish(123);current=[];assert.equal(await requestClipboardImage(32768,100),null,'empty is final');
 await publish(123);await writeClipboardText('external text');assert.equal(await requestClipboardImage(32768,100),null,'text is final');
-await publish(123);const failed=writeClipboardImage(Uint8Array.of(7));writes.at(-1).reject(Error('write denied'));await assert.rejects(failed,/denied/);await turns();
+await publish(123);const failed=writeClipboardImage(Uint8Array.of(7));writes.at(-1).reject(Error('write denied'));await turns();
+assert.deepEqual(Object.keys(writes.at(-1).items[0].data),['image/png'],'a refused marker write retries once with the PNG alone');writes.at(-1).reject(Error('write denied'));await assert.rejects(failed,/denied/);await turns();
 assert.deepEqual(await bytes(requestClipboardImage(32768,100)),[124],'failed replacement cannot restore older original');
 const a=writeClipboardImage(Uint8Array.of(1)),discarded=writeClipboardImage(Uint8Array.of(2)),b=writeClipboardImage(Uint8Array.of(3));await assert.rejects(discarded,/superseded/);
 const paste=requestClipboardImage(32768,100,image(0));writes.at(-1).resolve();await a;await turns();const old=current[0];writes.at(-1).resolve();await b;
@@ -38,5 +39,7 @@ current=[{types:captured.types,getType:async type=>type==='image/png'?captured.g
 const late=requestClipboardImage(32768,100);await turns();const replacement=writeClipboardImage(Uint8Array.of(7));writes.at(-1).resolve();await replacement;releaseMarker();
 assert.deepEqual(await bytes(late),[124],'retired ownership cannot restore old originals after a newer copy starts');
 assert.deepEqual(await bytes(requestClipboardImage(32768,100)),[7],'late read does not retire the newer successful publication');
+await publish(123);const fallback=writeClipboardImage(Uint8Array.of(9));writes.at(-1).reject(Object.assign(Error('Write permission denied.'),{name:'NotAllowedError'}));await turns();writes.at(-1).resolve();await fallback;await turns();
+const unowned=reads;assert.deepEqual(await bytes(requestClipboardImage(32768,100,image(124))),[124]);assert.equal(reads,unowned,'Chrome refusing the marker without permission: the PNG alone is published, unowned');
 supported=false;await publish(123);assert.deepEqual(await bytes(requestClipboardImage(32768,100)),[124],'unsupported custom format publishes PNG but does not claim ownership');
-console.log('PASS original-byte ownership, atomic same-item token, external replacement, empty/text, supersession, failure, denial and unsupported formats');
+console.log('PASS original-byte ownership, atomic same-item token, external replacement, empty/text, supersession, failure, denial, refused-marker PNG fallback and unsupported formats');

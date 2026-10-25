@@ -39,6 +39,17 @@ pub use types::ToolType;
 /// Tools keep their own release rule: brush and picker drags end on any release
 /// (painting-tools-1.md §8.7); selection/move tools retain their origin/owner-button rules
 /// (`selection-and-move.md §2.5` step 3).
+/// A gesture under way as the others in a live session see it, in canvas px.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LiveGesture {
+    /// A painting stroke so far, `size` px wide.
+    Stroke { size: f64, points: Vec<[f64; 2]> },
+    /// A lasso's path so far.
+    Lasso(Vec<[f64; 2]>),
+    /// A marquee's bounds `[x0, y0, x1, y1]` as it would select; `ellipse` for Ellipse Select.
+    Band { rect: [f64; 4], ellipse: bool },
+}
+
 pub trait Tool {
     fn tool_type(&self) -> ToolType;
     fn on_activate(&mut self, _app: &mut AppWorkspace) {}
@@ -111,6 +122,10 @@ pub trait Tool {
     /// cursor.
     fn busy(&self) -> bool {
         false
+    }
+    /// The gesture under way, for the others in a live session (`paintrs::live`) to see.
+    fn live_gesture(&self, _app: &AppWorkspace) -> Option<LiveGesture> {
+        None
     }
     /// The status bar's selection angle while a move transaction is open
     /// (`ui-drawn-graphics.md §2.10` "Selection info"); `None` for every other tool.

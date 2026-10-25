@@ -193,6 +193,7 @@ fn crop(app: &mut AppWorkspace, p: PerspectiveWarp) {
         let pixels = l.surface.get_image_data(0, 0, d.width, d.height);
         s.put_image_data(&rectify(&pixels, p.src, w, h), 0, 0);
         doc.layers.add_layer(Layer {
+            id: l.id,
             properties: l.properties.clone(),
             surface: s,
             text: None,
@@ -719,10 +720,20 @@ mod tests {
         drag(&mut app, PAPER[1], [110.0, 30.0]);
         set_option(&mut app, "cropToPlane", &json!(true));
         let size = crop_size(&mode(&app).dst);
+        let ids = |app: &AppWorkspace| {
+            let ws = app.active_ws().unwrap();
+            ws.document.layers.iter().map(|l| l.id).collect::<Vec<_>>()
+        };
+        let before = ids(&app);
         action(&mut app, "commit");
         let ws = app.active_ws().unwrap();
         assert_eq!((ws.document.width, ws.document.height), size);
         assert_eq!(ws.document.layers.size(), 2);
+        assert_eq!(
+            ids(&app),
+            before,
+            "the crop keeps every layer's id (a live session merges by it)"
+        );
         assert_eq!(history(&app).last().map(String::as_str), Some(CROP_NAME));
     }
 

@@ -144,5 +144,9 @@ fn main() {
         paintrs::platform::web::install_services(&runner).expect("web services");
         paintrs::platform::web::install_pen_input(&runner, &canvas)
             .expect("failed to install pen input");
+        // Live editing, offered to a Playground page (`paintrs::live`).
+        if let Err(e) = paintrs::live::web::attach(runner.clone()) {
+            eprintln!("live editing: {e:?}");
+        }
     });
 }

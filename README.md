@@ -139,9 +139,19 @@ Builds for Linux, Windows, macOS and the web are on the
 - The plain x86-64 downloads run on any x86-64 CPU. The `-avx2` ones are faster but need AVX2 (most
   Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If
   unsure, take the plain one.
-- On Linux, run `sh scripts/linux-install-desktop.sh ./paintrs` once to add a launcher entry and
-  the taskbar icon.
+- On Linux, the `.AppImage` is the whole app in one file. Make it executable with `chmod +x` and
+  run it. It needs FUSE, which most desktops have. Without FUSE, run it with
+  `--appimage-extract-and-run`. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04,
+  Debian 12, Fedora 36 or later).
+- For a launcher entry and the taskbar icon, use AppImageLauncher, or run the AppImage once with
+  `--appimage-extract` and then
+  `sh squashfs-root/usr/share/paint.rs/scripts/linux-install-desktop.sh /path/to/the.AppImage`.
+  You can delete `squashfs-root` after that.
+  From the `.tar.gz`, run `sh scripts/linux-install-desktop.sh ./paintrs` once.
 - The macOS and Windows builds are unsigned, so the system warns the first time you open them.
+  The macOS download needs macOS 11 or newer.
+- In the Linux `.tar.gz` and the Windows `.zip`, keep `paintrs` beside its `assets` folder. The
+  fonts load from there.
 - If the Windows app doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach
   that file when you report the problem. Setting the environment variable
   `PAINTRS_RENDERER=software` makes it draw without the graphics card. If there is no log at all,

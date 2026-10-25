@@ -620,13 +620,10 @@ fn new_id() -> String {
     let now = (js_sys::Date::now() * 1000.) as u128;
     format!("{now:x}-{:x}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
-async fn load_family(
-    family: &str,
-    style: FaceStyle,
-    policy: FontPolicy,
-) -> Result<Vec<u8>, String> {
+/// The bundled file a face request reads, relative to `assets/`. `None` for a system face.
+fn asset_path(family: &str, style: FaceStyle) -> Option<String> {
     let resolved = fonts::resolve_family(family);
-    let path = if resolved.eq_ignore_ascii_case("Carlito") {
+    if resolved.eq_ignore_ascii_case("Carlito") {
         Some(format!(
             "font/carlito/Carlito-{}.ttf",
             match style {
@@ -636,8 +633,6 @@ async fn load_family(
                 _ => "Regular",
             }
         ))
-    } else if resolved.eq_ignore_ascii_case("Selawik") {
-        return Ok(fonts::SELAWIK_REGULAR.to_vec());
     } else if family.eq_ignore_ascii_case("Anton") {
         Some("fonts/anton/Anton-Regular.ttf".into())
     } else if family.eq_ignore_ascii_case("Noto Color Emoji") {
@@ -652,8 +647,17 @@ async fn load_family(
             .iter()
             .find(|(f, _)| f.eq_ignore_ascii_case(resolved))
             .map(|(_, p)| format!("font/{p}"))
-    };
-    if let Some(path) = path {
+    }
+}
+async fn load_family(
+    family: &str,
+    style: FaceStyle,
+    policy: FontPolicy,
+) -> Result<Vec<u8>, String> {
+    if fonts::resolve_family(family).eq_ignore_ascii_case("Selawik") {
+        return Ok(fonts::SELAWIK_REGULAR.to_vec());
+    }
+    if let Some(path) = asset_path(family, style) {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let bytes = std::fs::read(asset_root().join(path)).map_err(|e| e.to_string())?;
@@ -681,11 +685,21 @@ async fn load_family(
 fn asset_root() -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|p| p.join("assets")))
-        .filter(|p| p.is_dir())
+        .map(|exe| std::fs::canonicalize(&exe).unwrap_or(exe))
+        .and_then(|exe| packaged_assets(&exe))
         .unwrap_or_else(|| {
             std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets"))
         })
+}
+/// R241: the downloads' `assets/`, the first that holds `font/`: beside the binary (the Linux
+/// tarball, the Windows zip), in a macOS bundle's Resources, or in the AppImage's usr/share.
+#[cfg(not(target_arch = "wasm32"))]
+fn packaged_assets(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let dir = exe.parent()?;
+    ["assets", "../Resources/assets", "../share/paint.rs/assets"]
+        .into_iter()
+        .map(|p| dir.join(p))
+        .find(|p| p.join("font").is_dir())
 }
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -945,5 +959,54 @@ mod color_retry_tests {
         assert!(fonts::registered_face(&family, FaceStyle::Regular).is_some());
         manager.ensure_family(&family, FaceStyle::Regular);
         assert!(!manager.busy());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod asset_tests {
+    use super::*;
+    #[test]
+    fn every_face_load_family_names_is_in_assets() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets"));
+        let families = ["Carlito", "Calibri", "Anton", "Noto Color Emoji"]
+            .into_iter()
+            .chain(fonts::SCRIPT_FALLBACKS.iter().map(|(f, ..)| *f))
+            .chain(fonts::BUNDLED.iter().map(|(f, _)| *f));
+        for family in families {
+            for style in [
+                FaceStyle::Regular,
+                FaceStyle::Bold,
+                FaceStyle::Semibold,
+                FaceStyle::Italic,
+                FaceStyle::BoldItalic,
+            ] {
+                let path = asset_path(family, style).expect(family);
+                assert!(root.join(&path).is_file(), "{family}: assets/{path}");
+            }
+        }
+    }
+    #[test]
+    fn packaged_assets_finds_each_download_layout() {
+        for (exe, assets) in [
+            ("paintrs", "assets"),
+            (
+                "paint.rs.app/Contents/MacOS/paintrs",
+                "paint.rs.app/Contents/Resources/assets",
+            ),
+            ("usr/bin/paintrs", "usr/share/paint.rs/assets"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let exe = dir.path().join(exe);
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            // The v0.1.1 tarball's assets/ held only the icons: a folder without font/ is skipped.
+            std::fs::create_dir_all(dir.path().join(assets)).unwrap();
+            assert_eq!(packaged_assets(&exe), None);
+            std::fs::create_dir_all(dir.path().join(assets).join("font")).unwrap();
+            let found = packaged_assets(&exe).expect(assets);
+            assert_eq!(
+                found.canonicalize().unwrap(),
+                dir.path().join(assets).canonicalize().unwrap()
+            );
+        }
     }
 }

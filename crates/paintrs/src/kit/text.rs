@@ -595,11 +595,29 @@ pub fn css_width(text: &str, size: f32) -> f32 {
     thread_local! {
         static CANVAS: std::cell::RefCell<pdn_core::canvas::Canvas> =
             std::cell::RefCell::new(pdn_core::canvas::Canvas::new(1, 1));
+        /// Widths measured so far, by size and text, for one family and font generation: every
+        /// frame measures the same labels, and a layout walks each glyph's outline.
+        static WIDTHS: std::cell::RefCell<WidthCache> = Default::default();
+    }
+    let family = UI_FACE.with(|m| m.borrow().family.clone());
+    let generation = pdn_core::canvas::text::font_generation();
+    let known = WIDTHS.with_borrow_mut(|c| {
+        if c.family != family || c.generation != generation {
+            *c = WidthCache {
+                family: family.clone(),
+                generation,
+                ..Default::default()
+            };
+        }
+        c.widths.get(&size.to_bits())?.get(text).copied()
+    });
+    if let Some(w) = known {
+        return w;
     }
     let w = CANVAS.with(|c| {
         let mut c = c.borrow_mut();
         c.set_font(pdn_core::canvas::Font {
-            family: UI_FACE.with(|m| m.borrow().family.clone()),
+            family,
             size_px: size as f64,
             bold: false,
             italic: false,
@@ -610,7 +628,29 @@ pub fn css_width(text: &str, size: f32) -> f32 {
     // "Height:"; HarfBuzz's float advances land a hair above) but not others (the toggles' "B"
     // centers as 13px); plain ceil keeps every scenario's pixels. Model HarfBuzz's advance
     // rounding if a layout lands on a pixel boundary.
-    ((w * 64.0).ceil() / 64.0) as f32
+    let w = ((w * 64.0).ceil() / 64.0) as f32;
+    WIDTHS.with_borrow_mut(|c| {
+        // ponytail: forgets everything past this many (texts that change, like the status bar's
+        // coordinates, would grow it forever); an LRU if a frame ever measures more than this.
+        if c.len > 4096 {
+            c.widths.clear();
+            c.len = 0;
+        }
+        c.len += 1;
+        c.widths
+            .entry(size.to_bits())
+            .or_default()
+            .insert(text.to_owned(), w);
+    });
+    w
+}
+
+#[derive(Default)]
+struct WidthCache {
+    family: String,
+    generation: u64,
+    len: usize,
+    widths: std::collections::HashMap<u32, std::collections::HashMap<String, f32>>,
 }
 
 /// GDI's advance of `text` in the tool strip's 9-pt UI font at 96 DPI, in DIPs (R24): each glyph's
@@ -804,6 +844,33 @@ pub fn draw_lines(
 #[cfg(test)]
 mod pdn_text_tests {
     use super::*;
+
+    /// A kept width is the measured one, until the family's font changes.
+    #[test]
+    fn css_widths_are_kept_until_the_fonts_change() {
+        // A family of this thread's own: other tests' fonts stay as they are.
+        let family = "css-width-cache-test";
+        UI_FACE.with(|m| m.borrow_mut().family = family.into());
+        let measure = |size: f32| {
+            let mut c = pdn_core::canvas::Canvas::new(1, 1);
+            c.set_font(pdn_core::canvas::Font {
+                family: family.into(),
+                size_px: size as f64,
+                bold: false,
+                italic: false,
+            });
+            ((c.measure_text("Width:").width * 64.0).ceil() / 64.0) as f32
+        };
+        let noto = css_width("Width:", 12.0);
+        assert_eq!(noto, measure(12.0));
+        assert_eq!(css_width("Width:", 12.0), noto);
+        assert_eq!(css_width("Width:", 24.0), measure(24.0));
+        pdn_core::canvas::text::register_font(family, pdn_core::fonts::CARLITO_REGULAR.to_vec());
+        let carlito = css_width("Width:", 12.0);
+        pdn_core::canvas::text::unregister_font(family);
+        assert_ne!(carlito, noto);
+        assert_eq!(css_width("Width:", 12.0), noto);
+    }
 
     /// `ui-text-and-glyphs.md §8.3`: A_gdi(12) of the paintdotjs-checked strings.
     #[test]

@@ -53,8 +53,10 @@ Image codecs: native builds link libjxl (the JPEG XL Project Authors, BSD-3-Clau
 bundled Highway (the Highway Project Authors, Apache-2.0 or BSD-3-Clause), Brotli (the Brotli
 Authors, MIT) and skcms (Google Inc., BSD-3-Clause), and libwebp (Google Inc., BSD-3-Clause)
 statically. The JPEG encoder (`jpeg-encoder`) is based in part on the work of the Independent JPEG
-Group. Native builds decode AVIF with the system dav1d library (Copyright © 2018-2025, VideoLAN and
-dav1d authors; BSD-2-Clause). HEIC and the AVIF container are read by heic-rs (MIT OR Apache-2.0,
+Group. Native builds decode AVIF with dav1d (Copyright © 2018-2025, VideoLAN and dav1d authors;
+BSD-2-Clause), whose x86 assembly is built with x86inc.asm (the x264 project, ISC). The Linux and
+macOS downloads link a pinned dav1d release statically and the Windows download carries the dav1d DLL.
+HEIC and the AVIF container are read by heic-rs (MIT OR Apache-2.0,
 https://github.com/tbraun96/heic-rs), vendored in `crates/vendor/heic-rs` with its licences and
 NOTICE and modified by paint.rs (its `PAINTRS-PATCH.md`: the colour of files without an `nclx` box,
 and the direction of `imir`). JPEG XR is decoded by openreadout-jpegxr, a port of Microsoft's jxrlib
@@ -161,9 +163,18 @@ MagicScaler is third-party code, not Paint.NET code. Its license:
 Some plugins were inspired by BoltBait's Paint.NET plugin pack. The `bb…` effects reproduce its
 behaviour from a written specification; no BoltBait code or artwork is included.
 
+Playground live editing: `crates/paintrs/src/live/playground_live.rs` is Playground's shared
+live-editing template (github.com/daijro/openplayground, `patches/live/playground_live.rs`),
+reformatted by rustfmt and otherwise unmodified.
+It is by paint.rs's author, and Playground licenses it under each app's own licence, here
+GPL-3.0-or-later (Playground's `patches/README.md`). `crates/paintrs/src/live.rs` and
+`crates/paintrs/src/live/peers.rs` are adapted from Playground's live-editing patch for PhotoCraft
+(`patches/photoshop/live.diff`), which Playground licenses under PhotoCraft's licence, below.
+
 PhotoCraft (ArtCraft Team and the PhotoCraft contributors, MIT License) — algorithms for the Extra
 effects and tools ported in `crates/pdn-core/src/extra/`, `crates/pdn-core/src/tool/` and
-`crates/paintrs/src/dialogs/` (from commits `ff47388` and `e6d6fb45`). PhotoCraft is
+`crates/paintrs/src/dialogs/` (from commits `ff47388` and `e6d6fb45`), and the live-editing adapter
+above. PhotoCraft is
 dual-licensed MIT OR Apache-2.0; paint.rs uses it under MIT. It is third-party code, not Paint.NET
 code. Its license:
 

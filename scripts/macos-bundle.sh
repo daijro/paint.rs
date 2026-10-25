@@ -22,8 +22,10 @@ for size in 16 32 128 256 512; do
     sips -z "$((size * 2))" "$((size * 2))" "$source_dir/assets/app-icon.png" --out "$work/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns -o "$work/AppIcon.icns" "$work/AppIcon.iconset"
-mkdir -p -- "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
+mkdir -p -- "$bundle/Contents/MacOS" "$bundle/Contents/Resources/assets"
 cp -- "$source_dir/packaging/macos/Info.plist" "$bundle/Contents/Info.plist"
 cp -- "$binary" "$bundle/Contents/MacOS/paintrs"
 chmod 755 "$bundle/Contents/MacOS/paintrs"
 cp -- "$work/AppIcon.icns" "$bundle/Contents/Resources/AppIcon.icns"
+# R241: the document fonts, with their licences, where paintrs looks in a bundle.
+cp -R -- "$source_dir/assets/font" "$source_dir/assets/fonts" "$bundle/Contents/Resources/assets/"

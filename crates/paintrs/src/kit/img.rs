@@ -68,13 +68,64 @@ impl Backdrop {
     }
 }
 
+/// A texture, its pixels and the last pass that used it.
+type Kept = (TextureHandle, Arc<ColorImage>, u64);
+
 /// Textures by key, with the pass that last used each; entries unused in the previous pass are
 /// dropped at the first use of a new pass.
 #[derive(Clone, Default)]
 struct Cache {
     /// Texture, its pixels (for `kit::shadow`'s backdrop replay), last pass used.
-    entries: HashMap<Key, (TextureHandle, Arc<ColorImage>, u64)>,
+    entries: HashMap<Key, Kept>,
+    /// `paint_pixels`' textures by their size and pixels, likewise.
+    pixels: HashMap<([usize; 2], Vec<Color32>), Kept>,
     pass: u64,
+}
+
+impl Cache {
+    /// Starts pass `pass`: drops what the previous pass did not use.
+    fn begin(&mut self, pass: u64) {
+        if self.pass != pass {
+            self.pass = pass;
+            self.entries.retain(|_, (_, _, used)| *used + 1 >= pass);
+            self.pixels.retain(|_, (_, _, used)| *used + 1 >= pass);
+        }
+    }
+}
+
+/// Paints `image`, one texel per device pixel, with its top-left at `at` (points on a
+/// device-pixel corner) as one textured quad (transparent texels leave what is under them), in
+/// place of a shape per pixel. Its texture is kept while a pass paints it, and
+/// [`texture_pixels`] has its pixels (`kit::shadow` replays it).
+pub fn paint_pixels(painter: &Painter, at: egui::Pos2, image: ColorImage) {
+    let ctx = painter.ctx();
+    let pass = ctx.cumulative_pass_nr();
+    let key = (image.size, image.pixels);
+    let hit = ctx.data_mut(|d| {
+        let cache = d.get_temp_mut_or_default::<Cache>(cache_id());
+        cache.begin(pass);
+        cache.pixels.get_mut(&key).map(|(t, _, used)| {
+            *used = pass;
+            t.clone()
+        })
+    });
+    let tex = hit.unwrap_or_else(|| {
+        let image = Arc::new(ColorImage::new(key.0, key.1.clone()));
+        let tex = ctx.load_texture("pixels", image.clone(), TextureOptions::NEAREST);
+        ctx.data_mut(|d| {
+            d.get_temp_mut_or_default::<Cache>(cache_id())
+                .pixels
+                .insert(key, (tex.clone(), image, pass))
+        });
+        tex
+    });
+    let size = tex.size_vec2() / painter.pixels_per_point();
+    painter.image(
+        tex.id(),
+        Rect::from_min_size(at, size),
+        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
 }
 
 fn cache_id() -> Id {
@@ -206,10 +257,7 @@ fn texture(ctx: &Context, key: Key, src: Option<Arc<image::RgbaImage>>) -> Optio
     let pass = ctx.cumulative_pass_nr();
     let hit = ctx.data_mut(|d| {
         let cache = d.get_temp_mut_or_default::<Cache>(cache_id());
-        if cache.pass != pass {
-            cache.pass = pass;
-            cache.entries.retain(|_, (_, _, used)| *used + 1 >= pass);
-        }
+        cache.begin(pass);
         cache.entries.get_mut(&key).map(|(t, _, used)| {
             *used = pass;
             t.clone()
@@ -241,12 +289,11 @@ fn texture(ctx: &Context, key: Key, src: Option<Arc<image::RgbaImage>>) -> Optio
     Some(tex)
 }
 
-/// The pixels of an icon texture this module rendered.
+/// The pixels of an icon texture this module rendered, or of a `paint_pixels` texture.
 pub fn texture_pixels(ctx: &Context, id: TextureId) -> Option<Arc<ColorImage>> {
     ctx.data_mut(|d| {
-        d.get_temp_mut_or_default::<Cache>(cache_id())
-            .entries
-            .values()
+        let cache = d.get_temp_mut_or_default::<Cache>(cache_id());
+        (cache.entries.values().chain(cache.pixels.values()))
             .find(|(t, ..)| t.id() == id)
             .map(|(_, img, _)| img.clone())
     })

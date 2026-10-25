@@ -12,6 +12,7 @@ pub mod history;
 pub mod i18n;
 pub mod io;
 pub mod js;
+pub mod live;
 pub mod pixel;
 pub mod render;
 pub mod resample;

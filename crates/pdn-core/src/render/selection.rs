@@ -362,6 +362,8 @@ fn stroke_runs(mask: &mut Mask, runs: &[Run], aa: bool, dash: Option<(f64, f64)>
 struct LayerMasks {
     rect: IntRect,
     interior: Vec<u8>,
+    /// The interior's runs of pixels, as one-row device rects sorted by row (tinting layers).
+    interior_runs: Vec<IntRect>,
     solid: Vec<u8>,
     dashed: Vec<Vec<u8>>,
     /// The pixels an ants frame can change (`spans`).
@@ -451,9 +453,11 @@ impl LayerMasks {
         #[cfg(target_arch = "wasm32")]
         let built: Option<Vec<Vec<u8>>> = wanted.iter().map(draw).collect();
         let mut built = built?.into_iter();
+        let interior = if tinting { built.next()? } else { vec![] };
         let mut m = LayerMasks {
             rect,
-            interior: if tinting { built.next()? } else { vec![] },
+            interior_runs: mask_runs(&interior, rect),
+            interior,
             solid: if outline { built.next()? } else { vec![] },
             dashed: built.collect(),
             spans: None,
@@ -536,6 +540,63 @@ impl LayerMasks {
 /// Outline runs closer than this are refreshed as one span: a span costs about as much as this
 /// many pixels.
 const SPAN_GAP: usize = 16;
+
+/// The runs of nonzero pixels of `mask` (row-major over `rect`) as one-row rects, sorted by row.
+fn mask_runs(mask: &[u8], rect: IntRect) -> Vec<IntRect> {
+    let mut out = vec![];
+    let w = rect.w as usize;
+    for (j, row) in mask.chunks_exact(w.max(1)).enumerate() {
+        let mut x = 0;
+        while let Some(a) = row[x..].iter().position(|&v| v != 0).map(|n| x + n) {
+            x = row[a..].iter().position(|&v| v == 0).map_or(w, |n| a + n);
+            out.push(IntRect::new(
+                rect.x + a as i32,
+                rect.y + j as i32,
+                (x - a) as u32,
+                1,
+            ));
+        }
+    }
+    out
+}
+
+/// The pixels of one-row rects `a` or `b` (each sorted by row, disjoint within it) but not both,
+/// as one-row rects sorted by row.
+pub(crate) fn xor_runs(a: &[IntRect], b: &[IntRect]) -> Vec<IntRect> {
+    let (mut i, mut j, mut out) = (0, 0, vec![]);
+    let mut edges = vec![];
+    while i < a.len() || j < b.len() {
+        let y = match (a.get(i), b.get(j)) {
+            (Some(p), Some(q)) => p.y.min(q.y),
+            (Some(p), None) => p.y,
+            (None, Some(q)) => q.y,
+            (None, None) => unreachable!(),
+        };
+        edges.clear();
+        for (runs, k) in [(a, &mut i), (b, &mut j)] {
+            while let Some(r) = runs.get(*k).filter(|r| r.y == y) {
+                edges.extend([r.x, r.right()]);
+                *k += 1;
+            }
+        }
+        // Inside an odd number of runs (one of the two lists): between edges 2k and 2k + 1.
+        edges.sort_unstable();
+        for &[x0, x1] in edges.as_chunks::<2>().0.iter().filter(|e| e[0] < e[1]) {
+            out.push(IntRect::new(x0, y, (x1 - x0) as u32, 1));
+        }
+    }
+    out
+}
+
+/// What a tinting layer paints, split for listing what changed between two frames: its outline
+/// (every pixel an outline frame paints) and its tint's runs, with the tint colour (the same
+/// colour over the same base gives the same pixels, wherever both frames tint).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TintParts {
+    pub highlight: [u8; 3],
+    pub outline: Vec<IntRect>,
+    pub tint: Vec<IntRect>,
+}
 
 /// §2.9 steps 1–3: the interior (aliased even-odd fill), the solid outline and `frames` dashed
 /// outlines of `polys` (image px) over the device rect `rect`. Geometry is scaled by `t.scale` and
@@ -1224,6 +1285,34 @@ impl SelectionRenderer {
         }
     }
 
+    /// A tinting layer's outline and tint runs (see [`TintParts`]); `None` when it does not tint,
+    /// or they are not listed (old masks drawn warped, or an outline too dense to list).
+    pub fn tint_parts(&self, ws: &DocumentWorkspace, t: &ViewTransform) -> Option<TintParts> {
+        if !self.visible || !self.tinting {
+            return None;
+        }
+        let (m, warp) = self.masks(ws, t)?;
+        let (dx, dy) = match warp {
+            None => (0, 0),
+            Some(Warp { shift, .. }) => shift?,
+        };
+        let outline = self.outline_spans(ws, t)?;
+        // As `painter`: within the drawn rect ∩ the canvas.
+        let drawn = warp.map_or(m.rect, |w| w.bounds);
+        let area = drawn.intersect(&t.image_pixel_bounds(ws.document.width, ws.document.height));
+        let tint = m
+            .interior_runs
+            .iter()
+            .map(|r| IntRect::new(r.x + dx, r.y + dy, r.w, 1).intersect(&area))
+            .filter(|r| !r.is_empty())
+            .collect();
+        Some(TintParts {
+            highlight: self.highlight,
+            outline,
+            tint,
+        })
+    }
+
     /// §2.9 steps 5–6 (`Painter::paint`) into `target`, inside its clip.
     pub fn render(&self, ws: &DocumentWorkspace, target: &mut DisplayTarget, t: &ViewTransform) {
         if let Some(p) = self.painter(ws, t, target.mode) {
@@ -1459,6 +1548,31 @@ fn outline_over(mode: RenderMode, m: &LayerMasks, dashed: &[u8], i: usize, px: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The runs one list alone covers: overlaps cancel, touching runs join, rows of one list only
+    /// pass through.
+    #[test]
+    fn xor_runs_keep_what_one_list_alone_covers() {
+        let r = |x, y, w| IntRect::new(x, y, w, 1);
+        let a = [r(0, 0, 10), r(20, 0, 5), r(0, 1, 4), r(3, 3, 2)];
+        let b = [r(5, 0, 10), r(0, 1, 4), r(4, 1, 2), r(7, 2, 1)];
+        assert_eq!(
+            xor_runs(&a, &b),
+            [
+                r(0, 0, 5),
+                r(10, 0, 5),
+                r(20, 0, 5),
+                r(4, 1, 2),
+                r(7, 2, 1),
+                r(3, 3, 2)
+            ]
+        );
+        assert_eq!(xor_runs(&a, &a), []);
+        assert_eq!(
+            mask_runs(&[0, 9, 9, 0, 9, 0, 0, 0], IntRect::new(5, 7, 4, 2)),
+            [r(6, 7, 2), r(5, 8, 1)]
+        );
+    }
 
     /// A footer request must not scan heavy geometry while every mask worker is occupied.
     #[test]

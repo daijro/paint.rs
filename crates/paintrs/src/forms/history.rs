@@ -153,6 +153,9 @@ impl HistoryForm {
         let enabled = ws.map_or((false, false), |ws| {
             (ws.history.undo.len() > 1, !ws.history.redo.is_empty())
         });
+        // A live session takes Undo and Redo while it shares the image (`crate::live`).
+        let live = |redo| pdn_core::live::takes_undo(app, redo, false);
+        let enabled = (enabled.0 || live(false), enabled.1 || live(true));
         let doc = ws.map(|ws| ws.document.id);
 
         // Paint.NET's rnd(20·s)-px rows (`ui-text-and-glyphs.md §2.1` "History items", §2.3;

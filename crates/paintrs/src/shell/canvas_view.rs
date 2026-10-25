@@ -20,6 +20,7 @@ use egui::{
 };
 use pdn_core::app::{AppEvent, AppWorkspace, MeasurementUnit};
 use pdn_core::fonts::WinMetrics;
+use pdn_core::pixel::IntRect;
 use pdn_core::pixel::mask::SelectionQuality;
 use pdn_core::render::Renderer;
 use pdn_core::render::canvas::{CanvasPixels, Upload};
@@ -63,6 +64,13 @@ pub struct CanvasView {
     texture: Tiles,
     /// The texture's pixels, written in place each render (also `kit::shadow`'s backdrop replay).
     pixels: Option<Arc<ColorImage>>,
+    /// A zoom draft at half resolution (`Upload::Half`), shown in place of `texture` at twice its
+    /// size until another upload, and its pixels.
+    half: Option<(Tiles, Arc<ColorImage>)>,
+    /// Where `texture` holds `pixels`: device px (x, y) at texel ((x + wrap[0]) mod w, (y +
+    /// wrap[1]) mod h), so a pan draft moves the copy instead of uploading every pixel; `None`
+    /// once the pixels changed under it (a zoom draft spread over them).
+    wrap: Option<[u32; 2]>,
     /// Per ruler (horizontal, vertical): its key, texture, labels and the texture's pixels.
     rulers: [Option<Ruler>; 2],
     /// The units box in the corner (the abbreviation is drawn as text each frame).
@@ -72,9 +80,23 @@ pub struct CanvasView {
     buttons: u8,
     /// `lastAutoScrollTime` (app ms).
     last_auto_scroll: f64,
-    /// The document and view last shown, and when the view last changed (app ms): a change soon
-    /// after another is a pan or zoom in progress.
-    view: Option<(u64, ViewTransform, f64)>,
+    /// The document and view last shown, and when the view last changed (app ms, frame): a change
+    /// soon after another, or in the frame after one, is a pan or zoom in progress.
+    view: Option<(u64, ViewTransform, f64, Option<u64>)>,
+    /// The canvas texture's top-left and the part of the canvas shown (not under the rulers), as last drawn: where a
+    /// live session draws the others (`crate::live`).
+    pub shown: Option<(Pos2, Rect)>,
+}
+
+/// The pieces of the span `[a, a + n)` of a `size`-long axis whose texels sit `wrap` further on,
+/// modulo `size`: (first px, first texel, length), at most two.
+fn wrapped(a: i32, n: i32, wrap: i32, size: i32) -> Vec<(i32, i32, i32)> {
+    let t = (a + wrap).rem_euclid(size);
+    let first = n.min(size - t);
+    [(a, t, first), (a + first, 0, n - first)]
+        .into_iter()
+        .filter(|p| p.2 > 0)
+        .collect()
 }
 
 /// A view change within this long of the last one draws a draft (`CanvasPixels::draft`); this
@@ -205,6 +227,11 @@ impl CanvasView {
         self.canvas.invalidate(rects);
     }
 
+    /// Whether the last render drew a pan or zoom draft.
+    pub fn drafted(&self) -> bool {
+        self.canvas.drafted()
+    }
+
     /// The next render redraws everything (tests compare it with what the frames redrew).
     pub fn refresh_all(&mut self) {
         self.canvas = CanvasPixels::default();
@@ -260,6 +287,7 @@ impl CanvasView {
         let Some(ws) = app.active_ws_mut() else {
             // No image (the last one closed, maybe mid-drag): its float and draft buffers go.
             self.canvas = CanvasPixels::default();
+            self.shown = None;
             return;
         };
         let animating = sync_selection_layers(ws, frame, frames, quality);
@@ -279,20 +307,23 @@ impl CanvasView {
         }
         let now = now_s * 1000.0;
         let doc = ws.document.id;
+        let frame = ui.ctx().cumulative_frame_nr();
         let gesture = match self.view {
-            Some((d, old, at)) if d == doc && old != t => {
-                self.view = Some((doc, t, now));
-                now - at < SETTLE_MS
+            Some((d, old, at, then)) if d == doc && old != t => {
+                self.view = Some((doc, t, now, Some(frame)));
+                // Frame after frame too: frames slower than SETTLE_MS would otherwise render each
+                // change exactly, which keeps them that slow (a large view on the web, a busy CPU).
+                now - at < SETTLE_MS || then.is_some_and(|f| f + 1 == frame)
             }
-            Some((d, _, at)) if d == doc => now - at < SETTLE_MS,
+            Some((d, _, at, _)) if d == doc => now - at < SETTLE_MS,
             _ => {
-                self.view = Some((doc, t, f64::NEG_INFINITY));
+                self.view = Some((doc, t, f64::NEG_INFINITY, None));
                 false
             }
         };
         self.canvas.draft = gesture;
         let floating = ws.float.is_some();
-        if let (true, Some((_, _, at))) = (gesture, self.view) {
+        if let (true, Some((_, _, at, _))) = (gesture, self.view) {
             let settle = (at + SETTLE_MS - now).max(0.0) / 1000.0;
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(settle));
@@ -305,26 +336,78 @@ impl CanvasView {
             let pixels = pixels;
             &mut Arc::make_mut(pixels).pixels[..]
         };
-        match self.canvas.render(ws, &t, &style, masks, out, conv) {
+        let upload = self.canvas.render(ws, &t, &style, masks, out, conv);
+        if !matches!(upload, Upload::Nothing | Upload::Half) {
+            self.half = None;
+        }
+        let ctx = ui.ctx();
+        // What the texture holds as it was: the pixels (unwrapped) unless panned.
+        let held = self.wrap == Some([0, 0]);
+        match upload {
             Upload::Nothing => {}
-            Upload::All => self.texture.upload(ui.ctx(), "canvas-view", image, None),
-            Upload::Rect(r) => self.texture.upload(ui.ctx(), "canvas-view", image, Some(r)),
+            Upload::Rect(r) if held => self.texture.upload(ctx, "canvas-view", image, Some(r)),
             // Row bands of them.
-            Upload::Spans(spans) => {
+            Upload::Spans(spans) if held => {
                 for r in span_bands(&spans, 32) {
-                    self.texture.upload(ui.ctx(), "canvas-view", image, Some(r));
+                    self.texture.upload(ctx, "canvas-view", image, Some(r));
                 }
+            }
+            Upload::Panned { d, rects }
+                if self.texture.single()
+                    && self.wrap.is_some()
+                    && image.size == [t.viewport[0] as usize, t.viewport[1] as usize] =>
+            {
+                // The texture's copy moves by `d` (its wrap), so only `rects` go up.
+                let [w, h] = [t.viewport[0] as i32, t.viewport[1] as i32];
+                let wrap = self.wrap.expect("checked");
+                let wrap = [
+                    (wrap[0] as i32 - d[0]).rem_euclid(w),
+                    (wrap[1] as i32 - d[1]).rem_euclid(h),
+                ];
+                for r in rects {
+                    for (x, tx, cw) in wrapped(r.x, r.w as i32, wrap[0], w) {
+                        for (y, ty, ch) in wrapped(r.y, r.h as i32, wrap[1], h) {
+                            let src = IntRect::new(x, y, cw as u32, ch as u32);
+                            self.texture
+                                .upload_at(ctx, image, src, [tx as usize, ty as usize]);
+                        }
+                    }
+                }
+                self.wrap = Some(wrap.map(|v| v as u32));
+            }
+            Upload::Half => {
+                let ([hw, hh], px) = self.canvas.half_shown().expect("Upload::Half");
+                let (mut tiles, small) = self.half.take().unwrap_or_default();
+                let mut small = Arc::try_unwrap(small).map_or_else(|_| vec![], |i| i.pixels);
+                small.clear();
+                small.extend(px.iter().map(|&p| conv(p)));
+                let small = Arc::new(ColorImage::new([hw as usize, hh as usize], small));
+                tiles.upload(ctx, "canvas-half", &small, None);
+                self.half = Some((tiles, small));
+                // The pixels change under the texture's copy once a pan spreads these over them.
+                self.wrap = None;
+            }
+            // Everything (whatever the texture held).
+            _ => {
+                self.texture.upload(ctx, "canvas-view", image, None);
+                self.wrap = Some([0, 0]);
             }
         }
         // While the canvas changes every frame, the windows over it blend it on the GPU.
         if self.canvas.drafted() || floating {
-            crate::kit::shadow::set_live(ui.ctx(), self.texture.ids());
+            let shown = self.half.as_ref().map_or(&self.texture, |h| &h.0);
+            crate::kit::shadow::set_live(ctx, shown.ids());
         }
-        self.texture.paint(
-            &ui.painter().with_clip_rect(visible),
-            snap(rect.min, ppp),
-            ppp,
-        );
+        let painter = ui.painter().with_clip_rect(visible);
+        let min = snap(rect.min, ppp);
+        match (&self.half, self.wrap) {
+            (Some((half, _)), _) => half.paint_scaled(&painter, min, ppp, 2.0),
+            (None, Some(wrap)) if wrap != [0, 0] => {
+                self.texture.paint_wrapped(&painter, min, ppp, wrap)
+            }
+            _ => self.texture.paint(&painter, min, ppp),
+        }
+        self.shown = Some((min, visible));
         record_pdn_rect(ui.ctx(), visible);
         paint_perspective(
             &ui.painter().with_clip_rect(visible),
@@ -1218,6 +1301,15 @@ mod tests {
 
     /// Ticks cover column ⌈x − ½⌉ from the row above the border upwards, the border is the last
     /// row, the marker blends HotTrack at 50 %; the vertical strip is the transpose.
+    /// A span's pieces in a wrapped axis: the texels after the wrap, then from the start.
+    #[test]
+    fn wrapped_spans_split_at_the_end() {
+        assert_eq!(wrapped(2, 5, 0, 10), [(2, 2, 5)]);
+        assert_eq!(wrapped(2, 5, 4, 10), [(2, 6, 4), (6, 0, 1)]);
+        assert_eq!(wrapped(0, 10, 7, 10), [(0, 7, 3), (3, 0, 7)]);
+        assert_eq!(wrapped(5, 3, 2, 10), [(5, 7, 3)]);
+    }
+
     #[test]
     fn ruler_strip_pixels() {
         let ticks = RulerTicks {

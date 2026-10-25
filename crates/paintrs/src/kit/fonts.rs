@@ -128,8 +128,29 @@ pub fn install(defs: &mut FontDefinitions) {
 }
 
 /// Blink's ascent/descent for a face (SkFontMetrics through FreeType: OS/2 typo metrics when
-/// `USE_TYPO_METRICS` is set, else hhea), in em.
-fn metrics(family: &str, path: &str) -> (f32, f32) {
+/// `USE_TYPO_METRICS` is set, else hhea), in em; kept per face until a font registers or goes
+/// (windows ask for their close glyph's every frame).
+fn metrics(family: &'static str, path: &str) -> (f32, f32) {
+    /// The font generation, and each face's metrics read since.
+    type Known = (u64, Vec<(&'static str, (f32, f32))>);
+    thread_local! {
+        static KNOWN: std::cell::RefCell<Known> = Default::default();
+    }
+    let generation = pdn_core::canvas::text::font_generation();
+    let known = KNOWN.with_borrow_mut(|(g, known)| {
+        if *g != generation {
+            (*g, *known) = (generation, vec![]);
+        }
+        known.iter().find(|k| k.0 == family).map(|k| k.1)
+    });
+    known.unwrap_or_else(|| {
+        let m = read_metrics(family, path);
+        KNOWN.with_borrow_mut(|(_, known)| known.push((family, m)));
+        m
+    })
+}
+
+fn read_metrics(family: &str, path: &str) -> (f32, f32) {
     let fetched = pdn_core::fonts::registered_face(family, pdn_core::fonts::FaceStyle::Regular);
     let face = crate::assets::embedded_font(path)
         .or(fetched.as_deref())

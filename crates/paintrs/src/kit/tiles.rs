@@ -191,10 +191,16 @@ impl Tiles {
             bump(ctx, self.0.iter().map(|(t, _)| t.id()), None);
             return;
         }
+        // A whole tile goes in as an update from its corner: egui's renderers make a new GPU
+        // texture (and bind group) for a full `set`, which a pan or zoom did every frame.
         match dirty {
             None => {
                 for (tex, r) in &mut self.0 {
-                    tex.set(Self::tile(image, *r, single), TextureOptions::NEAREST);
+                    tex.set_partial(
+                        [0, 0],
+                        Self::tile(image, *r, single),
+                        TextureOptions::NEAREST,
+                    );
                 }
                 bump(ctx, self.0.iter().map(|(t, _)| t.id()), None);
             }
@@ -204,7 +210,11 @@ impl Tiles {
                 if single && 2 * d.w as usize * d.h as usize > image.size[0] * image.size[1] =>
             {
                 let (tex, _) = &mut self.0[0];
-                tex.set(Self::tile(image, grid[0], true), TextureOptions::NEAREST);
+                tex.set_partial(
+                    [0, 0],
+                    Self::tile(image, grid[0], true),
+                    TextureOptions::NEAREST,
+                );
                 bump(ctx, [tex.id()], Some(d.intersect(&grid[0])));
             }
             Some(d) => {
@@ -218,14 +228,65 @@ impl Tiles {
         }
     }
 
+    /// Whether the image is in one texture.
+    pub(crate) fn single(&self) -> bool {
+        self.0.len() == 1
+    }
+
+    /// Copies rect `src` of `image` into the lone tile at texel `at`, and logs those texels.
+    pub(crate) fn upload_at(
+        &mut self,
+        ctx: &Context,
+        image: &Arc<ColorImage>,
+        src: IntRect,
+        at: [usize; 2],
+    ) {
+        let part = crop(&image.pixels, image.size[0], src);
+        let (tex, _) = &mut self.0[0];
+        tex.set_partial(at, part, TextureOptions::NEAREST);
+        let texels = IntRect::new(at[0] as i32, at[1] as i32, src.w, src.h);
+        bump(ctx, [tex.id()], Some(texels));
+    }
+
+    /// The lone tile, one texel per device pixel from the device-aligned `min`, with device px
+    /// (x, y) taking texel ((x + wrap[0]) mod w, (y + wrap[1]) mod h): up to four quads.
+    pub(crate) fn paint_wrapped(&self, painter: &Painter, min: Pos2, ppp: f32, wrap: [u32; 2]) {
+        let (tex, r) = &self.0[0];
+        let (w, h) = (r.w, r.h);
+        // (first device px, first texel, length) of each piece.
+        let pieces = |off: u32, n: u32| [(0, off, n - off), (n - off, 0, off)];
+        for (x, tx, cw) in pieces(wrap[0], w).into_iter().filter(|p| p.2 > 0) {
+            for (y, ty, ch) in pieces(wrap[1], h).into_iter().filter(|p| p.2 > 0) {
+                let uv = |t: u32, n: u32| t as f32 / n as f32;
+                painter.image(
+                    tex.id(),
+                    Rect::from_min_size(
+                        min + Vec2::new(x as f32, y as f32) / ppp,
+                        Vec2::new(cw as f32, ch as f32) / ppp,
+                    ),
+                    Rect::from_min_max(
+                        Pos2::new(uv(tx, w), uv(ty, h)),
+                        Pos2::new(uv(tx + cw, w), uv(ty + ch, h)),
+                    ),
+                    Color32::WHITE,
+                );
+            }
+        }
+    }
+
     /// One texel per device pixel from the device-aligned `min`.
     pub(crate) fn paint(&self, painter: &Painter, min: Pos2, ppp: f32) {
+        self.paint_scaled(painter, min, ppp, 1.0);
+    }
+
+    /// One texel per `scale` × `scale` device pixels from the device-aligned `min`.
+    pub(crate) fn paint_scaled(&self, painter: &Painter, min: Pos2, ppp: f32, scale: f32) {
         for (tex, r) in &self.0 {
             painter.image(
                 tex.id(),
                 Rect::from_min_size(
-                    min + Vec2::new(r.x as f32, r.y as f32) / ppp,
-                    Vec2::new(r.w as f32, r.h as f32) / ppp,
+                    min + Vec2::new(r.x as f32, r.y as f32) * scale / ppp,
+                    Vec2::new(r.w as f32, r.h as f32) * scale / ppp,
                 ),
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                 Color32::WHITE,
@@ -305,6 +366,26 @@ mod tests {
         assert!(changed_within(&ctx, ids[1], v0[1], r(4, 4, 1, 1)));
         assert!(!changed_within(&ctx, ids[1], v0[1], r(8, 8, 8, 8)));
         assert!(!changed_within(&ctx, ids[0], v0[0], r(0, 0, 16, 16)));
+    }
+
+    /// Whole uploads of an existing texture update it in place (a full delta would make the
+    /// renderer allocate a new GPU texture).
+    #[test]
+    fn whole_uploads_update_the_texture_in_place() {
+        let ctx = Context::default();
+        let image = Arc::new(ColorImage::filled([64, 32], Color32::WHITE));
+        let mut tiles = Tiles::default();
+        let positions = |ctx: &Context, tiles: &Tiles| -> Vec<Option<[usize; 2]>> {
+            let mut delta = ctx.tex_manager().write().take_delta();
+            let positions = delta.set[&tiles.ids()[0]].iter().map(|d| d.pos).collect();
+            delta.clear();
+            positions
+        };
+        tiles.upload(&ctx, "t", &image, None);
+        assert_eq!(positions(&ctx, &tiles), [None]);
+        tiles.upload(&ctx, "t", &image, None);
+        tiles.upload(&ctx, "t", &image, Some(r(0, 0, 60, 30)));
+        assert_eq!(positions(&ctx, &tiles), [Some([0, 0]), Some([0, 0])]);
     }
 
     /// Textures stay within `max_texture_side` (kittest's and egui's default is 2048).
