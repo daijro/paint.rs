@@ -416,21 +416,10 @@ fn credits<'a>(theme: &theme::Theme) -> Vec<(Run<'a>, Option<&'a str>)> {
     runs
 }
 
-/// The Welcome dialog's section: its heading and story.
-fn welcome_story() -> (&'static str, &'static str) {
-    (
-        "What is paint.rs?",
-        "paint.rs is a Rust reimplementation of Paint.NET's image editor for Windows, macOS, Linux \
-         and the web. It follows Paint.NET 5.1's behavior and the layout of paint.js.",
-    )
-}
-
 /// Everything below the banner, laid out for the copy's width.
 struct Summary<'a> {
     heading: Paragraph<'a>,
     credits: Paragraph<'a>,
-    /// Welcome: the story paragraph.
-    story: Option<Paragraph<'a>>,
     fonts: Vec<Paragraph<'a>>,
 }
 
@@ -461,11 +450,9 @@ impl Dialog for AboutDialog {
         let (copy_gap, copy_top, copy_x) = PROJECT_INFO_COPY;
         let copy_w = content_w - 2.0 * copy_x;
         let (credit_py, credit_px, credit_border, credit_mix) = PROJECT_INFO_CREDIT;
-        let (section_py, section_px) = PROJECT_INFO_SECTION;
         let line = copy_line(ui.ctx().pixels_per_point());
         let version = format!("Version {}", version());
         let fonts = bundled_fonts();
-        let (story_heading, story_text) = welcome_story();
         let mut copy = Summary {
             heading: Paragraph::new(
                 ui,
@@ -479,15 +466,6 @@ impl Dialog for AboutDialog {
                 credits(&theme),
                 copy_w - credit_border - 2.0 * credit_px,
             ),
-            story: self.welcome.then(|| {
-                let w = copy_w - 2.0 * (DIALOG_BORDER + section_px);
-                Paragraph::new(
-                    ui,
-                    "story",
-                    vec![(plain(story_text, theme.muted_text), None)],
-                    w,
-                )
-            }),
             fonts: vec![],
         };
         let (list_h, list_py, list_px, list_lh) = LICENSE_LIST;
@@ -519,14 +497,11 @@ impl Dialog for AboutDialog {
                 .collect();
         }
         let credits_h = copy.credits.height(line) + 2.0 * credit_py;
-        let details_h = match &copy.story {
-            Some(story) => {
-                2.0 * (DIALOG_BORDER + section_py)
-                    + line
-                    + PROJECT_INFO_H3_MARGIN
-                    + story.height(line)
-            }
-            None => line + PROJECT_INFO_H3_MARGIN + list_h,
+        // About: the font licenses below the credits; Welcome ends with the credits.
+        let details_h = if self.welcome {
+            0.0
+        } else {
+            copy_gap + line + PROJECT_INFO_H3_MARGIN + list_h
         };
         // .project-info-summary-heading: the tagline is a flex item beside the version, wrapping
         // within the width left to it.
@@ -537,13 +512,14 @@ impl Dialog for AboutDialog {
             copy_w - version_w - PROJECT_INFO_HEADING_GAP,
         );
         let heading_h = tagline.len() as f32 * line;
-        let copy_h = copy_top + heading_h + copy_gap + credits_h + copy_gap + details_h + copy_x;
+        let copy_h = copy_top + heading_h + copy_gap + credits_h + details_h + copy_x;
         let body_h = pad_top + PROJECT_INFO_BANNER + copy_h + pad_bottom;
 
         let list_content = 2.0 * list_py as f64 + entries.len() as f64 * list_line as f64;
         let title = self.title();
         let list_scroll = &mut self.list_scroll;
         let mut license = None;
+        let welcome = self.welcome;
         let mut body = |ui: &mut Ui, r: Rect| {
             let ctx = ui.ctx().clone();
             let ppp = ctx.pixels_per_point();
@@ -606,66 +582,44 @@ impl Dialog for AboutDialog {
                 line,
                 theme.link_hover,
             );
+            if welcome {
+                return;
+            }
             y += credits_h + copy_gap;
             // .project-info-summary-details
             let heading_spec = FontSpec::new(DIALOG_FONT_SIZE).bold().line_height(line);
-            match &mut copy.story {
-                Some(story) => {
-                    let section =
-                        Rect::from_min_size(Pos2::new(x, y), Vec2::new(copy_w, details_h));
-                    let s = px::snap_rect(section, ppp);
-                    let bw = px::border_width(DIALOG_BORDER, ppp);
-                    painter.rect_filled(s, 0.0, theme.dialog_border);
-                    painter.rect_filled(s.shrink(bw), 0.0, theme.dialog_surface_alt);
-                    let mut at = section.min
-                        + Vec2::splat(DIALOG_BORDER)
-                        + Vec2::new(section_px, section_py);
-                    text::draw(
-                        &painter,
-                        at,
-                        story_heading,
-                        heading_spec,
-                        theme.menu_item_text,
-                    );
-                    at.y += line + PROJECT_INFO_H3_MARGIN;
-                    story.show_links(ui, at, line, theme.link_hover);
-                }
-                None => {
-                    text::draw(
-                        &painter,
-                        Pos2::new(x, y),
-                        "Bundled font licenses",
-                        heading_spec,
-                        theme.menu_item_text,
-                    );
-                    let list = Rect::from_min_size(
-                        Pos2::new(x, y + line + PROJECT_INFO_H3_MARGIN),
-                        Vec2::new(copy_w, list_h),
-                    );
-                    let entries = &mut copy.fonts;
-                    scroll_box(
-                        ui,
-                        list,
-                        list_content,
-                        list_scroll,
-                        "licenses",
-                        |ui, top, view| {
-                            for (i, entry) in entries.iter_mut().enumerate() {
-                                let at = top + Vec2::new(0.0, i as f32 * list_line);
-                                if at.y + list_line < view.min.y || at.y > view.max.y {
-                                    continue;
-                                }
-                                if let Some(family) = entry.show(ui, at, list_line, list_link) {
-                                    license = Some(family);
-                                }
-                            }
-                        },
-                    );
-                }
-            }
+            text::draw(
+                &painter,
+                Pos2::new(x, y),
+                "Bundled font licenses",
+                heading_spec,
+                theme.menu_item_text,
+            );
+            let list = Rect::from_min_size(
+                Pos2::new(x, y + line + PROJECT_INFO_H3_MARGIN),
+                Vec2::new(copy_w, list_h),
+            );
+            let entries = &mut copy.fonts;
+            scroll_box(
+                ui,
+                list,
+                list_content,
+                list_scroll,
+                "licenses",
+                |ui, top, view| {
+                    for (i, entry) in entries.iter_mut().enumerate() {
+                        let at = top + Vec2::new(0.0, i as f32 * list_line);
+                        if at.y + list_line < view.min.y || at.y > view.max.y {
+                            continue;
+                        }
+                        if let Some(family) = entry.show(ui, at, list_line, list_link) {
+                            license = Some(family);
+                        }
+                    }
+                },
+            );
         };
 
-        let welcome = self.welcome;
         let dont_show_again = &mut self.dont_show_again;
         // `footer.querySelector("button").focus()`, and ModalDialogController.sync later.
         let request_focus = cx.seat_focus;

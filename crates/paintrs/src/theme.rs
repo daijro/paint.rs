@@ -1222,9 +1222,7 @@ pub const PROJECT_INFO_WORDMARK: (f32, f32) = (50.0, -2.5); // size, letter spac
 pub const PROJECT_INFO_COPY: (f32, f32, f32) = (12.0, 8.0, 2.0); // gap, padding top, padding x/bottom
 pub const PROJECT_INFO_HEADING_GAP: f32 = 10.0;
 pub const PROJECT_INFO_CREDIT: (f32, f32, f32, f32) = (9.0, 11.0, 3.0, 0.76); // padding y, x, border, mix
-/// `.project-info-summary-details section { padding: 11px 12px; border: 1px }`, `h3 { margin: 0
-/// 0 5px }`.
-pub const PROJECT_INFO_SECTION: (f32, f32) = (11.0, 12.0); // padding y, x
+/// `.project-info-summary-details h3 { margin: 0 0 5px }`.
 pub const PROJECT_INFO_H3_MARGIN: f32 = 5.0;
 /// `.project-info-font-license-list { height: 200px; overflow-y: scroll; padding: 5px 7px; color:
 /// #000; background: #fff; border: 1px solid #7a7a7a; line-height: 1.55 }`, its links `#06c`,

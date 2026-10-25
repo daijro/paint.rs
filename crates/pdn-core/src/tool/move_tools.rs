@@ -27,6 +27,7 @@ use super::base::ToolBase;
 use super::move_render::{
     MoveCache, MoveInterpolation, MoveRender, bake_stamps, render_moved_into,
 };
+use super::snap::{SNAP_PX, SnapLine, SnapTargets};
 use super::transacted::{self, DynTransacted, Edit, State, Transacted, Transaction};
 use super::{CursorRequest, KeyPress, MouseButton, PointerInput, Tool, ToolType};
 use crate::app::AppWorkspace;
@@ -625,6 +626,10 @@ struct Drag {
     gesture: Gesture,
     /// S§4.6: where the last applied step put the pixels, the press's placement at first.
     at: Stamp,
+    /// Snap (Extra): a translate's targets and the moved bounds at the press, with Snap on.
+    snap: Option<(SnapTargets, [f64; 4])>,
+    /// The alignments the last step snapped to.
+    lines: Vec<SnapLine>,
 }
 
 /// The gesture feeding the open Drawing or pointer edit.
@@ -927,6 +932,33 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         on.then_some(corner)
     }
 
+    /// Snap (Extra): a translate's targets, built at the press with Snap on. Move Selected Pixels
+    /// leaves out the layer it lifts from; the selection being moved is never a target.
+    fn snap_targets(app: &AppWorkspace, from: &MoveToolContext) -> Option<(SnapTargets, [f64; 4])> {
+        if app.tool_settings.get(Self::TOOL, "snap") != true {
+            return None;
+        }
+        let ws = app.active_ws()?;
+        let targets = SnapTargets::from_workspace(ws, PIXELS.then_some(ws.active_layer));
+        let b = from.bounds(&(from.m, from.quad));
+        Some((targets, [b.left(), b.top(), b.right(), b.bottom()]))
+    }
+
+    /// Snap (Extra): the translate offset `d` with the moved bounds snapped within 8 screen px
+    /// (PhotoCraft's Move tool); Ctrl held while dragging moves freely. Keeps the alignments.
+    fn snap_step(app: &AppWorkspace, d: &mut Drag, offset: [f64; 2]) -> [f64; 2] {
+        d.lines.clear();
+        let (Some((targets, rect)), Some((hw, u))) = (&d.snap, Self::hair_width(app)) else {
+            return offset;
+        };
+        if app.control_key_down {
+            return offset;
+        }
+        let (offset, lines) = targets.snap_move(*rect, offset, SNAP_PX * u * hw);
+        d.lines = lines;
+        offset
+    }
+
     /// The record the drag `d` makes at `p` (§2.8 rows "Translate", "Rotate", "Scale handles",
     /// "Shift on scale", "Scale pixel snap"); Shift and Alt are read live.
     fn gesture_record(app: &AppWorkspace, d: &mut Drag, p: Point) -> MoveToolContext {
@@ -940,6 +972,7 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         match d.gesture {
             // A drag is never a paste; it only names the opening entry.
             Gesture::Translate | Gesture::Paste => {
+                let [dx, dy] = Self::snap_step(app, d, [dx, dy]);
                 let (tx, ty) = truncate_translation(dx, dy);
                 let mut e = Matrix::identity();
                 e.translate(tx, ty);
@@ -1521,6 +1554,9 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
             from.copy = true;
             transacted::update(self, app, from.clone());
         }
+        let snap = (gesture == Gesture::Translate)
+            .then(|| Self::snap_targets(app, &from))
+            .flatten();
         self.live = Some(Live::Pointer(Box::new(Drag {
             button: b,
             start: p,
@@ -1528,6 +1564,8 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
             at: (from.m, from.quad),
             from,
             gesture,
+            snap,
+            lines: vec![],
         })));
         self.control.hidden = matches!(gesture, Gesture::Translate | Gesture::Rotate);
         self.sync_handles(app);
@@ -1577,21 +1615,16 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
         true
     }
 
-    /// Arrow keys nudge (not during a drag); Enter and Escape commit and deselect (§2.8).
+    /// Arrow keys nudge by every held arrow (not during a drag); Enter and Escape commit and
+    /// deselect (§2.8).
     fn on_key_press(&mut self, app: &mut AppWorkspace, key: &KeyPress) -> bool {
         if key.meta {
             return false;
         }
-        let arrow = match key.key.as_str() {
-            "ArrowLeft" => Some((-1.0, 0.0)),
-            "ArrowRight" => Some((1.0, 0.0)),
-            "ArrowUp" => Some((0.0, -1.0)),
-            "ArrowDown" => Some((0.0, 1.0)),
-            _ => None,
-        };
+        let arrow = super::arrow_nudge(app, &key.key);
         match (arrow, key.key.as_str()) {
             (Some((dx, dy)), _) if !key.alt => {
-                if self.dragging().is_none() {
+                if self.dragging().is_none() && (dx, dy) != (0.0, 0.0) {
                     let step = if key.ctrl { 10.0 } else { 1.0 };
                     self.nudge(app, dx * step, dy * step, key.shift);
                 }
@@ -1684,6 +1717,13 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
                 Some(Live::Nudge(_)) => true,
                 None => false,
             }
+    }
+
+    fn snap_lines(&self) -> &[SnapLine] {
+        match &self.live {
+            Some(Live::Pointer(d)) => &d.lines,
+            _ => &[],
+        }
     }
 
     fn cursor(&self) -> CursorRequest {
@@ -1990,6 +2030,43 @@ mod tests {
 
     fn hint(app: &AppWorkspace) -> bool {
         app.tool.as_ref().unwrap().shift_trail_hint()
+    }
+
+    /// Snap (Extra): with Snap on, a translate's nearest edge or centre lands on the canvas centre
+    /// within 8 screen px and the drag shows the lines; Ctrl held mid-drag moves freely until let
+    /// go.
+    #[test]
+    fn snap_lands_the_square_on_the_canvas_centre() {
+        let mut app = red_square(ToolType::Move);
+        app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(true));
+        let lines = |app: &AppWorkspace| -> Vec<(bool, f64)> {
+            let t = app.tool.as_ref().unwrap();
+            t.snap_lines().iter().map(|l| (l.vertical, l.pos)).collect()
+        };
+        let red_x = |app: &AppWorkspace, y| -> Vec<usize> {
+            let r = row(app, y);
+            (0..r.len()).filter(|&x| r[x] == RED).collect()
+        };
+        // Moved by (35, 14) the square is (45, 24)–(49, 28): its right edge 1 px and its bottom
+        // 2 px short of the centre lines (50, 30), nearer than its centre (47, 26).
+        let (x, y) = view(&app, (60.0, 45.0));
+        app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
+        move_to(&mut app, (95.0, 59.0));
+        assert_eq!(lines(&app), [(true, 50.0), (false, 30.0)]);
+        app.set_modifier_keys(true, false, false);
+        assert!(lines(&app).is_empty(), "Ctrl moves freely");
+        app.set_modifier_keys(false, false, false);
+        let (x, y) = view(&app, (95.0, 59.0));
+        app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
+        assert!(lines(&app).is_empty(), "gone with the drag");
+        assert_eq!(red_x(&app, 25), Vec::<usize>::new());
+        assert_eq!(red_x(&app, 26), [46, 47, 48, 49]);
+        assert_eq!(red_x(&app, 29), [46, 47, 48, 49]);
+        // Snap off: a 2 px move Snap would pull back onto the centre lines.
+        app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(false));
+        drag(&mut app, MouseButton::Left, &[(90.0, 55.0), (92.0, 57.0)]);
+        assert_eq!(red_x(&app, 27), Vec::<usize>::new());
+        assert_eq!(red_x(&app, 28), [48, 49, 50, 51]);
     }
 
     /// S§4.6, R253: Shift held from the press leaves a copy where the move started and at each

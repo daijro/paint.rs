@@ -450,6 +450,11 @@ impl CanvasView {
             snap(rect.min, ppp),
             app,
         );
+        paint_snap_lines(
+            &ui.painter().with_clip_rect(visible),
+            snap(rect.min, ppp),
+            app,
+        );
         {
             app.with_tool(|tool, app| {
                 if let Some(t) = tool
@@ -1087,6 +1092,31 @@ fn paint_perspective(painter: &Painter, origin: Pos2, app: &AppWorkspace) {
             let stroke = egui::Stroke::new(w, color);
             painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
         }
+    }
+}
+
+/// Snap (Extra, `tool::snap`): a move drag's smart guides, PhotoCraft's 1 px magenta lines
+/// through the layer and canvas-centre alignments it snapped to; `origin` is the canvas texture's
+/// top-left.
+fn paint_snap_lines(painter: &Painter, origin: Pos2, app: &AppWorkspace) {
+    let (Some(tool), Some(ws)) = (&app.tool, app.active_ws()) else {
+        return;
+    };
+    let ppp = painter.pixels_per_point();
+    let screen = |x: f64, y: f64| {
+        let s = ws.view.to_screen_position(Point::new(x, y));
+        origin + Vec2::new(s.x as f32, s.y as f32)
+    };
+    for l in tool.snap_lines().iter().filter(|l| l.kind.is_smart()) {
+        let r = if l.vertical {
+            let (a, b) = (screen(l.pos, l.from), screen(l.pos, l.to));
+            Rect::from_min_max(a, Pos2::new(a.x + 1.0, b.y))
+        } else {
+            let (a, b) = (screen(l.from, l.pos), screen(l.to, l.pos));
+            Rect::from_min_max(a, Pos2::new(b.x, a.y + 1.0))
+        };
+        let magenta = Color32::from_rgb(255, 0, 255);
+        painter.rect_filled(crate::kit::px::snap_line(r, ppp), 0.0, magenta);
     }
 }
 

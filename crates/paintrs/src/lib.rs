@@ -564,6 +564,11 @@ impl eframe::App for PaintApp {
         self.app.tool_settings.pen_seen =
             self.shell.canvas_view.pen.state.pen_seen && self.shell.canvas_view.pen.enabled;
         self.app.set_modifier_keys(m.ctrl, m.shift, m.alt);
+        // A key repeats alone, so the tools learn the other arrows held from here.
+        self.app.arrow_keys_down = ui.input(|i| {
+            use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp};
+            [ArrowLeft, ArrowRight, ArrowUp, ArrowDown].map(|k| i.key_down(k))
+        });
         // Buttons held anywhere (a toolbar slider drag too): the transacted tools' settings
         // window and the generic Escape handler read them (painting-tools-2.md §7.4, §7.6).
         self.app.mouse_buttons = buttons;

@@ -213,10 +213,11 @@ impl ToolType {
                 &selection,
             ),
             LassoSelect | EllipseSelect => selection,
-            MoveSelection | Zoom | Pan => json!({"renderingQuality": "high"}),
+            MoveSelection => json!({"renderingQuality": "high", "snap": false}),
+            Zoom | Pan => json!({"renderingQuality": "high"}),
             Move => json!({
                 "resampling": "highQualityCubic", "gammaCorrected": true, "renderingQuality": "high",
-                "distort": false
+                "distort": false, "snap": false
             }),
             PaintBucket => json!({
                 "tolerance": 50, "floodMode": "contiguous", "fillStyle": "solid",
@@ -1043,6 +1044,8 @@ pub fn option_definitions_with_fonts(
         d.extra = true;
         d
     };
+    // Snap (Extra, `tool::snap`): the move tools' drags lock onto edges and centres.
+    let snap = || extra_checkbox("Snap", "snap");
     let combine = || {
         icon_group(
             "",
@@ -1331,7 +1334,7 @@ pub fn option_definitions_with_fonts(
         // R16: every tool shows the selection quality (Q); after the chooser's separator, or
         // after its own.
         LassoSelect | EllipseSelect => vec![combine(), section(quality())],
-        MoveSelection => vec![quality(), section(finish())],
+        MoveSelection => vec![quality(), section(finish()), section(snap())],
         Move => vec![
             choices(
                 "Sampling:",
@@ -1360,6 +1363,7 @@ pub fn option_definitions_with_fonts(
             )),
             quality(),
             section(finish()),
+            section(snap()),
             // R230: the Extra option after Paint.NET's row: what a corner handle does.
             section({
                 let mut d = icon_choice(

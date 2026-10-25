@@ -2207,4 +2207,34 @@ mod arrow_nudge_tests {
             assert_eq!(selection_x(&h), 14.0, "{tool:?}");
         }
     }
+
+    /// Right held while Down repeats (only the last key pressed repeats): each key-down moves by
+    /// both, so the burst goes diagonally, as one history entry.
+    #[test]
+    fn two_held_arrows_nudge_diagonally() {
+        for tool in [ToolType::Move, ToolType::MoveSelection] {
+            let mut h = picked(tool);
+            let before = undo_len(&h);
+            let down = |h: &mut Harness<'_, crate::PaintApp>, key, repeat| {
+                h.event(egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat,
+                    modifiers: Modifiers::NONE,
+                });
+                h.run_steps(1);
+            };
+            down(&mut h, Key::ArrowRight, false);
+            down(&mut h, Key::ArrowDown, false);
+            down(&mut h, Key::ArrowDown, true);
+            h.key_up(Key::ArrowDown);
+            h.key_up(Key::ArrowRight);
+            h.run_steps(1);
+            idle(&mut h);
+            let b = h.state().app.active_ws().unwrap().selection.get_bounds();
+            assert_eq!((b.x, b.y), (13.0, 12.0), "{tool:?}");
+            assert_eq!(undo_len(&h), before + 1, "{tool:?}");
+        }
+    }
 }

@@ -20,6 +20,7 @@ pub mod picker;
 pub mod remove;
 pub mod selection_tools;
 pub mod shapes;
+pub mod snap;
 pub mod spot_healing;
 pub mod text;
 pub mod transacted;
@@ -140,10 +141,32 @@ pub trait Tool {
     fn shift_trail_hint(&self) -> bool {
         false
     }
+    /// Snap (Extra): the alignments the drag under way snapped to, in canvas px, for the canvas
+    /// to draw; empty for every other tool.
+    fn snap_lines(&self) -> &[snap::SnapLine] {
+        &[]
+    }
     fn cursor(&self) -> CursorRequest {
         CursorRequest::Css("default")
     }
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// An arrow key's nudge direction with the other held arrows added
+/// (`AppWorkspace::arrow_keys_down`): Right and Down held together move diagonally, opposite
+/// arrows cancel. `None` for any other key.
+pub fn arrow_nudge(app: &AppWorkspace, key: &str) -> Option<(f64, f64)> {
+    let i = match key {
+        "ArrowLeft" | "Left" => 0,
+        "ArrowRight" | "Right" => 1,
+        "ArrowUp" | "Up" => 2,
+        "ArrowDown" | "Down" => 3,
+        _ => return None,
+    };
+    let mut held = app.arrow_keys_down;
+    held[i] = true;
+    let axis = |neg: bool, pos: bool| f64::from(u8::from(pos)) - f64::from(u8::from(neg));
+    Some((axis(held[0], held[1]), axis(held[2], held[3])))
 }
 
 /// Canvas coordinates of the device pixel under the pointer (its top-left corner); tools apply their

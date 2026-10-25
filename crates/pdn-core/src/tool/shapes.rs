@@ -2415,15 +2415,14 @@ impl<const LINE: bool> Tool for PreviewShapeTool<LINE> {
         if app.mouse_buttons != 0 {
             return false;
         }
-        let delta = match key.key.as_str() {
-            "ArrowLeft" | "Left" => [-1.0, 0.0],
-            "ArrowRight" | "Right" => [1.0, 0.0],
-            "ArrowUp" | "Up" => [0.0, -1.0],
-            "ArrowDown" | "Down" => [0.0, 1.0],
-            _ => return false,
+        let Some(delta) = super::arrow_nudge(app, &key.key) else {
+            return false;
         };
         if !self.tx.is_open() {
             return false;
+        }
+        if delta == (0.0, 0.0) {
+            return true;
         }
         if !matches!(self.live, Some(Live::Nudge(_))) {
             transacted::end(self, app);
@@ -2431,7 +2430,7 @@ impl<const LINE: bool> Tool for PreviewShapeTool<LINE> {
         }
         let mut r = self.tx.record().unwrap().clone();
         let step = if key.ctrl { 10.0 } else { 1.0 };
-        r.transform.translate(delta[0] * step, delta[1] * step);
+        r.transform.translate(delta.0 * step, delta.1 * step);
         transacted::update(self, app, r);
         self.live = Some(Live::Nudge(app.now_ms));
         true

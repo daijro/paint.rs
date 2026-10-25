@@ -203,6 +203,9 @@ pub struct AppWorkspace {
     pub control_key_down: bool,
     pub shift_key_down: bool,
     pub alt_key_down: bool,
+    /// The arrow keys held (Left, Right, Up, Down), kept current by the UI: a nudge moves by
+    /// every held arrow (`tool::arrow_nudge`).
+    pub arrow_keys_down: [bool; 4],
     /// The mouse buttons held anywhere, one bit per `MouseButton` value: canvas presses and
     /// releases set and clear them, and the UI writes the pointer state each frame (a toolbar
     /// slider drag holds a button too; painting-tools-2.md §7.4 step 5, §7.6 note §).
@@ -287,6 +290,7 @@ impl Default for AppWorkspace {
             internal_selection_path: None,
             clipboard: Default::default(),
             control_key_down: false,
+            arrow_keys_down: [false; 4],
             shift_key_down: false,
             alt_key_down: false,
             mouse_buttons: 0,
