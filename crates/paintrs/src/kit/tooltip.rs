@@ -315,15 +315,21 @@ fn paint(ctx: &Context, text: &str, anchor: Pos2, kind: Kind) -> Rect {
     rect
 }
 
-/// The tool's shortcut chord (§3.1): `tool`'s hotkey upper-cased, once per tool sharing it from
-/// the start of `tools` up to and including `tool`, joined by ", " (the presses that reach it).
+/// The tool's shortcut chord (§3.1): `tool`'s hotkey upper-cased, with the number of presses that
+/// reach it (one per tool sharing it from the start of `tools` up to and including `tool`) when
+/// more than one: "S", "S (2x)", "S (3x)".
 pub fn chord(tools: &[ToolType], tool: ToolType) -> String {
     let end = tools.iter().position(|&t| t == tool).map_or(0, |i| i + 1);
     let n = tools[..end]
         .iter()
         .filter(|t| t.hot_key() == tool.hot_key())
         .count();
-    vec![tool.hot_key().to_uppercase().to_string(); n].join(", ")
+    let key = tool.hot_key().to_uppercase();
+    if n > 1 {
+        format!("{key} ({n}x)")
+    } else {
+        key.to_string()
+    }
 }
 
 /// The Tools window's (and tool chooser's) tip: the tool tip format string applied to the name
@@ -573,26 +579,26 @@ mod tests {
         let paint_net: Vec<_> = ToolType::shown(false).collect();
         for (tool, c) in [
             (RectangleSelect, "S"),
-            (LassoSelect, "S, S"),
-            (EllipseSelect, "S, S, S"),
-            (MagicWand, "S, S, S, S"),
+            (LassoSelect, "S (2x)"),
+            (EllipseSelect, "S (3x)"),
+            (MagicWand, "S (4x)"),
             (Move, "M"),
-            (MoveSelection, "M, M"),
+            (MoveSelection, "M (2x)"),
             (Line, "O"),
-            (Shapes, "O, O"),
+            (Shapes, "O (2x)"),
             (Zoom, "Z"),
         ] {
             assert_eq!(chord(&paint_net, tool), c, "{tool:?}");
         }
         // Extras sit between Paint.NET tools in the strip, but never count while hidden.
-        for (tool, c) in [(Shapes, "O, O"), (MagicWand, "S, S, S, S")] {
+        for (tool, c) in [(Shapes, "O (2x)"), (MagicWand, "S (4x)")] {
             assert_eq!(tool_text(tool, false).rsplit(": ").next(), Some(c));
         }
         assert_eq!(tool_text(Zoom, false), "Zoom\r\nShortcut key: Z");
-        assert_eq!(tool_text(Shapes, false), "Shapes\r\nShortcut key: O, O");
+        assert_eq!(tool_text(Shapes, false), "Shapes\r\nShortcut key: O (2x)");
         assert_eq!(
             tool_text(EllipseSelect, false),
-            "Ellipse Select\r\nShortcut key: S, S, S"
+            "Ellipse Select\r\nShortcut key: S (3x)"
         );
     }
 
@@ -602,22 +608,22 @@ mod tests {
     fn extra_tool_tips_count_the_extras_and_say_so() {
         let all: Vec<_> = ToolType::shown(true).collect();
         for (tool, c) in [
-            (MagneticLasso, "S, S, S"),
-            (ObjectSelection, "S, S, S, S"),
-            (EllipseSelect, "S, S, S, S, S"),
-            (MagicWand, "S, S, S, S, S, S"),
+            (MagneticLasso, "S (3x)"),
+            (ObjectSelection, "S (4x)"),
+            (EllipseSelect, "S (5x)"),
+            (MagicWand, "S (6x)"),
             (Remove, "J"),
-            (SpotHealingBrush, "J, J, J, J"),
+            (SpotHealingBrush, "J (4x)"),
         ] {
             assert_eq!(chord(&all, tool), c, "{tool:?}");
         }
         assert_eq!(
             tool_text(Patch, true),
-            "Patch\r\nShortcut key: J, J\r\n(from PhotoCraft)"
+            "Patch\r\nShortcut key: J (2x)\r\n(from PhotoCraft)"
         );
         assert_eq!(
             tool_text(EllipseSelect, true),
-            "Ellipse Select\r\nShortcut key: S, S, S, S, S"
+            "Ellipse Select\r\nShortcut key: S (5x)"
         );
     }
 }

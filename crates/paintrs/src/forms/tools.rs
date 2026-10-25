@@ -119,6 +119,21 @@ pub fn show(ui: &mut Ui, app: &AppWorkspace) -> Option<ToolType> {
     picked
 }
 
+/// `tool`'s button in the Tools window whose border box is `window` (the content box under its
+/// title bar, as `FloatingWindow::show` lays it out).
+#[cfg(test)]
+pub(crate) fn button_rect(window: Rect, tool: ToolType) -> Rect {
+    let inner = window.shrink(WINDOW_BORDER);
+    let top =
+        inner.min.y + WINDOW_TITLE_MARGIN_TOP + WINDOW_TITLE_HEIGHT + 2.0 * WINDOW_TITLE_PADDING.0;
+    let content = Rect::from_min_max(Pos2::new(inner.min.x, top), inner.max);
+    layout(content, true)
+        .into_iter()
+        .find(|(t, _)| *t == tool)
+        .expect("a shown tool")
+        .1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

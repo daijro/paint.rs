@@ -2041,3 +2041,169 @@ mod bb29_tests {
         assert_eq!(app.effect_tokens["bbMemeMaker"], values);
     }
 }
+
+/// R248: with a selection, the arrows reach Move Selected Pixels and Move Selection through the
+/// canvas's key path after the tool is picked from the Tools window.
+#[cfg(test)]
+mod arrow_nudge_tests {
+    use egui::{Key, Modifiers};
+    use egui_kittest::Harness;
+    use pdn_core::action::FormId;
+    use pdn_core::pixel::{IntRect, Px};
+    use pdn_core::selection::CombineMode;
+    use pdn_core::tool::ToolType;
+    use pdn_core::tool::move_tools::NUDGE_COMMIT_MS;
+    use pdn_core::util::geom::Rectangle;
+    use std::ops::Range;
+
+    const RED: Px = [255, 0, 0, 255];
+    const WHITE: Px = [255; 4];
+    const CLEAR: Px = [0; 4];
+
+    /// The app on its white image with a selected 4×4 red square at (10, 10), `tool` picked by a
+    /// click on its Tools window button (Rectangle Select active before).
+    fn picked(tool: ToolType) -> Harness<'static, crate::PaintApp> {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_max_steps(16)
+            .build_eframe(|cc| {
+                let mut app =
+                    crate::PaintApp::new_with_policy(cc, pdn_core::fonts::FontPolicy::Bundled);
+                app.clock = crate::Clock::Virtual(0.0);
+                app
+            });
+        h.run_steps(2);
+        let app = &mut h.state_mut().app;
+        let ws = app.active_ws_mut().unwrap();
+        let layer = ws.document.layers.get_at_mut(0).unwrap();
+        layer.surface.fill_rect(IntRect::new(10, 10, 4, 4), RED);
+        ws.selection
+            .set_continuation(&Rectangle::new(10.0, 10.0, 4.0, 4.0), CombineMode::Replace);
+        ws.selection.commit_continuation();
+        ws.invalidate(None);
+        app.set_active_tool_from_type(ToolType::RectangleSelect);
+        h.run_steps(2);
+        let window = h.state().shell.forms.window(FormId::Tools).rect();
+        let at = crate::forms::tools::button_rect(window, tool).center();
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(2);
+        assert_eq!(h.state().app.tool_type, Some(tool), "the button click");
+        h
+    }
+
+    fn arrow(h: &mut Harness<'_, crate::PaintApp>, m: Modifiers) {
+        h.key_press_modifiers(m, Key::ArrowRight);
+        h.run_steps(2);
+    }
+
+    /// Past the burst's idle commit.
+    fn idle(h: &mut Harness<'_, crate::PaintApp>) {
+        h.state_mut().advance_clock(NUDGE_COMMIT_MS as u32 + 1);
+        h.run_steps(2);
+    }
+
+    fn row(h: &Harness<'_, crate::PaintApp>) -> Vec<Px> {
+        let ws = h.state().app.active_ws().unwrap();
+        let s = &ws.document.layers.get_at(0).unwrap().surface;
+        (0..40).map(|x| s.pixel(x, 11)).collect()
+    }
+
+    /// Row 11's pixels: red at `red`, cleared at `clear`, white elsewhere.
+    fn expect(red: Range<u32>, clear: Range<u32>) -> Vec<Px> {
+        (0..40)
+            .map(|x| match x {
+                _ if red.contains(&x) => RED,
+                _ if clear.contains(&x) => CLEAR,
+                _ => WHITE,
+            })
+            .collect()
+    }
+
+    fn selection_x(h: &Harness<'_, crate::PaintApp>) -> f64 {
+        let ws = h.state().app.active_ws().unwrap();
+        ws.selection.get_bounds().x
+    }
+
+    fn undo_len(h: &Harness<'_, crate::PaintApp>) -> usize {
+        h.state().app.active_ws().unwrap().history.undo.len()
+    }
+
+    /// An arrow moves the pixels 1 px; Ctrl+arrow 10 px.
+    #[test]
+    fn move_selected_pixels_nudges_1_and_10_px() {
+        let mut h = picked(ToolType::Move);
+        arrow(&mut h, Modifiers::NONE);
+        assert_eq!(row(&h), expect(11..15, 10..11));
+        arrow(&mut h, Modifiers::CTRL);
+        assert_eq!(row(&h), expect(21..25, 10..14));
+    }
+
+    /// The outline moves 1 px, then 10 px with Ctrl; the pixels stay.
+    #[test]
+    fn move_selection_nudges_the_outline_1_and_10_px() {
+        let mut h = picked(ToolType::MoveSelection);
+        let before = row(&h);
+        arrow(&mut h, Modifiers::NONE);
+        idle(&mut h);
+        assert_eq!(selection_x(&h), 11.0);
+        arrow(&mut h, Modifiers::CTRL);
+        idle(&mut h);
+        assert_eq!(selection_x(&h), 21.0);
+        assert_eq!(row(&h), before);
+    }
+
+    /// R227: each Shift+arrow stamps the pixels where its step lands; the start is vacated. Shift
+    /// let go between the taps does not split the burst.
+    #[test]
+    fn shift_arrows_leave_the_trail_in_the_pixels() {
+        let mut h = picked(ToolType::Move);
+        let before = undo_len(&h);
+        for _ in 0..3 {
+            arrow(&mut h, Modifiers::SHIFT);
+        }
+        idle(&mut h);
+        assert_eq!(row(&h), expect(11..17, 10..11));
+        assert_eq!(undo_len(&h), before + 1);
+    }
+
+    /// ArrowRight held for `steps` key-downs: the press, then the auto-repeats, then the release.
+    fn hold(h: &mut Harness<'_, crate::PaintApp>, steps: usize) {
+        for i in 0..steps {
+            h.event(egui::Event::Key {
+                key: Key::ArrowRight,
+                physical_key: None,
+                pressed: true,
+                repeat: i > 0,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(1);
+        }
+        h.key_up(Key::ArrowRight);
+        h.run_steps(1);
+    }
+
+    /// A held arrow repeats, 1 px a key-down; the burst is one history entry, committed once the
+    /// keys go idle, and the next burst another.
+    #[test]
+    fn a_held_arrow_repeats_and_its_burst_is_one_history_entry() {
+        for tool in [ToolType::Move, ToolType::MoveSelection] {
+            let mut h = picked(tool);
+            let before = undo_len(&h);
+            hold(&mut h, 3);
+            idle(&mut h);
+            assert_eq!(undo_len(&h), before + 1, "{tool:?}");
+            assert_eq!(selection_x(&h), 13.0, "{tool:?}");
+            if tool == ToolType::Move {
+                assert_eq!(row(&h), expect(13..17, 10..13));
+            }
+            hold(&mut h, 1);
+            idle(&mut h);
+            assert_eq!(undo_len(&h), before + 2, "{tool:?}");
+            assert_eq!(selection_x(&h), 14.0, "{tool:?}");
+        }
+    }
+}

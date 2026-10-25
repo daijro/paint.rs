@@ -347,10 +347,15 @@ fn text_clipboard_command(key: egui::Key, m: egui::Modifiers) -> Option<egui::Ev
 }
 
 /// `KeyboardEvent.key` for an egui (logical) key, as `ShortcutKey.normalizeKey` expects it:
-/// punctuation as its character, everything else by name ("A", "F5", "Delete", "PageUp").
+/// punctuation as its character, the arrows as "ArrowLeft" … (egui names them "Left" …),
+/// everything else by name ("A", "F5", "Delete", "PageUp").
 fn js_key(key: egui::Key) -> &'static str {
     use egui::Key::*;
     match key {
+        ArrowLeft => "ArrowLeft",
+        ArrowRight => "ArrowRight",
+        ArrowUp => "ArrowUp",
+        ArrowDown => "ArrowDown",
         Plus => "+",
         Minus => "-",
         Equals => "=",
