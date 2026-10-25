@@ -156,7 +156,7 @@ jobs:
           mkdir -p "$dir"
           sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/dist/paintrs' "$dir/paint.rs.app"
           plutil -lint "$dir/paint.rs.app/Contents/Info.plist"
-          lipo -verify_arch '${{ matrix.arch }}' "$dir/paint.rs.app/Contents/MacOS/paintrs"
+          lipo "$dir/paint.rs.app/Contents/MacOS/paintrs" -verify_arch '${{ matrix.arch }}'
           cp LICENSE LICENSE.md NOTICE.md "$dir/"
           cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
           python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$(brew --prefix dav1d)/COPYING"

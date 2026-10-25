@@ -101,7 +101,7 @@ jobs:
           mkdir -p artifacts
           sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/release/paintrs' artifacts/paint.rs.app
           plutil -lint artifacts/paint.rs.app/Contents/Info.plist
-          lipo -verify_arch '${{ matrix.arch }}' artifacts/paint.rs.app/Contents/MacOS/paintrs
+          lipo artifacts/paint.rs.app/Contents/MacOS/paintrs -verify_arch '${{ matrix.arch }}'
           otool -L artifacts/paint.rs.app/Contents/MacOS/paintrs
           cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
           python3 scripts/ci/collect_notices.py artifacts/notices --kind native --metadata metadata.json --dav1d-license "$(brew --prefix dav1d)/COPYING"
