@@ -933,15 +933,23 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
     }
 
     /// Snap (Extra): a translate's targets, built at the press with Snap on. Move Selected Pixels
-    /// leaves out the layer it lifts from; the selection being moved is never a target.
+    /// leaves out the layer it lifts from; where the pixels started is one: their place at the
+    /// press and, after an earlier drag, where the move began (the hole the lift left).
     fn snap_targets(app: &AppWorkspace, from: &MoveToolContext) -> Option<(SnapTargets, [f64; 4])> {
         if app.tool_settings.get(Self::TOOL, "snap") != true {
             return None;
         }
         let ws = app.active_ws()?;
-        let targets = SnapTargets::from_workspace(ws, PIXELS.then_some(ws.active_layer));
-        let b = from.bounds(&(from.m, from.quad));
-        Some((targets, [b.left(), b.top(), b.right(), b.bottom()]))
+        let mut targets = SnapTargets::from_workspace(ws, PIXELS.then_some(ws.active_layer));
+        let edges = |b: Rectangle| [b.left(), b.top(), b.right(), b.bottom()];
+        let start = edges(from.bounds(&(from.m, from.quad)));
+        targets.add_origin(start);
+        let began = edges(from.bounds(&(Matrix::identity(), None)));
+        // A paste began nowhere on the canvas.
+        if from.paste.is_none() && began != start {
+            targets.add_origin(began);
+        }
+        Some((targets, start))
     }
 
     /// Snap (Extra): the translate offset `d` with the moved bounds snapped within 8 screen px
@@ -2032,41 +2040,78 @@ mod tests {
         app.tool.as_ref().unwrap().shift_trail_hint()
     }
 
-    /// Snap (Extra): with Snap on, a translate's nearest edge or centre lands on the canvas centre
-    /// within 8 screen px and the drag shows the lines; Ctrl held mid-drag moves freely until let
-    /// go.
+    /// The columns of row `y` that are red.
+    fn red_x(app: &AppWorkspace, y: u32) -> Vec<usize> {
+        let r = row(app, y);
+        (0..r.len()).filter(|&x| r[x] == RED).collect()
+    }
+
+    /// The snap lines the drag shows: (vertical, position, on the pixels before it).
+    fn snap_lines(app: &AppWorkspace) -> Vec<(bool, f64, bool)> {
+        let t = app.tool.as_ref().unwrap();
+        t.snap_lines()
+            .iter()
+            .map(|l| (l.vertical, l.pos, l.before))
+            .collect()
+    }
+
+    /// Snap (Extra): with Snap on, a translate's centre lands on the canvas centre within 8 screen
+    /// px (its edges only ever go to edges) and the drag shows the lines; Ctrl held mid-drag moves
+    /// freely until let go.
     #[test]
-    fn snap_lands_the_square_on_the_canvas_centre() {
+    fn snap_centres_the_square_on_the_canvas() {
         let mut app = red_square(ToolType::Move);
         app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(true));
-        let lines = |app: &AppWorkspace| -> Vec<(bool, f64)> {
-            let t = app.tool.as_ref().unwrap();
-            t.snap_lines().iter().map(|l| (l.vertical, l.pos)).collect()
-        };
-        let red_x = |app: &AppWorkspace, y| -> Vec<usize> {
-            let r = row(app, y);
-            (0..r.len()).filter(|&x| r[x] == RED).collect()
-        };
-        // Moved by (35, 14) the square is (45, 24)–(49, 28): its right edge 1 px and its bottom
-        // 2 px short of the centre lines (50, 30), nearer than its centre (47, 26).
+        // Moved by (35, 14) the square is (45, 24)–(49, 28): its centre (47, 26) 3 and 4 px from
+        // the canvas centre (50, 30). Its right edge, 1 px from that centre line, stays an edge.
         let (x, y) = view(&app, (60.0, 45.0));
         app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
         move_to(&mut app, (95.0, 59.0));
-        assert_eq!(lines(&app), [(true, 50.0), (false, 30.0)]);
+        assert_eq!(
+            snap_lines(&app),
+            [(true, 50.0, false), (false, 30.0, false)]
+        );
         app.set_modifier_keys(true, false, false);
-        assert!(lines(&app).is_empty(), "Ctrl moves freely");
+        assert!(snap_lines(&app).is_empty(), "Ctrl moves freely");
         app.set_modifier_keys(false, false, false);
         let (x, y) = view(&app, (95.0, 59.0));
         app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
-        assert!(lines(&app).is_empty(), "gone with the drag");
-        assert_eq!(red_x(&app, 25), Vec::<usize>::new());
-        assert_eq!(red_x(&app, 26), [46, 47, 48, 49]);
-        assert_eq!(red_x(&app, 29), [46, 47, 48, 49]);
+        assert!(snap_lines(&app).is_empty(), "gone with the drag");
+        assert_eq!(red_x(&app, 27), Vec::<usize>::new());
+        assert_eq!(red_x(&app, 28), [48, 49, 50, 51]);
+        assert_eq!(red_x(&app, 31), [48, 49, 50, 51]);
         // Snap off: a 2 px move Snap would pull back onto the centre lines.
         app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(false));
         drag(&mut app, MouseButton::Left, &[(90.0, 55.0), (92.0, 57.0)]);
-        assert_eq!(red_x(&app, 27), Vec::<usize>::new());
-        assert_eq!(red_x(&app, 28), [48, 49, 50, 51]);
+        assert_eq!(red_x(&app, 29), Vec::<usize>::new());
+        assert_eq!(red_x(&app, 30), [50, 51, 52, 53]);
+    }
+
+    /// Snap (Extra): a small drag moves at once; dragged sideways the square stays level with
+    /// where it started, the lines on its top, centre and bottom rows.
+    #[test]
+    fn a_sideways_snap_drag_stays_level_with_where_it_started() {
+        let mut app = red_square(ToolType::Move);
+        app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(true));
+        let (x, y) = view(&app, (60.0, 45.0));
+        app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
+        move_to(&mut app, (63.0, 47.0));
+        assert_eq!(red_x(&app, 12), [13, 14, 15, 16]);
+        assert!(snap_lines(&app).is_empty());
+        move_to(&mut app, (80.0, 46.0));
+        assert_eq!(
+            snap_lines(&app),
+            [
+                (false, 10.0, false),
+                (false, 12.0, false),
+                (false, 14.0, true)
+            ]
+        );
+        let (x, y) = view(&app, (80.0, 46.0));
+        app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
+        assert_eq!(red_x(&app, 10), [30, 31, 32, 33]);
+        assert_eq!(red_x(&app, 13), [30, 31, 32, 33]);
+        assert_eq!(red_x(&app, 14), Vec::<usize>::new());
     }
 
     /// S§4.6, R253: Shift held from the press leaves a copy where the move started and at each

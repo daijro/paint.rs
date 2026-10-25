@@ -1,8 +1,8 @@
-//! Ported from PhotoCraft crates/engine/src/snap.rs and crates/ui-egui/src/snap_ui.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: only the targets paint.rs has, the canvas's edges and centre and the layers' (no guides or grid; a move never snaps to the selection it moves, so no selection targets either); a layer's box is its pixels with alpha; `snap_move` takes the press's bounds and the drag's offset and lands a snapped axis exactly on its target, so the move tools' truncated translation keeps the alignment.
+//! Ported from PhotoCraft crates/engine/src/snap.rs and crates/ui-egui/src/snap_ui.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: PowerPoint's rules instead of PhotoCraft's (edges snap only to edges and centres only to centres, and every snap shows its line); only the targets paint.rs has, the canvas's and the layers' (no guides or grid), plus where the moving pixels started (PhotoCraft never snaps a move back to where it started), which holds an axis only once the drag has gone past the snap distance along the other; a layer's box is its pixels with alpha; `snap_move` takes the press's bounds and the drag's offset and lands a snapped axis exactly on its target, so the move tools' truncated translation keeps the alignment; a line lies on the snapped edge's own pixels.
 //!
-//! Snap (Extra): the move tools' translate drags snap the moved bounds' edges or centre to the
-//! nearest target within 8 screen px on each axis; holding Ctrl while dragging moves freely. The
-//! canvas draws the layer and canvas-centre alignments in magenta (PhotoCraft's smart guides).
+//! Snap (Extra): the move tools' translate drags snap the moved bounds within 8 screen px on each
+//! axis, its edges to the targets' edges and its centre to their centres; holding Ctrl while
+//! dragging moves freely. The canvas draws each alignment in magenta.
 
 use crate::document::surface::Surface;
 use crate::document::workspace::DocumentWorkspace;
@@ -13,23 +13,20 @@ pub const SNAP_PX: f64 = 8.0;
 /// What a snap target came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapKind {
-    DocumentEdge,
-    DocumentCenter,
-    LayerEdge,
-    LayerCenter,
-}
-
-impl SnapKind {
-    /// Layer-to-layer and canvas-centre alignments are what Photoshop shows as smart guides.
-    pub fn is_smart(self) -> bool {
-        self != SnapKind::DocumentEdge
-    }
+    Canvas,
+    Layer,
+    /// Where the moving pixels started: it holds an axis only once the drag has gone past the
+    /// snap distance along the other, so a sideways drag stays level and a small drag still moves
+    /// at once.
+    Origin,
 }
 
 /// A line to snap to: `pos` on one axis (x for vertical lines), `span` its extent on the other.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Target {
     pos: f64,
+    /// A centre line (edges snap to edges, centres to centres).
+    center: bool,
     kind: SnapKind,
     span: (f64, f64),
 }
@@ -43,6 +40,9 @@ pub struct SnapLine {
     pub from: f64,
     pub to: f64,
     pub kind: SnapKind,
+    /// The moved bounds' right (bottom) edge lined up: the line goes on the pixel column (row)
+    /// before `pos`, over that edge's own pixels; else on the one after.
+    pub before: bool,
 }
 
 /// Snap targets on both axes.
@@ -63,86 +63,68 @@ impl SnapTargets {
         let doc = &ws.document;
         let mut t = SnapTargets::default();
         let (w, h) = (doc.width as f64, doc.height as f64);
-        t.add_rect(
-            [0.0, 0.0, w, h],
-            SnapKind::DocumentEdge,
-            SnapKind::DocumentCenter,
-        );
+        t.add_rect([0.0, 0.0, w, h], SnapKind::Canvas);
         for (i, l) in doc.layers.iter().enumerate() {
             if !l.properties.visible || exclude == Some(i) {
                 continue;
             }
             if let Some(r) = content_bounds(&l.surface) {
-                t.add_rect(r, SnapKind::LayerEdge, SnapKind::LayerCenter);
+                t.add_rect(r, SnapKind::Layer);
             }
         }
         t
     }
 
-    /// Add a rectangle's edges and centre lines.
-    fn add_rect(&mut self, r: [f64; 4], edge: SnapKind, center: SnapKind) {
-        let (xs, ys) = ((r[1], r[3]), (r[0], r[2]));
-        self.x.push(Target {
-            pos: r[0],
-            kind: edge,
-            span: xs,
-        });
-        self.x.push(Target {
-            pos: r[2],
-            kind: edge,
-            span: xs,
-        });
-        self.x.push(Target {
-            pos: (r[0] + r[2]) / 2.0,
-            kind: center,
-            span: xs,
-        });
-        self.y.push(Target {
-            pos: r[1],
-            kind: edge,
-            span: ys,
-        });
-        self.y.push(Target {
-            pos: r[3],
-            kind: edge,
-            span: ys,
-        });
-        self.y.push(Target {
-            pos: (r[1] + r[3]) / 2.0,
-            kind: center,
-            span: ys,
-        });
+    /// Where the moving pixels started, `r` ([x0, y0, x1, y1]).
+    pub fn add_origin(&mut self, r: [f64; 4]) {
+        self.add_rect(r, SnapKind::Origin);
     }
 
-    /// The closest target to `v` within `tol` on one axis (`vertical` = x positions); the first
-    /// listed wins a tie.
-    fn nearest(&self, vertical: bool, v: f64, tol: f64) -> Option<Target> {
-        let list = if vertical { &self.x } else { &self.y };
-        let mut best: Option<(f64, Target)> = None;
-        for &t in list {
-            let d = (t.pos - v).abs();
-            if d <= tol && best.is_none_or(|(bd, _)| d < bd - 1e-9) {
-                best = Some((d, t));
+    /// Add a rectangle's edges and centre lines.
+    fn add_rect(&mut self, r: [f64; 4], kind: SnapKind) {
+        for (list, lo, hi, span) in [
+            (&mut self.x, r[0], r[2], (r[1], r[3])),
+            (&mut self.y, r[1], r[3], (r[0], r[2])),
+        ] {
+            for (pos, center) in [(lo, false), (hi, false), ((lo + hi) / 2.0, true)] {
+                list.push(Target {
+                    pos,
+                    center,
+                    kind,
+                    span,
+                });
             }
         }
-        best.map(|(_, t)| t)
+    }
+
+    /// The targets on one axis (`vertical` = x positions) an edge (or a `center`) may snap to,
+    /// where it started only with `origin`.
+    fn on(&self, vertical: bool, center: bool, origin: bool) -> impl Iterator<Item = &Target> {
+        let list = if vertical { &self.x } else { &self.y };
+        list.iter()
+            .filter(move |t| t.center == center && (origin || t.kind != SnapKind::Origin))
     }
 
     /// Snap bounds `r` ([x0, y0, x1, y1] at the press) moved by `d`: on each axis the edge or
-    /// centre closest to a target within `tol` lands on it. Returns the offset and the alignments
-    /// made (every anchor that lines up, so equal-size neighbours show both edges).
+    /// centre closest to a target of its own sort within `tol` lands on it (the first listed wins
+    /// a tie). Returns the offset and the alignments made (every edge and centre that lines up).
     pub fn snap_move(&self, r: [f64; 4], d: [f64; 2], tol: f64) -> ([f64; 2], Vec<SnapLine>) {
         let moved = [r[0] + d[0], r[1] + d[1], r[2] + d[0], r[3] + d[1]];
         let mut out = d;
         let mut lines = Vec::new();
         for (axis, vertical) in [(0usize, true), (1usize, false)] {
-            let anchors = [r[axis], (r[axis] + r[axis + 2]) / 2.0, r[axis + 2]];
+            let anchors = [
+                (r[axis], false),
+                ((r[axis] + r[axis + 2]) / 2.0, true),
+                (r[axis + 2], false),
+            ];
+            let origin = d[1 - axis].abs() > tol;
             // (|correction|, the offset that puts the anchor on its target)
             let mut best: Option<(f64, f64)> = None;
-            for a in anchors {
-                if let Some(t) = self.nearest(vertical, a + d[axis], tol) {
+            for (a, center) in anchors {
+                for t in self.on(vertical, center, origin) {
                     let c = (t.pos - (a + d[axis])).abs();
-                    if best.is_none_or(|(bc, _)| c < bc) {
+                    if c <= tol && best.is_none_or(|(bc, _)| c < bc - 1e-9) {
                         best = Some((c, t.pos - a));
                     }
                 }
@@ -154,11 +136,13 @@ impl SnapTargets {
             } else {
                 (moved[0], moved[2])
             };
-            let list = if vertical { &self.x } else { &self.y };
-            for a in anchors {
+            for (i, (a, center)) in anchors.into_iter().enumerate() {
                 let at = a + offset;
-                if let Some(&t) = list.iter().find(|t| (t.pos - at).abs() < 1e-6) {
-                    lines.push(line(vertical, t, other.0, other.1));
+                if let Some(&t) = self
+                    .on(vertical, center, origin)
+                    .find(|t| (t.pos - at).abs() < 1e-6)
+                {
+                    lines.push(line(vertical, t, other, i == 2));
                 }
             }
         }
@@ -167,13 +151,14 @@ impl SnapTargets {
 }
 
 /// Alignment line through target `t` covering both its span and the snapped object (`a..b`).
-fn line(vertical: bool, t: Target, a: f64, b: f64) -> SnapLine {
+fn line(vertical: bool, t: Target, (a, b): (f64, f64), before: bool) -> SnapLine {
     SnapLine {
         vertical,
         pos: t.pos,
         from: t.span.0.min(a).min(b),
         to: t.span.1.max(a).max(b),
         kind: t.kind,
+        before,
     }
 }
 
@@ -207,70 +192,58 @@ mod tests {
     /// A 400 × 300 canvas and a layer box at (300..350, 200..260).
     fn targets() -> SnapTargets {
         let mut t = SnapTargets::default();
-        t.add_rect(
-            [0.0, 0.0, 400.0, 300.0],
-            SnapKind::DocumentEdge,
-            SnapKind::DocumentCenter,
-        );
-        t.add_rect(
-            [300.0, 200.0, 350.0, 260.0],
-            SnapKind::LayerEdge,
-            SnapKind::LayerCenter,
-        );
+        t.add_rect([0.0, 0.0, 400.0, 300.0], SnapKind::Canvas);
+        t.add_rect([300.0, 200.0, 350.0, 260.0], SnapKind::Layer);
         t
     }
 
     #[test]
-    fn snaps_within_the_threshold_only() {
+    fn edges_snap_within_the_threshold_only() {
         let t = targets();
-        // A 50-wide box whose right edge comes 2 px short of x = 300: it moves 2 more.
+        // A 50-wide box whose right edge comes 2 px short of x = 300: it moves 2 more, the line
+        // on that edge's own column.
         let r = [10.0, 10.0, 60.0, 40.0];
         let (d, lines) = t.snap_move(r, [238.0, 5.5], 4.0);
         assert_eq!(d, [240.0, 5.5]);
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.vertical && l.pos == 300.0 && l.kind == SnapKind::LayerEdge)
-        );
+        let l = lines.iter().find(|l| l.vertical).unwrap();
+        assert_eq!((l.pos, l.kind, l.before), (300.0, SnapKind::Layer, true));
         // 5 px short is past the threshold.
         let (d, lines) = t.snap_move(r, [235.0, 5.5], 4.0);
         assert_eq!(d, [235.0, 5.5]);
         assert!(lines.is_empty());
     }
 
+    /// An edge never snaps to a centre line (nor a centre to an edge).
     #[test]
-    fn centre_lands_on_the_canvas_centre_both_ways() {
+    fn edges_go_to_edges_and_centres_to_centres() {
         let t = targets();
-        let (d, lines) = t.snap_move([0.0, 0.0, 100.0, 100.0], [148.3, 101.9], 4.0);
-        assert_eq!(d, [150.0, 100.0]);
-        let centres: Vec<_> = lines
-            .iter()
-            .filter(|l| l.kind == SnapKind::DocumentCenter)
-            .collect();
-        assert_eq!(centres.len(), 2);
-        // The canvas centre's lines cross the whole canvas.
-        assert!(
-            centres
-                .iter()
-                .all(|l| l.from == 0.0 && l.to == if l.vertical { 300.0 } else { 400.0 })
-        );
-        assert!(lines.iter().all(|l| l.kind.is_smart()));
+        // The right edge 2 px from the canvas centre, the centre far from any: no snap.
+        let (d, lines) = t.snap_move([100.0, 10.0, 198.0, 40.0], [0.0, 0.0], 4.0);
+        assert_eq!(d, [0.0, 0.0]);
+        assert!(lines.is_empty());
+        // Its centre 1.7 px from the canvas centre: centred, the line across the canvas.
+        let (d, lines) = t.snap_move([0.0, 0.0, 100.0, 100.0], [148.3, 30.0], 4.0);
+        assert_eq!(d, [150.0, 30.0]);
+        assert_eq!(lines.len(), 1);
+        let l = lines[0];
+        assert_eq!((l.vertical, l.pos, l.kind), (true, 200.0, SnapKind::Canvas));
+        assert_eq!((l.from, l.to), (0.0, 300.0));
     }
 
     #[test]
-    fn smart_guide_lines_span_both_objects() {
+    fn lines_span_both_objects() {
         let t = targets();
         // A box above-left whose left edge is near x = 300.
         let (d, lines) = t.snap_move([302.0, 10.0, 330.0, 40.0], [0.0, 0.0], 5.0);
         assert_eq!(d[0], -2.0);
         let l = lines.iter().find(|l| l.vertical && l.pos == 300.0).unwrap();
-        assert_eq!((l.from, l.to), (10.0, 260.0));
-        // A canvas edge snaps but draws no guide.
+        assert_eq!((l.from, l.to, l.before), (10.0, 260.0, false));
+        // The canvas's edges show their line too.
         let (d, lines) = t.snap_move([3.0, 100.0, 23.0, 120.0], [0.0, 0.0], 5.0);
         assert_eq!(d[0], -3.0);
         assert_eq!(
-            lines.iter().find(|l| l.vertical).map(|l| l.kind.is_smart()),
-            Some(false)
+            lines.iter().find(|l| l.vertical).map(|l| l.kind),
+            Some(SnapKind::Canvas)
         );
     }
 
@@ -278,11 +251,43 @@ mod tests {
     fn threshold_is_in_screen_px() {
         // 8 screen px: at 400 % that is 2 canvas px, at 25 % it is 32.
         let t = targets();
-        assert!(t.nearest(true, 205.0, SNAP_PX / 4.0).is_none());
+        let r = [0.0, 0.0, 10.0, 10.0];
         assert_eq!(
-            t.nearest(true, 225.0, SNAP_PX / 0.25).map(|t| t.pos),
-            Some(200.0)
+            t.snap_move(r, [190.0, 50.0], SNAP_PX / 4.0).0,
+            [190.0, 50.0]
         );
+        assert_eq!(
+            t.snap_move(r, [170.0, 50.0], SNAP_PX / 0.25).0,
+            [195.0, 50.0]
+        );
+    }
+
+    #[test]
+    fn where_it_started_holds_an_axis_once_the_other_has_moved() {
+        let r = [100.0, 100.0, 140.0, 120.0];
+        let mut t = SnapTargets::default();
+        t.add_origin(r);
+        // A small drag moves at once.
+        assert_eq!(t.snap_move(r, [3.0, 2.0], 8.0).0, [3.0, 2.0]);
+        // Sideways it stays level, the lines on its top, centre and bottom rows.
+        let (d, lines) = t.snap_move(r, [60.0, 5.0], 8.0);
+        assert_eq!(d, [60.0, 0.0]);
+        let rows: Vec<_> = lines
+            .iter()
+            .map(|l| (l.vertical, l.pos, l.before))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (false, 100.0, false),
+                (false, 110.0, false),
+                (false, 120.0, true)
+            ]
+        );
+        assert!(lines.iter().all(|l| l.kind == SnapKind::Origin));
+        // Its other edges too: dragged down past its bottom, its top lands there.
+        let (d, _) = t.snap_move(r, [30.0, 23.0], 8.0);
+        assert_eq!(d, [30.0, 20.0]);
     }
 
     #[test]
