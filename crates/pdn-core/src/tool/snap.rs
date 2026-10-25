@@ -1,8 +1,8 @@
-//! Ported from PhotoCraft crates/engine/src/snap.rs and crates/ui-egui/src/snap_ui.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: PowerPoint's rules instead of PhotoCraft's (edges snap only to edges and centres only to centres, and every snap shows its line); only the targets paint.rs has, the canvas's and the layers' (no guides or grid), plus where the moving pixels started (PhotoCraft never snaps a move back to where it started), which holds an axis only once the drag has gone past the snap distance along the other; a layer's box is its pixels with alpha; `snap_move` takes the press's bounds and the drag's offset and lands a snapped axis exactly on its target, so the move tools' truncated translation keeps the alignment; a line lies on the snapped edge's own pixels.
+//! Ported from PhotoCraft crates/engine/src/snap.rs and crates/ui-egui/src/snap_ui.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: every snap shows its line; only the targets paint.rs has, the canvas's and the layers' (no guides or grid), plus where the moving pixels started (PhotoCraft never snaps a move back to where it started), which holds an axis only once the drag has gone past the snap distance along the other; a layer's box is its pixels with alpha; `snap_move` takes the press's bounds and the drag's offset and lands a snapped axis exactly on its target, so the move tools' truncated translation keeps the alignment; a line lies on the snapped edge's own pixels.
 //!
-//! Snap (Extra): the move tools' translate drags snap the moved bounds within 8 screen px on each
-//! axis, its edges to the targets' edges and its centre to their centres; holding Ctrl while
-//! dragging moves freely. The canvas draws each alignment in magenta.
+//! Snap (Extra): the move tools' translate drags snap the moved bounds' edges or centre to the
+//! nearest target edge or centre within 8 screen px on each axis; holding Ctrl while dragging
+//! moves freely. The canvas draws each alignment in magenta.
 
 use crate::document::surface::Surface;
 use crate::document::workspace::DocumentWorkspace;
@@ -25,8 +25,6 @@ pub enum SnapKind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Target {
     pos: f64,
-    /// A centre line (edges snap to edges, centres to centres).
-    center: bool,
     kind: SnapKind,
     span: (f64, f64),
 }
@@ -86,43 +84,33 @@ impl SnapTargets {
             (&mut self.x, r[0], r[2], (r[1], r[3])),
             (&mut self.y, r[1], r[3], (r[0], r[2])),
         ] {
-            for (pos, center) in [(lo, false), (hi, false), ((lo + hi) / 2.0, true)] {
-                list.push(Target {
-                    pos,
-                    center,
-                    kind,
-                    span,
-                });
+            for pos in [lo, hi, (lo + hi) / 2.0] {
+                list.push(Target { pos, kind, span });
             }
         }
     }
 
-    /// The targets on one axis (`vertical` = x positions) an edge (or a `center`) may snap to,
-    /// where it started only with `origin`.
-    fn on(&self, vertical: bool, center: bool, origin: bool) -> impl Iterator<Item = &Target> {
+    /// The targets on one axis (`vertical` = x positions), where it started only with `origin`.
+    fn on(&self, vertical: bool, origin: bool) -> impl Iterator<Item = &Target> {
         let list = if vertical { &self.x } else { &self.y };
         list.iter()
-            .filter(move |t| t.center == center && (origin || t.kind != SnapKind::Origin))
+            .filter(move |t| origin || t.kind != SnapKind::Origin)
     }
 
     /// Snap bounds `r` ([x0, y0, x1, y1] at the press) moved by `d`: on each axis the edge or
-    /// centre closest to a target of its own sort within `tol` lands on it (the first listed wins
+    /// centre closest to a target edge or centre within `tol` lands on it (the first listed wins
     /// a tie). Returns the offset and the alignments made (every edge and centre that lines up).
     pub fn snap_move(&self, r: [f64; 4], d: [f64; 2], tol: f64) -> ([f64; 2], Vec<SnapLine>) {
         let moved = [r[0] + d[0], r[1] + d[1], r[2] + d[0], r[3] + d[1]];
         let mut out = d;
         let mut lines = Vec::new();
         for (axis, vertical) in [(0usize, true), (1usize, false)] {
-            let anchors = [
-                (r[axis], false),
-                ((r[axis] + r[axis + 2]) / 2.0, true),
-                (r[axis + 2], false),
-            ];
+            let anchors = [r[axis], (r[axis] + r[axis + 2]) / 2.0, r[axis + 2]];
             let origin = d[1 - axis].abs() > tol;
             // (|correction|, the offset that puts the anchor on its target)
             let mut best: Option<(f64, f64)> = None;
-            for (a, center) in anchors {
-                for t in self.on(vertical, center, origin) {
+            for a in anchors {
+                for t in self.on(vertical, origin) {
                     let c = (t.pos - (a + d[axis])).abs();
                     if c <= tol && best.is_none_or(|(bc, _)| c < bc - 1e-9) {
                         best = Some((c, t.pos - a));
@@ -136,10 +124,10 @@ impl SnapTargets {
             } else {
                 (moved[0], moved[2])
             };
-            for (i, (a, center)) in anchors.into_iter().enumerate() {
+            for (i, a) in anchors.into_iter().enumerate() {
                 let at = a + offset;
                 if let Some(&t) = self
-                    .on(vertical, center, origin)
+                    .on(vertical, origin)
                     .find(|t| (t.pos - at).abs() < 1e-6)
                 {
                     lines.push(line(vertical, t, other, i == 2));
@@ -213,14 +201,18 @@ mod tests {
         assert!(lines.is_empty());
     }
 
-    /// An edge never snaps to a centre line (nor a centre to an edge).
+    /// Edges and centres snap to either.
     #[test]
-    fn edges_go_to_edges_and_centres_to_centres() {
+    fn edges_and_centres_snap_to_either() {
         let t = targets();
-        // The right edge 2 px from the canvas centre, the centre far from any: no snap.
+        // The right edge 2 px from the canvas centre lands on it, the line on that edge's column.
         let (d, lines) = t.snap_move([100.0, 10.0, 198.0, 40.0], [0.0, 0.0], 4.0);
-        assert_eq!(d, [0.0, 0.0]);
-        assert!(lines.is_empty());
+        assert_eq!(d, [2.0, 0.0]);
+        let l = lines[0];
+        assert_eq!((l.pos, l.kind, l.before), (200.0, SnapKind::Canvas, true));
+        // The bottom edge 3 px from the layer box's centre (230).
+        let (d, _) = t.snap_move([0.0, 100.0, 10.0, 227.0], [0.0, 0.0], 4.0);
+        assert_eq!(d, [0.0, 3.0]);
         // Its centre 1.7 px from the canvas centre: centred, the line across the canvas.
         let (d, lines) = t.snap_move([0.0, 0.0, 100.0, 100.0], [148.3, 30.0], 4.0);
         assert_eq!(d, [150.0, 30.0]);
@@ -253,12 +245,12 @@ mod tests {
         let t = targets();
         let r = [0.0, 0.0, 10.0, 10.0];
         assert_eq!(
-            t.snap_move(r, [190.0, 50.0], SNAP_PX / 4.0).0,
-            [190.0, 50.0]
+            t.snap_move(r, [187.0, 50.0], SNAP_PX / 4.0).0,
+            [187.0, 50.0]
         );
         assert_eq!(
             t.snap_move(r, [170.0, 50.0], SNAP_PX / 0.25).0,
-            [195.0, 50.0]
+            [190.0, 50.0]
         );
     }
 

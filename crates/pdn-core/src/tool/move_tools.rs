@@ -2055,36 +2055,33 @@ mod tests {
             .collect()
     }
 
-    /// Snap (Extra): with Snap on, a translate's centre lands on the canvas centre within 8 screen
-    /// px (its edges only ever go to edges) and the drag shows the lines; Ctrl held mid-drag moves
-    /// freely until let go.
+    /// Snap (Extra): with Snap on, a translate's nearest edge or centre lands on the canvas centre
+    /// within 8 screen px and the drag shows the lines; Ctrl held mid-drag moves freely until let
+    /// go.
     #[test]
-    fn snap_centres_the_square_on_the_canvas() {
+    fn snap_lands_the_square_on_the_canvas_centre() {
         let mut app = red_square(ToolType::Move);
         app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(true));
-        // Moved by (35, 14) the square is (45, 24)–(49, 28): its centre (47, 26) 3 and 4 px from
-        // the canvas centre (50, 30). Its right edge, 1 px from that centre line, stays an edge.
+        // Moved by (35, 14) the square is (45, 24)–(49, 28): its right edge 1 px and its bottom
+        // 2 px short of the centre lines (50, 30), nearer than its centre (47, 26).
         let (x, y) = view(&app, (60.0, 45.0));
         app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
         move_to(&mut app, (95.0, 59.0));
-        assert_eq!(
-            snap_lines(&app),
-            [(true, 50.0, false), (false, 30.0, false)]
-        );
+        assert_eq!(snap_lines(&app), [(true, 50.0, true), (false, 30.0, true)]);
         app.set_modifier_keys(true, false, false);
         assert!(snap_lines(&app).is_empty(), "Ctrl moves freely");
         app.set_modifier_keys(false, false, false);
         let (x, y) = view(&app, (95.0, 59.0));
         app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
         assert!(snap_lines(&app).is_empty(), "gone with the drag");
-        assert_eq!(red_x(&app, 27), Vec::<usize>::new());
-        assert_eq!(red_x(&app, 28), [48, 49, 50, 51]);
-        assert_eq!(red_x(&app, 31), [48, 49, 50, 51]);
+        assert_eq!(red_x(&app, 25), Vec::<usize>::new());
+        assert_eq!(red_x(&app, 26), [46, 47, 48, 49]);
+        assert_eq!(red_x(&app, 29), [46, 47, 48, 49]);
         // Snap off: a 2 px move Snap would pull back onto the centre lines.
         app.update_tool_setting(ToolType::Move, "snap", serde_json::json!(false));
         drag(&mut app, MouseButton::Left, &[(90.0, 55.0), (92.0, 57.0)]);
-        assert_eq!(red_x(&app, 29), Vec::<usize>::new());
-        assert_eq!(red_x(&app, 30), [50, 51, 52, 53]);
+        assert_eq!(red_x(&app, 27), Vec::<usize>::new());
+        assert_eq!(red_x(&app, 28), [48, 49, 50, 51]);
     }
 
     /// Snap (Extra): a small drag moves at once; dragged sideways the square stays level with
