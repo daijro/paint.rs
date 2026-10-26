@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn every_bundled_svg_rasterizes() {
-        assert_eq!(embedded::ICON_SVGS.len(), 478);
+        assert_eq!(embedded::ICON_SVGS.len(), 475);
         for (name, bytes) in embedded::ICON_SVGS {
             assert!(raster_svg(bytes, 1.0).is_some(), "{name}");
         }
@@ -770,7 +770,7 @@ mod tests {
             .iter()
             .filter(|(n, _)| n.ends_with("_cursor.svg"))
             .count();
-        assert_eq!((manifest.len(), svgs), (25, 25));
+        assert_eq!((manifest.len(), svgs), (26, 26));
         let ctx = Context::default();
         Assets::select(&ctx, crate::icon_pack::IconPackId::PaintRs);
         for (ppp, side) in [(1.0, 32), (1.25, 40), (2.0, 64)] {

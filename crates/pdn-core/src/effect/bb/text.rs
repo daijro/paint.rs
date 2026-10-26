@@ -61,6 +61,7 @@ pub fn settings(family: &str, bold: bool, italic: bool) -> TextSettings {
         align: TextAlign::Left,
         antialias: true,
         policy: FontPolicy::Bundled,
+        ..Default::default()
     }
 }
 

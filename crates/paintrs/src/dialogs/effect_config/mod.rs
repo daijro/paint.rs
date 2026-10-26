@@ -160,6 +160,9 @@ pub struct EffectConfigDialog {
     faces: (u64, Vec<Arc<[u8]>>),
     /// BB36: Chart or Graph's Window 1, its children and its file work (`DialogLayout::Chart`).
     pub(super) chart: Option<super::chart::ChartDialog>,
+    /// A plugin dialog taller than its window: the rows' scroll offset (px) and the focused
+    /// widget it last scrolled into view.
+    rows_scroll: (f64, Option<Id>),
 }
 
 impl EffectConfigDialog {
@@ -283,6 +286,7 @@ impl EffectConfigDialog {
             font_error: None,
             faces: (0, vec![]),
             chart,
+            rows_scroll: (0.0, None),
         }
     }
 
@@ -1483,6 +1487,50 @@ pub(crate) mod bb29_tests {
         frame_with(&ctx, &mut app, None, &mut d, vec![], true);
         (app, d, ctx)
     }
+    /// A plugin dialog taller than its window scrolls with the wheel to its last row, no further.
+    #[test]
+    fn tall_plugin_rows_scroll() {
+        static UI: IndirectUi = IndirectUi::DEFAULT;
+        const KEYS: [&str; 16] = [
+            "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "r13",
+            "r14", "r15",
+        ];
+        let def = EffectDef {
+            id: "tallProbe",
+            controls: KEYS
+                .map(|k| pdn_core::effect::range(k, k, 0.0, 100.0, 50.0))
+                .to_vec(),
+            indirect: Some(&UI),
+            ..pdn_core::effect::find("invertColorsEffect").unwrap()
+        };
+        let mut app = fresh_doc(40, 30, Some(4));
+        let s = EffectSession::begin(&mut app, def).unwrap();
+        let values = s.defaults();
+        let mut d = EffectConfigDialog::new(s, values);
+        let ctx = context();
+        frame_with(&ctx, &mut app, None, &mut d, vec![], false);
+        let wheel = |lines: f32| {
+            vec![
+                egui::Event::PointerMoved(Pos2::new(640.0, 400.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: Vec2::new(0.0, -lines),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                },
+            ]
+        };
+        frame_with(&ctx, &mut app, None, &mut d, wheel(1.0), false);
+        let some = d.rows_scroll.0;
+        assert!(some > 0.0);
+        frame_with(&ctx, &mut app, None, &mut d, wheel(100.0), false);
+        let end = d.rows_scroll.0;
+        assert!(end > some);
+        frame_with(&ctx, &mut app, None, &mut d, wheel(100.0), false);
+        assert_eq!(d.rows_scroll.0, end);
+    }
+
     fn top(d: &EffectConfigDialog) -> &str {
         bb::text(&d.values, "top")
     }

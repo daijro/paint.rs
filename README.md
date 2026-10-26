@@ -133,17 +133,22 @@ the same gray plus as PhotoCraft's additions.
 
 ## Forum Plugins (inspired by dpy and Tanel)
 
-Eight more plugins follow two packs from the Paint.NET forum:
-[dpy's plugin pack](https://forums.paint.net/topic/16643-dpys-plugin-pack-2014-05-04/) for text along a
-shape, and [Tanel's photo and color plugins](https://forums.paint.net/topic/11619-tanels-photo-and-color-plugins-2012-03-05/).
-They carry the same gray plus. Sharpen+ takes the place of PhotoCraft's Unsharp Mask, and Tanel's
-Color to Alpha is named Color Range to Alpha beside PhotoCraft's Color to Alpha.
+Two more plugins follow
+[Tanel's photo and color plugins](https://forums.paint.net/topic/11619-tanels-photo-and-color-plugins-2012-03-05/)
+from the Paint.NET forum. They carry the same gray plus. Sharpen+ takes the place of PhotoCraft's
+Unsharp Mask, and Tanel's Color to Alpha is named Color Range to Alpha beside PhotoCraft's Color to
+Alpha.
+
+The text effects of [dpy's plugin pack](https://forums.paint.net/topic/16643-dpys-plugin-pack-2014-05-04/)
+(Circle, Rotate, Spiral and Wave Text) are built into the Text tool instead. Its toolbar has
+**Angle**, **Shape** (Straight, Circle, Wave or Spiral) and **Bend**, and the text being typed has
+a rotate handle above it (Shift turns in 15° steps). An editable text layer keeps its shape and
+angle.
 
 | Menu | Additions |
 |---|---|
 | Effects ▸ Color | Color Range to Alpha |
 | Effects ▸ Photo | Sharpen+ |
-| Effects ▸ Text Formations (new) | Circle Text, RotateText, RotateTextSUI, SpiralText, WaveText, WaveTextSUI |
 
 ---
 
@@ -269,7 +274,8 @@ their own licences, listed in [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md
 - **[BoltBait's Paint.NET Plugin Pack](https://www.boltbait.com/pdn/)**, the inspiration for the plugins. No BoltBait code or
   artwork is included.
 - **dpy's plugin pack** and **Tanel's photo and color plugins** from the Paint.NET forum, the
-  inspiration for the forum plugins. None of their code or artwork is included.
+  inspiration for the Text tool's shapes and the forum plugins. None of their code or artwork is
+  included.
 - **[paint.js](https://github.com/LabyStudio/paintdotjs)** by LabyStudio, a reference during
   development. Some code is adapted from it under its MIT licence. None of its artwork is used.
 - **PhotoCraft** by the ArtCraft Team and contributors (MIT), the source of the additions above.

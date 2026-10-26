@@ -1,10 +1,9 @@
-//! Plugins from the Paint.NET forum beside BoltBait's pack (`effect::bb`): dpy's text effects
-//! (`dpy_text`) and Tanel's photo and colour effects (`tanel`), from the clean-room functional
-//! specs in paintdn-plugin-spec (effects/dpy-text-common.md, text-formations-*.md,
-//! color-color-to-alpha.md, photo-sharpen-plus.md). They carry the plugins' gray plus and their
+//! Plugins from the Paint.NET forum beside BoltBait's pack (`effect::bb`): Tanel's photo and
+//! colour effects (`tanel`), from the clean-room functional specs in paintdn-plugin-spec
+//! (color-color-to-alpha.md, photo-sharpen-plus.md). dpy's text effects live on in the Text
+//! tool's Angle and Shape (`tool::text::shape`). They carry the plugins' gray plus and their
 //! untranslated names, as BB's do.
 
-pub mod dpy_text;
 pub mod tanel;
 
 use super::Category::Effect as E;
@@ -14,13 +13,7 @@ use super::bb::manifest::PluginItem;
 /// The menu items, in menu order within each submenu: effect id, name as the plugin gives it,
 /// menu, whether it opens a dialog, and icon (`assets/icons-svg/plugins/<stem>.svg`).
 #[rustfmt::skip]
-pub const MANIFEST: [PluginItem; 8] = [
-    PluginItem { id: "dpyCircleText", name: "Circle Text", category: E("textFormations"), configurable: true, icon: "dpy_circle_text.png" },
-    PluginItem { id: "dpyRotateText", name: "RotateText", category: E("textFormations"), configurable: true, icon: "dpy_rotate_text.png" },
-    PluginItem { id: "dpyRotateTextSui", name: "RotateTextSUI", category: E("textFormations"), configurable: true, icon: "dpy_rotate_text.png" },
-    PluginItem { id: "dpySpiralText", name: "SpiralText", category: E("textFormations"), configurable: true, icon: "dpy_spiral_text.png" },
-    PluginItem { id: "dpyWaveText", name: "WaveText", category: E("textFormations"), configurable: true, icon: "dpy_wave_text.png" },
-    PluginItem { id: "dpyWaveTextSui", name: "WaveTextSUI", category: E("textFormations"), configurable: true, icon: "dpy_wave_text.png" },
+pub const MANIFEST: [PluginItem; 2] = [
     PluginItem { id: "tanelColorToAlpha", name: "Color Range to Alpha", category: E("color"), configurable: true, icon: "tanel_color_to_alpha.png" },
     PluginItem { id: "tanelSharpenPlus", name: "Sharpen+", category: E("photo"), configurable: true, icon: "tanel_sharpen_plus.png" },
 ];
@@ -32,8 +25,7 @@ pub fn manifest(effect_id: &str) -> Option<&'static PluginItem> {
 
 /// The effects, in manifest order.
 pub fn effects() -> Vec<EffectDef> {
-    let mut effects = dpy_text::effects();
-    effects.extend(tanel::effects());
+    let mut effects = tanel::effects();
     effects.sort_by_key(|def| {
         MANIFEST
             .iter()

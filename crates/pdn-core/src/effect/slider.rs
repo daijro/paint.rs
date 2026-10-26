@@ -108,8 +108,7 @@ pub fn range_role(effect: &str, key: &str) -> RangeRole {
             | "bbBevelObject"
             | "bbBevelSelection"
             | "bbEdgeDetectClassic"
-            | "bbPolygonStars"
-            | "dpyRotateText",
+            | "bbPolygonStars",
             "angle",
         ) => RangeRole::PluginAngle,
         _ => RangeRole::Slider,
@@ -397,18 +396,14 @@ mod tests {
                         assert_eq!((keyboard.small, keyboard.large), (1.0, 5.0));
                         assert_eq!(
                             keyboard.decimals,
-                            if matches!(def.id, "bbPolygonStars" | "dpyRotateText") {
-                                2
-                            } else {
-                                3
-                            }
+                            if def.id == "bbPolygonStars" { 2 } else { 3 }
                         );
                     }
                     RangeRole::Slider => unreachable!(),
                 }
             }
         }
-        assert_eq!((builtin, plugin), (11, 8));
+        assert_eq!((builtin, plugin), (11, 7));
         for (id, key) in [
             ("cloudsEffect", "scale"),
             ("twistEffect", "amount"),

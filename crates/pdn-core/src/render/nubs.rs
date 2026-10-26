@@ -19,7 +19,13 @@ pub enum HandleShape {
     Square,
     Circle,
     Compass,
-    Reset { angle: f64, state: ResetState },
+    Reset {
+        angle: f64,
+        state: ResetState,
+    },
+    /// Extra (the Text tool's turn, `tool::text::shape`): a white disc with a black outline and a
+    /// three-quarter arrow round its middle, the compass's size.
+    Rotate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +80,7 @@ pub fn pulse_opacity(index: usize, t: f64) -> f32 {
 /// §2.10 radius in DIP: 3, the compass 6.5 (drawing and hit testing share it).
 pub fn radius(shape: HandleShape) -> f64 {
     match shape {
-        HandleShape::Compass => 6.5,
+        HandleShape::Compass | HandleShape::Rotate => 6.5,
         _ => 3.0,
     }
 }
@@ -85,7 +91,7 @@ fn extent(shape: HandleShape, u: f64) -> f64 {
     match shape {
         HandleShape::Circle => r + 1.25 * th,
         HandleShape::Square => r + (th + 2.5) / 2.0,
-        HandleShape::Compass => r,
+        HandleShape::Compass | HandleShape::Rotate => r,
         HandleShape::Reset { angle, .. } => 10.0 * u * (angle.cos().abs() + angle.sin().abs()),
     }
 }
@@ -273,6 +279,50 @@ impl HandlePainter {
                 if let Some(p) = rect(r).map(PathBuilder::from_rect) {
                     stroke(&mut pm, &p, th + 2.5, Color::WHITE);
                     stroke(&mut pm, &p, th, Color::BLACK);
+                }
+            }
+            HandleShape::Rotate => {
+                if let Some(disc) = PathBuilder::from_circle(cx as f32, cy as f32, r as f32) {
+                    let white = paint(Color::WHITE);
+                    pm.fill_path(
+                        &disc,
+                        &white,
+                        FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
+                }
+                if let Some(ring) =
+                    PathBuilder::from_circle(cx as f32, cy as f32, (r - th / 2.0) as f32)
+                {
+                    stroke(&mut pm, &ring, th, Color::BLACK);
+                }
+                // From 7 o'clock clockwise round to 4 o'clock, the head at that end.
+                let (a, from, to) = (r - 3.0 * u, 150f64.to_radians(), 390f64.to_radians());
+                let at =
+                    |phi: f64, d: f64| ((cx + d * phi.cos()) as f32, (cy + d * phi.sin()) as f32);
+                let mut pb = PathBuilder::new();
+                for i in 0..=24 {
+                    let p = at(from + (to - from) * i as f64 / 24.0, a);
+                    if i == 0 {
+                        pb.move_to(p.0, p.1);
+                    } else {
+                        pb.line_to(p.0, p.1);
+                    }
+                }
+                if let Some(p) = pb.finish() {
+                    stroke(&mut pm, &p, 1.25 * th, Color::BLACK);
+                }
+                // The head: along the clockwise tangent, across the arc.
+                let (tip, side) = (at(to + 0.5, a), 1.8 * u);
+                let mut pb = PathBuilder::new();
+                pb.move_to(tip.0, tip.1);
+                pb.line_to(at(to, a - side).0, at(to, a - side).1);
+                pb.line_to(at(to, a + side).0, at(to, a + side).1);
+                pb.close();
+                if let Some(p) = pb.finish() {
+                    let black = paint(Color::BLACK);
+                    pm.fill_path(&p, &black, FillRule::Winding, Transform::identity(), None);
                 }
             }
             HandleShape::Compass => {

@@ -203,6 +203,15 @@ fn paint_text_caret(painter: &Painter, cursor: Rect, ppp: f32, alpha: u8) {
     );
 }
 
+/// [`paint_text_caret`] for a turned caret (`TextTool::caret_quad`).
+fn paint_text_caret_quad(painter: &Painter, corners: Vec<Pos2>, ppp: f32, alpha: u8) {
+    painter.add(egui::Shape::convex_polygon(
+        corners,
+        Color32::from_black_alpha(alpha),
+        egui::Stroke::new(1.0 / ppp, Color32::from_white_alpha(alpha)),
+    ));
+}
+
 impl CanvasView {
     /// A button still holding canvas capture, if any.
     pub fn captured(&self) -> Option<MouseButton> {
@@ -463,12 +472,21 @@ impl CanvasView {
                     && t.is_editing()
                 {
                     let r = t.caret_rect(app);
-                    let cursor = Rect::from_min_size(
+                    let mut cursor = Rect::from_min_size(
                         rect.min + Vec2::new(r.x as f32, r.y as f32),
                         Vec2::new(r.width as f32, r.height as f32),
                     );
                     let alpha = t.caret_alpha(app.now_ms);
-                    paint_text_caret(&ui.painter().with_clip_rect(visible), cursor, ppp, alpha);
+                    let painter = ui.painter().with_clip_rect(visible);
+                    match t.caret_quad(app) {
+                        Some(q) => {
+                            let at = |p: [f64; 2]| rect.min + Vec2::new(p[0] as f32, p[1] as f32);
+                            let corners: Vec<Pos2> = q.into_iter().map(at).collect();
+                            cursor = Rect::from_points(&corners);
+                            paint_text_caret_quad(&painter, corners, ppp, alpha);
+                        }
+                        None => paint_text_caret(&painter, cursor, ppp, alpha),
+                    }
                     // Only the canvas owner sets IME output. Widgets can replace it later.
                     if focused {
                         ui.ctx().output_mut(|o| {

@@ -70,12 +70,9 @@ const ICON: &str = "assets/icons/text_tool_icon.png";
 /// (Normal blend, no selection), so a text layer matches what typing on an empty layer commits.
 pub fn render(spec: &TextSpec, w: u32, h: u32) -> Surface {
     let mut surface = Surface::create(w, h);
-    let layout = layout_text(
-        &spec.text,
-        &spec.settings,
-        [spec.origin.0, spec.origin.1],
-        spec.dpi,
-    );
+    let origin = [spec.origin.0, spec.origin.1];
+    let layout = layout_text(&spec.text, &spec.settings, origin, spec.dpi);
+    let layout = crate::tool::text::placed(layout, &spec.settings, origin);
     let Some(bounds) = layout
         .lines
         .iter()
@@ -591,6 +588,7 @@ mod tests {
             align: TextAlign::Center,
             antialias: true,
             policy: FontPolicy::System,
+            ..TextSettings::default()
         };
         let s = TextSpec {
             text: "Hi\nthere".into(),

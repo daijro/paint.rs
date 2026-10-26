@@ -1223,6 +1223,7 @@ pub fn font_style_toggle(
                 align: TextAlign::Left,
                 antialias: true,
                 policy: pdn_core::fonts::FontPolicy::Bundled,
+                ..Default::default()
             };
             let font_size = text::shrink_to_fit(
                 |px| {

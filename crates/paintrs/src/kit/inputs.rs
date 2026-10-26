@@ -1361,18 +1361,14 @@ pub fn push_button(
 /// Chromium's `input[type=color]` (paintdotjs's colour row, adjustments-and-effect-framework.md /
 /// ui-drawn-graphics.md §2.2 "Reused by": Ruling (P3) 1): the `button`-look box, `padding: 1px
 /// 2px`, the swatch wrapper's `4px 2px`, and the swatch with its 1-px #777 border. The caller
-/// reads clicks (primary colour) and secondary clicks (secondary colour) off the response.
-pub fn color_input(ui: &mut Ui, rect: Rect, color: pdn_core::pixel::Px) -> Response {
+/// reads clicks (primary colour) and secondary clicks (secondary colour) off the response. Its id
+/// is `key`'s in `ui`, not its place, so it keeps the focus when a dialog's rows scroll.
+pub fn color_input(ui: &mut Ui, key: &str, rect: Rect, color: pdn_core::pixel::Px) -> Response {
     let theme = theme::current(ui.ctx());
     let painter = ui.painter().clone();
     let ppp = painter.pixels_per_point();
     let r = px::snap_rect(rect, ppp);
-    let response = ui.interact(
-        r,
-        ui.scope_id()
-            .with(("color_input", rect.min.x as i32, rect.min.y as i32)),
-        Sense::click(),
-    );
+    let response = ui.interact(r, ui.scope_id().with(("color_input", key)), Sense::click());
     let b = px::border_width(1.0, ppp);
     painter.rect_filled(r, 0.0, theme.button_outline);
     painter.rect_filled(r.shrink(b), 0.0, theme.button);
@@ -1396,8 +1392,13 @@ fn color_swatch(rect: Rect, ppp: f32) -> Rect {
 
 /// `color_input` for a colour row "with alpha" (BB common.md §3; BB plan BB5): the
 /// swatch shows `color` over 4-px checks of the canvas checkerboard's colours.
-pub fn color_input_alpha(ui: &mut Ui, rect: Rect, color: pdn_core::pixel::Px) -> Response {
-    let response = color_input(ui, rect, color);
+pub fn color_input_alpha(
+    ui: &mut Ui,
+    key: &str,
+    rect: Rect,
+    color: pdn_core::pixel::Px,
+) -> Response {
+    let response = color_input(ui, key, rect, color);
     let painter = ui.painter().clone();
     let ppp = painter.pixels_per_point();
     let inner = color_swatch(rect, ppp).shrink(px::border_width(1.0, ppp));

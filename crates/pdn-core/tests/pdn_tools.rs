@@ -8328,6 +8328,7 @@ fn text_settings(mode: TextRenderingMode, antialias: bool) -> TextSettings {
         align: TextAlign::Left,
         antialias,
         policy: pdn_core::fonts::FontPolicy::Bundled,
+        ..Default::default()
     }
 }
 

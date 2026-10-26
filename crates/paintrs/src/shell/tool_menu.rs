@@ -682,7 +682,7 @@ impl ToolMenu {
         }
         for (key, value) in changes {
             owner.set(app, key, value);
-            if key == "selectionMode" || key == "shape" {
+            if key == "selectionMode" || key == "shape" || key == "textShape" {
                 self.render_options();
             }
         }
@@ -745,7 +745,7 @@ impl ToolMenu {
                     self.focus_size = Some(key);
                 }
                 owner.set(app, key, v);
-                if key == "selectionMode" || key == "shape" {
+                if key == "selectionMode" || key == "shape" || key == "textShape" {
                     self.render_options();
                 }
             }
@@ -1450,12 +1450,13 @@ mod tests {
         }
     }
 
-    /// PC16: the Text tool's Editable text toggle comes last.
+    /// PC16: the Text tool's Editable text toggle follows Finish, then the turn and shape Extras.
     #[test]
-    fn text_editable_option_comes_last() {
+    fn text_editable_option_follows_finish() {
         let ctx = egui::Context::default();
         let defs = definitions(&ctx, ToolType::Text, &AppWorkspace::default());
-        assert_eq!(defs.last().map(|d| d.key), Some("editableText"));
+        let keys: Vec<_> = defs.iter().rev().take(4).map(|d| d.key).collect();
+        assert_eq!(keys, ["textShape", "textAngle", "editableText", ""]);
     }
 
     /// R230: Move Selected Pixels' Resize / Warp choice comes last, an Extra (the plus), Resize

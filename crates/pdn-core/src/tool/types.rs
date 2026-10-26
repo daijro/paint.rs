@@ -262,7 +262,8 @@ impl ToolType {
                 "fontFamily": "Calibri", "fontSize": (12.0 * s).trunc() as i64, "fontUnit": "points",
                 "bold": false, "italic": false, "underline": false, "strikeout": false,
                 "textRendering": "smooth", "align": "left", "antialias": true,
-                "blendMode": "normal", "renderingQuality": "high", "editableText": true
+                "blendMode": "normal", "renderingQuality": "high", "editableText": true,
+                "textAngle": 0, "textShape": "straight", "textBend": 50
             }),
             // S§4.3. The brush tools take the Paintbrush's brush keys, not shared with it (R17 is
             // Paint.NET's sharing).
@@ -1857,7 +1858,7 @@ pub fn option_definitions_with_fonts(
             // paintdotjs's 125 % 380, divided by 1.25. Task 53 applies Paint.NET's 300.
             font.menu_width = Some(304.0);
             font.font_preview = true;
-            vec![
+            let mut options = vec![
                 font,
                 size("", "fontSize", 1.0, 2000.0, 1.0, &FONT_SIZES),
                 icon_choice(
@@ -1911,7 +1912,35 @@ pub fn option_definitions_with_fonts(
                 section(finish()),
                 // R63: the Extra option after Paint.NET's row.
                 section(extra_checkbox("Editable text", "editableText")),
-            ]
+            ];
+            // Extras (`tool::text::shape`): the text's turn, its shape and that shape's bend.
+            let extra = |mut d: OptionDef| {
+                d.extra = true;
+                d.width = d.width.or(Some(36.0));
+                d
+            };
+            let shape = choices(
+                "Shape:",
+                "textShape",
+                texts(&[
+                    ("straight", "Straight"),
+                    ("circle", "Circle"),
+                    ("wave", "Wave"),
+                    ("spiral", "Spiral"),
+                ]),
+                Some(72.0),
+                false,
+                false,
+                false,
+            );
+            options.extend([
+                section(extra(number("Angle:", "textAngle", -180.0, 180.0, 1.0))),
+                extra(shape),
+            ]);
+            if settings.get(tool, "textShape") != "straight" {
+                options.push(extra(number("Bend:", "textBend", -100.0, 100.0, 1.0)));
+            }
+            options
         }
     };
     if !settings.pen_seen {
@@ -2183,20 +2212,32 @@ mod tests {
         );
     }
 
-    /// PC16 (S§4.5, R63): Editable text follows Paint.NET's Text row, Finish last, with the plus;
-    /// while it is on the blend mode is greyed out.
+    /// PC16 (S§4.5, R63): Editable text follows Paint.NET's Text row after Finish, with the plus,
+    /// then the Extra turn and shape (`tool::text::shape`), Bend only for a curved shape; while
+    /// Editable text is on the blend mode is greyed out.
     #[test]
     fn text_editable_option() {
         let mut s = ToolSettings::default();
-        let defs = option_definitions(ToolType::Text, &s);
-        let [.., finish, last] = &defs[..] else {
-            panic!("no options");
+        let keys = |s: &ToolSettings| -> Vec<_> {
+            let defs = option_definitions(ToolType::Text, s);
+            let at = defs
+                .iter()
+                .position(|d| d.kind == OptionKind::Action)
+                .unwrap();
+            assert_eq!(defs[at].key, "");
+            defs[at + 1..].iter().map(|d| (d.key, d.extra)).collect()
         };
-        assert_eq!((finish.kind, finish.key), (OptionKind::Action, ""));
         assert_eq!(
-            (last.key, last.extra, last.section),
-            ("editableText", true, true)
+            keys(&s),
+            [
+                ("editableText", true),
+                ("textAngle", true),
+                ("textShape", true)
+            ]
         );
+        s.set(ToolType::Text, "textShape", json!("circle"));
+        assert_eq!(keys(&s).last(), Some(&("textBend", true)));
+        s.set(ToolType::Text, "textShape", json!("straight"));
         // On by default (user, 2026-10-24); Paint.NET's raster text is one toggle away.
         assert_eq!(s.get(ToolType::Text, "editableText"), json!(true));
         s.set(ToolType::Text, "editableText", json!(false));

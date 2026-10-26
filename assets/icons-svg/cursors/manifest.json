@@ -23,5 +23,6 @@
   "rectangle_select_tool_minus_cursor": [16, 16],
   "rectangle_select_tool_mouse_down_cursor": [16, 16],
   "rectangle_select_tool_plus_cursor": [16, 16],
+  "rotate_cursor": [16, 16],
   "text_tool_cursor": [16, 16]
 }

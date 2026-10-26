@@ -48,6 +48,25 @@ impl DrawItem {
             }
         }
     }
+    /// The item moved by `m`; a bitmap only moves its centre (it is not turned or scaled).
+    pub(super) fn transform(self, m: Transform) -> Option<Self> {
+        match self {
+            Self::Outline(p) => p.transform(m).map(Self::Outline),
+            Self::Bitmap(mut b) => {
+                let half = [
+                    b.image.width as f64 * b.scale / 2.0,
+                    b.image.height as f64 * b.scale / 2.0,
+                ];
+                let mut c = tiny_skia::Point::from_xy(
+                    (b.origin[0] + half[0]) as f32,
+                    (b.origin[1] + half[1]) as f32,
+                );
+                m.map_points(std::slice::from_mut(&mut c));
+                b.origin = [c.x as f64 - half[0], c.y as f64 - half[1]];
+                Some(Self::Bitmap(b))
+            }
+        }
+    }
     pub fn bounds(&self) -> Rectangle {
         match self {
             Self::Outline(p) => {
@@ -454,6 +473,7 @@ mod tests {
             align: TextAlign::Left,
             antialias: true,
             policy: FontPolicy::Bundled,
+            ..Default::default()
         }
     }
     fn layout(text: &str, s: &TextSettings, px: f64) -> TextLayout {

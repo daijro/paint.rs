@@ -74,8 +74,7 @@ impl EffectConfigDialog {
                         .collect(),
                 };
                 let gaps = EFFECT_CONTENT_GAP * rows.len().saturating_sub(1) as f32;
-                // ponytail: past the max height the rows are clipped (paintdotjs scrolls them);
-                // add the kit scroll bar if an effect's control list ever needs it.
+                // Past the max height a plugin's rows scroll (`indirect`); generic rows clip.
                 let (min, max, inset) = EFFECT_CONTENT_HEIGHT;
                 let content = (rows.iter().sum::<f32>() + gaps)
                     .max(min)
@@ -771,7 +770,7 @@ impl EffectConfigDialog {
                     );
                     let env = palette_env(palette);
                     let shown = pdn_core::effect::color_value(&self.values, key, &env);
-                    let response = inputs::color_input(ui, at, shown);
+                    let response = inputs::color_input(ui, key, at, shown);
                     initial_editor(ui, response.id);
                     ui.ctx().accesskit_node_builder(response.id, |n| {
                         n.set_role(egui::accesskit::Role::Button);
@@ -910,10 +909,54 @@ impl EffectConfigDialog {
         now: f64,
         palette: [Color; 2],
     ) -> Option<bool> {
-        let (pt, px_, _) = EFFECT_CONTENT_PADDING;
+        let (pt, px_, pb) = EFFECT_CONTENT_PADDING;
         let x0 = r.min.x + px_;
-        let w = r.width() - 2.0 * px_;
-        let laid = self.laid_rows(ui.painter(), ind, controls, w);
+        let mut w = r.width() - 2.0 * px_;
+        let mut laid = self.laid_rows(ui.painter(), ind, controls, w);
+        let height = |laid: &[Laid]| {
+            let gaps = EFFECT_CONTENT_GAP * laid.len().saturating_sub(1) as f32;
+            pt + pb + gaps + laid.iter().map(|l| l.height).sum::<f32>()
+        };
+        // Rows taller than the dialog scroll: a scroll bar at the right, the wheel over them,
+        // and a newly focused row (Tab) brought into view.
+        let mut content = height(&laid);
+        let scrolls = content > r.height() + 0.5;
+        if scrolls {
+            w -= crate::kit::scroll::THICKNESS;
+            laid = self.laid_rows(ui.painter(), ind, controls, w);
+            content = height(&laid);
+            let max = (content - r.height()).max(0.0) as f64;
+            let (offset, seen) = &mut self.rows_scroll;
+            let focus = ui.memory(|m| m.focused());
+            if focus != *seen {
+                *seen = focus;
+                if let Some(f) = focus.and_then(|id| ui.ctx().read_response(id)) {
+                    let top = f.rect.min.y - r.min.y;
+                    let bottom = f.rect.max.y - r.max.y;
+                    if top < 0.0 {
+                        *offset += top as f64;
+                    } else if bottom > 0.0 {
+                        *offset += bottom.min(top) as f64;
+                    }
+                }
+            }
+            let popup = self.open_select.is_some() || self.color_popup.is_some();
+            if !popup && ui.rect_contains_pointer(r) {
+                *offset -= ui.input(|i| crate::kit::scroll::wheel_delta(i, r.height()).y) as f64;
+            }
+            *offset = offset.clamp(0.0, max);
+            let bar = Rect::from_min_size(
+                Pos2::new(r.max.x - crate::kit::scroll::THICKNESS, r.min.y),
+                Vec2::new(crate::kit::scroll::THICKNESS, r.height()),
+            );
+            crate::kit::scroll::Scrollbar::vertical(bar)
+                .id_salt("effect-rows")
+                .show(ui, content as f64, r.height() as f64, offset);
+        } else {
+            self.rows_scroll.0 = 0.0;
+        }
+        let clip = ui.clip_rect();
+        ui.set_clip_rect(clip.intersect(r));
         let columns = caption_columns(&laid);
         let defaults = self
             .session
@@ -941,7 +984,7 @@ impl EffectConfigDialog {
             .map(|(k, _)| k);
         let mut state = self.slider_state(now);
         let mut changed = None;
-        let mut y = r.min.y + pt;
+        let mut y = r.min.y + pt - self.rows_scroll.0 as f32;
         for (l, col) in laid.iter().zip(columns) {
             let c = match (&l.row, &l.control) {
                 (
@@ -968,6 +1011,7 @@ impl EffectConfigDialog {
             changed = merge(changed, c);
             y += l.height + EFFECT_CONTENT_GAP;
         }
+        ui.set_clip_rect(clip);
         self.put_slider_state(state);
         changed
     }
@@ -1113,10 +1157,10 @@ impl EffectConfigDialog {
                 let at = Rect::from_min_size(Pos2::new(x0, y), Vec2::from(COLOR_INPUT));
                 let response = if cu.alpha {
                     let shown = bb::color_value_alpha(&self.values, key, &env);
-                    inputs::color_input_alpha(&mut row, at, shown)
+                    inputs::color_input_alpha(&mut row, key, at, shown)
                 } else {
                     let shown = pdn_core::effect::color_value(&self.values, key, &env);
-                    inputs::color_input(&mut row, at, shown)
+                    inputs::color_input(&mut row, key, at, shown)
                 };
                 initial_editor(&row, response.id);
                 let name = accessible_name(header_label(c), key);

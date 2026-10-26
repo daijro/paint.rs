@@ -47,6 +47,7 @@ fn script_faces_replace_missing_glyphs() {
         align: TextAlign::Left,
         antialias: true,
         policy: FontPolicy::Bundled,
+        ..Default::default()
     };
     let samples = [
         "1月 日曜日 あ",

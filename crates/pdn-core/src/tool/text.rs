@@ -3,6 +3,7 @@
 //! R96: editing preserves UTF-16 units; only rendering projects isolated units to U+FFFD.
 //! R97: IME preedit is provisional, not a native managed Text protocol or an undo transaction.
 mod color;
+mod shape;
 use super::types::ToolSettings;
 use super::{CursorRequest, KeyPress, MouseButton, PointerInput, Tool, ToolBase, ToolType};
 use crate::app::AppWorkspace;
@@ -23,6 +24,8 @@ use crate::render::{
 };
 use crate::util::{color::Color, geom::Rectangle, region::Region};
 pub use color::{Bitmap, DrawItem, TextRaster, rasterize_text_content, rasterize_text_surface};
+use shape::Placement;
+pub use shape::TextShape;
 use skrifa::{
     FontRef, MetadataProvider,
     instance::{LocationRef, Size},
@@ -97,6 +100,26 @@ pub struct TextSettings {
     /// Where the fonts come from: the environment's, never stored.
     #[serde(skip)]
     pub policy: FontPolicy,
+    /// Extras (`shape`): the turn in degrees, counter-clockwise about the click point, and the
+    /// path the text follows and how strongly it bends (−100…100). Not stored at their defaults,
+    /// so straight text stores what it did before them.
+    #[serde(skip_serializing_if = "unturned")]
+    pub angle: f64,
+    #[serde(skip_serializing_if = "straight")]
+    pub shape: TextShape,
+    #[serde(skip_serializing_if = "default_bend")]
+    pub bend: f64,
+}
+/// `TextSettings::bend`'s default: half a circle, a gentle wave, a spiral of 2.5 turns.
+pub const DEFAULT_BEND: f64 = 50.0;
+fn unturned(angle: &f64) -> bool {
+    *angle == 0.0
+}
+fn straight(shape: &TextShape) -> bool {
+    *shape == TextShape::Straight
+}
+fn default_bend(bend: &f64) -> bool {
+    *bend == DEFAULT_BEND
 }
 impl TextSettings {
     pub fn from_tool_settings(s: &ToolSettings, policy: FontPolicy) -> Self {
@@ -117,6 +140,9 @@ impl TextSettings {
             },
             antialias: get("antialias").as_bool().unwrap_or(true),
             policy,
+            angle: get("textAngle").as_f64().unwrap_or(0.0),
+            shape: TextShape::from_value(get("textShape").as_str().unwrap_or("straight")),
+            bend: get("textBend").as_f64().unwrap_or(DEFAULT_BEND),
         }
     }
     /// The inverse of `from_tool_settings`, for a text layer whose editing resumes (S§4.5): the
@@ -137,11 +163,29 @@ impl TextSettings {
         ] {
             s.set(ToolType::Text, key, v[field].clone());
         }
+        s.set(ToolType::Text, "textAngle", number(self.angle));
+        s.set(ToolType::Text, "textShape", self.shape.value().into());
+        s.set(ToolType::Text, "textBend", number(self.bend));
     }
 }
 /// The Text tool's Extra "Editable text" toggle (S§4.5): its commits make text layers.
 pub fn editable_text(s: &ToolSettings) -> bool {
     s.get(ToolType::Text, "editableText") == true
+}
+/// `layout` as drawn: on its shape and turned (`shape`), or as laid out.
+pub fn placed(layout: TextLayout, s: &TextSettings, click: [f64; 2]) -> TextLayout {
+    match Placement::new(&layout, s, click) {
+        Some(p) => p.apply(&layout),
+        None => layout,
+    }
+}
+/// A setting's number as the toolbar writes it (whole numbers as integers).
+fn number(v: f64) -> serde_json::Value {
+    if v.fract() == 0.0 && v.abs() < 9.0e15 {
+        serde_json::json!(v as i64)
+    } else {
+        serde_json::json!(v)
+    }
 }
 /// S§4.5, R74: the topmost visible text layer whose rendered text (at its own DPI) lies under `p`,
 /// as upstream's `hit_layer`: a Text press there edits it. Its index, spec and space height.
@@ -152,6 +196,10 @@ fn text_at(ws: &DocumentWorkspace, p: [f64; 2]) -> Option<(usize, TextSpec, f64)
         let spec = layer.text.as_ref()?;
         let origin = [spec.origin.0, spec.origin.1];
         let layout = layout_text(&spec.text, &spec.settings, origin, spec.dpi);
+        let space_height = layout.space_height;
+        // ponytail: a turned text's box is its bounds, so a press beside a slanted line may reach
+        // it; test the placed glyph boxes if that gets in the way.
+        let layout = placed(layout, &spec.settings, origin);
         let bounds = layout
             .lines
             .iter()
@@ -159,7 +207,7 @@ fn text_at(ws: &DocumentWorkspace, p: [f64; 2]) -> Option<(usize, TextSpec, f64)
             .reduce(|a, b| Rectangle::union(&a, &b))?;
         bounds
             .contains(p[0], p[1])
-            .then(|| (i, spec.clone(), layout.space_height))
+            .then(|| (i, spec.clone(), space_height))
     })
 }
 /// R79: text of only whitespace is empty (no layer of its own).
@@ -201,6 +249,9 @@ impl Default for TextSettings {
             align: TextAlign::Left,
             antialias: true,
             policy: document_font_policy(),
+            angle: 0.0,
+            shape: TextShape::Straight,
+            bend: DEFAULT_BEND,
         }
     }
 }
@@ -263,6 +314,10 @@ pub struct TextLine {
     pub items: Vec<DrawItem>,
     pub glyphs: Vec<TextGlyph>,
     clip: Rectangle,
+    /// The glyph (index in `glyphs`) each of `items` draws, for `shape`'s placement.
+    item_glyphs: Vec<usize>,
+    /// The baseline's distance below `origin`.
+    baseline: f64,
 }
 #[derive(Clone, Debug)]
 pub struct TextLayout {
@@ -319,10 +374,6 @@ fn faces(s: &TextSettings) -> Vec<Arc<[u8]>> {
         result.push(color);
     }
     result
-}
-/// The face `s` lays its text out in first (the family's, else the interface face).
-pub(crate) fn primary_face(s: &TextSettings) -> Arc<[u8]> {
-    faces(s).swap_remove(0)
 }
 /// The faces before a trailing colour face (`faces` pushes it last; tests push it at 3).
 fn ordinary_faces(ttf: &[ttf_parser::Face]) -> usize {
@@ -387,7 +438,8 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
     if units.is_empty() {
         // Text measurement: only height comes from the full space layout; width and
         // all overhangs are zero for both empty lines and independently measured prefixes.
-        let height = line(&[32], s, px, bytes).height;
+        let space = line(&[32], s, px, bytes);
+        let height = space.height;
         return TextLine {
             text: String::new(),
             origin: [0.0, 0.0],
@@ -397,6 +449,8 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
             items: vec![],
             glyphs: vec![],
             clip: Rectangle::absolute(-1.0, -1.0, 1.0, (height + 1.0).ceil()),
+            item_glyphs: vec![],
+            baseline: space.baseline,
         };
     }
     let fs: Vec<_> = bytes
@@ -517,9 +571,10 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
         ascent = ascent.max(a);
         height = height.max(h);
         let item_start = positioned.len();
+        let gi = resolved.len();
         let mut pen = Pen(PathBuilder::new());
         if let Some(bitmap) = bitmap {
-            positioned.push(DrawItem::Bitmap(bitmap));
+            positioned.push((gi, DrawItem::Bitmap(bitmap)));
         } else if let Some(g) = glyphs[fi].get(gid) {
             let settings = hints[fi].as_ref().map_or_else(
                 || DrawSettings::unhinted(Size::new(px as f32), LocationRef::default()),
@@ -548,9 +603,9 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
                             1.0,
                         )
                     {
-                        positioned.push(DrawItem::Outline(outline));
+                        positioned.push((gi, DrawItem::Outline(outline)));
                     }
-                    positioned.push(DrawItem::Outline(path));
+                    positioned.push((gi, DrawItem::Outline(path)));
                 }
             }
         }
@@ -568,7 +623,7 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
                 advance as f32,
                 (decoration.thickness as f64 * scale) as f32,
             ) {
-                positioned.push(DrawItem::Outline(PathBuilder::from_rect(r)));
+                positioned.push((gi, DrawItem::Outline(PathBuilder::from_rect(r))));
             }
         }
         resolved.push(TextGlyph {
@@ -581,7 +636,7 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
             advance,
             ink: positioned[item_start..]
                 .iter()
-                .map(DrawItem::bounds)
+                .map(|(_, item)| item.bounds())
                 .reduce(|a, b| Rectangle::union(&a, &b)),
         });
         width += advance;
@@ -589,10 +644,12 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
         unit += c.len_utf16();
     }
     let mut bounds = Rectangle::new(0.0, 0.0, width, height);
-    for item in positioned {
+    let mut item_glyphs = vec![];
+    for (gi, item) in positioned {
         if let Some(item) = item.translate_y(ascent) {
             bounds = Rectangle::union(&bounds, &item.bounds());
             items.push(item);
+            item_glyphs.push(gi);
         }
     }
     for glyph in &mut resolved {
@@ -616,6 +673,8 @@ fn line(units: &[u16], s: &TextSettings, px: f64, bytes: &[Arc<[u8]>]) -> TextLi
         items,
         glyphs: resolved,
         clip,
+        item_glyphs,
+        baseline: ascent,
     }
 }
 /// R111 defensive adapter fallback, not a native em-size clamp.
@@ -1014,7 +1073,26 @@ pub struct TextTool {
     reedit: Option<Reedit>,
     /// The active layer is new text's own, not yet in history (`add_preview_layer`).
     preview: bool,
+    /// Extra (`shape`): the drawn text's bounds while it is placed on a shape or turned.
+    placed_bounds: Option<Rectangle>,
+    /// The rotate handle and the turn's pivot (the text's middle), as last drawn.
+    turn_handle: Option<([f64; 2], [f64; 2])>,
+    /// The angle the text was last drawn at.
+    angle: f64,
+    /// A rotate-handle drag.
+    turning: Option<Turning>,
 }
+/// A rotate-handle drag: its pivot, the pointer's screen angle at the press (radians), and the
+/// text's angle and click point then.
+#[derive(Clone, Copy)]
+struct Turning {
+    pivot: [f64; 2],
+    from: f64,
+    angle: f64,
+    click: [f64; 2],
+}
+/// The rotate handle's distance above the text, in screen px.
+const TURN_GAP: f64 = 24.0;
 impl TextTool {
     pub fn is_editing(&self) -> bool {
         self.mode != EditMode::None
@@ -1347,6 +1425,27 @@ impl TextTool {
             r.height * t.scale / p,
         )
     }
+    /// The caret's corners on the canvas viewport (as `caret_rect`) while the text is placed on a
+    /// shape or turned (`shape`); `None` while it lies straight.
+    pub fn caret_quad(&self, app: &AppWorkspace) -> Option<[[f64; 2]; 4]> {
+        let place = Placement::new(self.layout.as_ref()?, &Self::settings(app), self.click)?;
+        let r = self.caret_image(app);
+        let ws = app.active_ws()?;
+        let (t, k) = (ws.view.view_transform(), ws.view.ppp);
+        let corners = [
+            [r.left(), r.top()],
+            [r.right(), r.top()],
+            [r.right(), r.bottom()],
+            [r.left(), r.bottom()],
+        ];
+        Some(corners.map(|c| {
+            let q = place.map(c);
+            [
+                (q[0] * t.scale + t.origin[0]) / k,
+                (q[1] * t.scale + t.origin[1]) / k,
+            ]
+        }))
+    }
     fn nub(&self, app: &AppWorkspace) -> [f64; 2] {
         let Some(ws) = app.active_ws() else {
             return [0.0; 2];
@@ -1354,10 +1453,15 @@ impl TextTool {
         let Some(last) = self.layout.as_ref().and_then(|l| l.lines.last()) else {
             return [0.0; 2];
         };
+        // A placed or turned text's nub goes by its drawn bounds.
+        let (origin, size) = match self.placed_bounds {
+            Some(b) => ([b.x, b.y], [b.width, b.height]),
+            None => (last.origin, [last.width, last.height]),
+        };
         let surface = &ws.document.layers.get_at(ws.active_layer).unwrap().surface;
         text_nub_position(
-            last.origin,
-            [last.width, last.height],
+            origin,
+            size,
             ws.view.ppp,
             ws.view.zoom,
             [surface.width() as f64, surface.height() as f64],
@@ -1366,6 +1470,41 @@ impl TextTool {
     fn touches_nub(&self, app: &AppWorkspace, x: f64, y: f64) -> bool {
         app.active_ws()
             .is_some_and(|ws| nub_contains(self.nub(app), [x, y], ws.view.ppp, ws.view.zoom))
+    }
+    /// The press is on the rotate handle (shown with the nub).
+    fn touches_turn(&self, app: &AppWorkspace, x: f64, y: f64) -> bool {
+        let shown = self.is_editing() && self.pulse.nub_visible;
+        (self.turn_handle.zip(app.active_ws()))
+            .is_some_and(|((h, _), ws)| shown && nub_contains(h, [x, y], ws.view.ppp, ws.view.zoom))
+    }
+    /// The rotate handle `TURN_GAP` screen px above the middle of the text's top, in its turned
+    /// frame, and the pivot it turns about: the text's middle. Only for text with characters.
+    fn turn_geometry(
+        &self,
+        app: &AppWorkspace,
+        layout: &TextLayout,
+        s: &TextSettings,
+    ) -> Option<([f64; 2], [f64; 2])> {
+        let ws = app.active_ws()?;
+        if self.mode != EditMode::Editing {
+            return None;
+        }
+        let lines = || {
+            layout
+                .lines
+                .iter()
+                .map(line_bounds)
+                .reduce(|a, b| Rectangle::union(&a, &b))
+        };
+        let b = match Placement::turned(layout, s, self.click, 0.0) {
+            Some(p) => p.ink_bounds(layout).or_else(lines),
+            None => lines(),
+        }?;
+        let gap = TURN_GAP * ws.view.ppp / ws.view.zoom;
+        let mid = [b.x + b.width / 2.0, b.y + b.height / 2.0];
+        let top = [mid[0], b.top() - gap];
+        let turn = |p| shape::turn_point(p, self.click, s.angle);
+        Some((turn(top), turn(mid)))
     }
     /// The press is within `pad` of the text's bounds (half-open, at its pixel).
     fn near(&self, x: f64, y: f64, pad: f64) -> bool {
@@ -1486,6 +1625,10 @@ impl TextTool {
             row,
             s.align,
         );
+        let p = match Placement::new(&layout, &s, self.click) {
+            Some(place) => place.map(p),
+            None => p,
+        };
         if let Some(center) =
             text_visibility_center(ws.view.text_viewport_bounds(), p, layout.lines[row].height)
         {
@@ -1499,16 +1642,24 @@ impl TextTool {
         let canvas = self.nub(app);
         let visible = self.is_editing() && self.pulse.nub_visible;
         if let (Some(id), Some(ws)) = (self.handles, app.active_ws_mut()) {
-            let list = if visible {
-                vec![Handle {
+            let opacity = self.pulse.nub_opacity as f32;
+            let mut list = vec![];
+            if visible {
+                list.push(Handle {
                     canvas,
                     shape: HandleShape::Compass,
-                    opacity: self.pulse.nub_opacity as f32,
+                    opacity,
                     hover: 0.0,
-                }]
-            } else {
-                vec![]
-            };
+                });
+                if let Some((canvas, _)) = self.turn_handle {
+                    list.push(Handle {
+                        canvas,
+                        shape: HandleShape::Rotate,
+                        opacity,
+                        hover: 0.0,
+                    });
+                }
+            }
             if matches!(ws.surface_box.renderer(id),Some(Renderer::Handles(h)) if *h==list) {
                 return;
             }
@@ -1544,6 +1695,20 @@ impl TextTool {
         ));
         let caret = self.caret_image(app);
         let layout = self.layout.as_ref().unwrap();
+        // Extra (`shape`): the text drawn on its shape and turned.
+        let place = Placement::new(layout, &s, self.click);
+        let drawn = place.as_ref().map(|p| p.apply(layout));
+        let caret = place.as_ref().map_or(caret, |p| p.quad_bounds(&caret));
+        self.turn_handle = self.turn_geometry(app, layout, &s);
+        self.angle = s.angle;
+        let layout = drawn.as_ref().unwrap_or(layout);
+        self.placed_bounds = place.and_then(|_| {
+            layout
+                .lines
+                .iter()
+                .map(line_bounds)
+                .reduce(|a, b| Rectangle::union(&a, &b))
+        });
         let bounds = layout
             .lines
             .iter()
@@ -1659,6 +1824,13 @@ impl TextTool {
         self.affected = None;
         self.layout = None;
         self.drag = None;
+        self.turning = None;
+        (self.placed_bounds, self.turn_handle) = (None, None);
+        // The angle is the edited text's: the next text starts straight.
+        if Self::settings(app).angle != 0.0 {
+            app.tool_settings
+                .set(ToolType::Text, "textAngle", number(0.0));
+        }
     }
     /// The text being typed as a text layer's spec (S§4.5).
     fn spec(&self, app: &AppWorkspace) -> TextSpec {
@@ -1776,6 +1948,26 @@ impl TextTool {
         let dpi = self.dpi(app);
         let s = Self::settings(app);
         let layout = layout_units(&self.lines, &s, self.click, dpi);
+        if let Some(place) = Placement::new(&layout, &s, self.click) {
+            // Placed or turned text: the caret slot whose middle lands nearest the press (the
+            // callers add H/2).
+            let at = [x, y - layout.space_height / 2.0];
+            let px = text_px_size(s.size, s.metric, dpi);
+            let mut best = (f64::MAX, (0, 0));
+            for (row, l) in layout.lines.iter().enumerate() {
+                let (mut widths, _) = layout_raw_units_px(&self.lines[row], &[], &s, px);
+                widths.push(l.width);
+                for (col, w) in widths.into_iter().enumerate() {
+                    let q = place.map([l.origin[0] + w, l.origin[1] + l.height / 2.0]);
+                    let d = (q[0] - at[0]).hypot(q[1] - at[1]);
+                    if d < best.0 {
+                        best = (d, (row, col));
+                    }
+                }
+            }
+            self.caret = best.1;
+            return;
+        }
         let first = &layout.lines[0];
         // The lookup origin is the click point, not the rendered top. The pointer caller adds H/2.
         let row = ((y - self.click[1]) / (first.height as f32 as f64))
@@ -2085,6 +2277,21 @@ impl Tool for TextTool {
         b: MouseButton,
         _: &PointerInput,
     ) -> bool {
+        if b == MouseButton::Left
+            && self.touches_turn(app, x, y)
+            && let Some((_, pivot)) = self.turn_handle
+        {
+            self.cancel_composition();
+            self.turning = Some(Turning {
+                pivot,
+                from: (y - pivot[1]).atan2(x - pivot[0]),
+                angle: Self::settings(app).angle,
+                click: self.click,
+            });
+            self.cursor_name = Some("rotate_cursor");
+            self.redraw(app);
+            return true;
+        }
         let hit = self.touches_nub(app, x, y);
         let reach = b == MouseButton::Left && self.in_move_reach(app, x, y);
         if self.is_editing() && (b == MouseButton::Right || hit || reach) {
@@ -2113,6 +2320,22 @@ impl Tool for TextTool {
         true
     }
     fn on_mouse_move(&mut self, app: &mut AppWorkspace, x: f64, y: f64, _: &PointerInput) -> bool {
+        if let Some(t) = self.turning {
+            // Screen angles grow clockwise, the text's counter-clockwise; Shift steps by 15°.
+            let turned = ((y - t.pivot[1]).atan2(x - t.pivot[0]) - t.from).to_degrees();
+            let mut angle = t.angle - turned;
+            if app.shift_key_down {
+                angle = (angle / 15.0).round() * 15.0;
+            }
+            let angle = ((angle + 180.0).rem_euclid(360.0) - 180.0) * 10.0;
+            let angle = angle.round() / 10.0;
+            // The text spins about its middle: the click point goes round it too.
+            self.click = shape::turn_point(t.click, t.pivot, angle - t.angle);
+            app.tool_settings
+                .set(ToolType::Text, "textAngle", number(angle));
+            self.redraw(app);
+            return true;
+        }
         if let Some((start, origin)) = self.drag {
             self.click = [
                 origin[0] + x.floor() - start[0],
@@ -2122,7 +2345,9 @@ impl Tool for TextTool {
             true
         } else {
             let nub = self.pulse.nub_visible && self.touches_nub(app, x, y);
-            self.cursor_name = Some(if nub || self.in_move_reach(app, x, y) {
+            self.cursor_name = Some(if self.touches_turn(app, x, y) {
+                "rotate_cursor"
+            } else if nub || self.in_move_reach(app, x, y) {
                 "hand_open_cursor"
             } else {
                 "text_tool_cursor"
@@ -2138,6 +2363,12 @@ impl Tool for TextTool {
         _: MouseButton,
         i: &PointerInput,
     ) -> bool {
+        if self.turning.is_some() {
+            self.on_mouse_move(app, x, y, i);
+            self.turning = None;
+            self.update_status(app);
+            return true;
+        }
         if self.drag.is_none() {
             return false;
         }
@@ -2159,6 +2390,13 @@ impl Tool for TextTool {
         if key == "editableText" {
             self.commit(app);
         } else {
+            // A typed angle spins the text about its middle, as the rotate handle does.
+            if key == "textAngle"
+                && let Some((_, pivot)) = self.turn_handle.filter(|_| self.is_editing())
+            {
+                let angle = Self::settings(app).angle;
+                self.click = shape::turn_point(self.click, pivot, angle - self.angle);
+            }
             self.redraw(app);
         }
     }
@@ -3007,8 +3245,9 @@ mod tests {
                     1 + pasted.bytes().filter(|&b| b == b'\n').count()
                 );
                 let id = t.handles.unwrap();
+                // The nub (and the rotate handle once there is text).
                 assert!(
-                    matches!(app.active_ws().unwrap().surface_box.renderer(id),Some(Renderer::Handles(h)) if h.len()==1)
+                    matches!(app.active_ws().unwrap().surface_box.renderer(id),Some(Renderer::Handles(h)) if h[0].shape == HandleShape::Compass)
                 );
                 app.now_ms += 16.0;
                 t.update_pulse(&mut app, true, true, false, true);
@@ -3848,5 +4087,105 @@ mod tests {
         assert_eq!(restored, (Some(spec), pixels));
         assert!(app.redo());
         assert_eq!(spec_of(&app, 0), None);
+    }
+    /// The rotate handle and pivot of the text being edited.
+    fn turn_of(app: &mut AppWorkspace) -> ([f64; 2], [f64; 2]) {
+        let mut out = None;
+        crate::testing::with_tool::<TextTool>(app, |t, _| out = t.turn_handle);
+        out.expect("a rotate handle")
+    }
+    fn angle_setting(app: &AppWorkspace) -> f64 {
+        app.tool_settings
+            .get(ToolType::Text, "textAngle")
+            .as_f64()
+            .unwrap()
+    }
+    fn near(a: [f64; 2], b: [f64; 2], d: f64) -> bool {
+        (a[0] - b[0]).hypot(a[1] - b[1]) <= d
+    }
+    /// Extra (`shape`): the rotate handle sits over the text and turns it about its middle, Shift
+    /// in 15° steps; a typed angle turns it the same way. The angle is the text's: the next text
+    /// starts straight, and its layer brings it back.
+    #[test]
+    fn the_rotate_handle_turns_text_about_its_middle() {
+        let mut app = crate::testing::fresh_doc(240, 160, None);
+        app.set_active_tool_from_type(ToolType::Text);
+        click(&mut app, 80.0, 80.0);
+        type_text(&mut app, "Turn me");
+        let (handle, pivot) = turn_of(&mut app);
+        assert!(handle[1] < pivot[1] - 20.0 && (handle[0] - pivot[0]).abs() < 0.5);
+        // Up to right of the pivot: a quarter turn clockwise on screen, -90°.
+        let (b, right) = (MouseButton::Left, [pivot[0] + 40.0, pivot[1]]);
+        let drag = [
+            Ev::Down(handle[0], handle[1], b),
+            Ev::Move(right[0], right[1]),
+            Ev::Up(right[0], right[1], b),
+        ];
+        drive_tool(&mut app, ToolType::Text, &drag);
+        // Within the pointer's pixel at 40 px.
+        assert!(
+            (angle_setting(&app) + 90.0).abs() < 2.0,
+            "{}",
+            angle_setting(&app)
+        );
+        let (handle, turned) = turn_of(&mut app);
+        assert!(near(turned, pivot, 1.5), "{turned:?} {pivot:?}");
+        assert!(
+            handle[0] > pivot[0] + 20.0,
+            "the handle turned with the text"
+        );
+        // Shift: 37° further counter-clockwise lands on -45°.
+        // The handle points along (−sin θ, −cos θ) at text angle θ.
+        let a = (-90f64 + 37.0).to_radians();
+        let to = [pivot[0] - 40.0 * a.sin(), pivot[1] - 40.0 * a.cos()];
+        let shift = [
+            Ev::DownMods(handle[0], handle[1], b, "Shift"),
+            Ev::Move(to[0], to[1]),
+            Ev::Up(to[0], to[1], b),
+        ];
+        drive_tool(&mut app, ToolType::Text, &shift);
+        assert_eq!(angle_setting(&app), -45.0);
+        // A typed angle: about the middle too.
+        app.update_tool_setting(ToolType::Text, "textAngle", serde_json::json!(30));
+        assert!(near(turn_of(&mut app).1, pivot, 1.5));
+        escape(&mut app);
+        let spec = spec_of(&app, 1).unwrap();
+        assert_eq!((spec.settings.angle, angle_setting(&app)), (30.0, 0.0));
+        click(&mut app, pivot[0], pivot[1]);
+        assert_eq!(angle_setting(&app), 30.0);
+    }
+    /// Extra (`shape`): a whole circle of text is about as tall as it is wide, and its spec stores
+    /// the shape (straight text stores what it did before, `text_spec_json_is_pinned`).
+    #[test]
+    fn circle_text_goes_round() {
+        let mut app = crate::testing::fresh_doc(200, 200, None);
+        app.set_active_tool_from_type(ToolType::Text);
+        app.tool_settings
+            .set(ToolType::Text, "textShape", "circle".into());
+        app.tool_settings
+            .set(ToolType::Text, "textBend", serde_json::json!(100));
+        click(&mut app, 20.0, 40.0);
+        type_text(&mut app, "round and round");
+        escape(&mut app);
+        let spec = spec_of(&app, 1).unwrap();
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""shape":"circle","bend":100.0"#), "{json}");
+        let surface = &app
+            .active_ws()
+            .unwrap()
+            .document
+            .layers
+            .get_at(1)
+            .unwrap()
+            .surface;
+        let (w, data) = (surface.width() as usize, surface.data());
+        let inked: Vec<_> = (0..data.len() / 4)
+            .filter(|i| data[i * 4 + 3] > 0)
+            .collect();
+        let xs = inked.iter().map(|i| i % w);
+        let ys = inked.iter().map(|i| i / w);
+        let width = xs.clone().max().unwrap() - xs.min().unwrap();
+        let height = ys.clone().max().unwrap() - ys.min().unwrap();
+        assert!(width.abs_diff(height) <= width / 5, "{width} × {height}");
     }
 }
