@@ -1295,9 +1295,10 @@ pub static ACTIONS: &[ActionDef] = &[
 /// formatted once, so they are leaked once.
 // ponytail: 50 small strings leaked at first use; a const table in the manifest if that ever matters.
 static PLUGIN_ACTIONS: std::sync::LazyLock<Vec<ActionDef>> = std::sync::LazyLock::new(|| {
-    use crate::effect::{Category, bb::manifest::MANIFEST};
+    use crate::effect::{Category, bb::manifest::MANIFEST, forum};
     let mut v: Vec<ActionDef> = MANIFEST
         .iter()
+        .chain(&forum::MANIFEST)
         .map(|m| {
             let (id, category) = match m.category {
                 Category::Adjustment => (format!("adjustment.{}", m.id), "General"),
@@ -1402,7 +1403,7 @@ pub fn plugin_item(action_id: &str) -> Option<&'static crate::effect::bb::manife
     let id = action_id
         .strip_prefix("adjustment.")
         .or(action_id.strip_prefix("menu.effects."))?;
-    crate::effect::bb::manifest::manifest(id)
+    crate::effect::plugin_manifest(id)
 }
 
 /// `getDisplayName()`: a `CallbackAction`'s label or name callback, a translated name, else the

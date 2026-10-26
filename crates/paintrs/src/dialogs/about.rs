@@ -403,7 +403,8 @@ fn credits<'a>(theme: &theme::Theme) -> Vec<(Run<'a>, Option<&'a str>)> {
          to him and the Paint.NET contributors.\n\npaint.js by ",
         " served as a reference during the development of paint.rs. paint.rs is unofficial and \
          is not affiliated with or endorsed by Paint.NET or dotPDN LLC.\n\nIncludes code adapted \
-         from PhotoCraft (MIT). Some plugins were inspired by BoltBait's Paint.NET plugin pack.",
+         from PhotoCraft (MIT). Some plugins were inspired by BoltBait's Paint.NET plugin pack \
+         and by dpy's and Tanel's plugins from the Paint.NET forum.",
     );
     runs.extend([
         (plain(port, text), None),

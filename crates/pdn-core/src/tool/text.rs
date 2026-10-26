@@ -320,6 +320,10 @@ fn faces(s: &TextSettings) -> Vec<Arc<[u8]>> {
     }
     result
 }
+/// The face `s` lays its text out in first (the family's, else the interface face).
+pub(crate) fn primary_face(s: &TextSettings) -> Arc<[u8]> {
+    faces(s).swap_remove(0)
+}
 /// The faces before a trailing colour face (`faces` pushes it last; tests push it at 3).
 fn ordinary_faces(ttf: &[ttf_parser::Face]) -> usize {
     let n = ttf.len();

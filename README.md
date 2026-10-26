@@ -101,7 +101,7 @@ These features come from PhotoCraft. In the app they're marked with a gray plus.
 | Effects ▸ Distort | Color Halftone, Displace, Glass, Halftone Pattern, Liquify, Mezzotint, Ocean Ripple, Offset, Pointillize, Polar Coordinates, Ripple, Shear, Vanishing Point, Wave, ZigZag |
 | Effects ▸ Noise | Dust & Scratches, Film Grain |
 | Effects ▸ Object | Color Decontaminate, Color to Alpha, Defringe, Remove Black Matte, Remove White Matte |
-| Effects ▸ Photo | De-Interlace, Diffuse Glow, Lens Correction, Relight, Smart Sharpen, Unsharp Mask |
+| Effects ▸ Photo | De-Interlace, Diffuse Glow, Lens Correction, Relight, Smart Sharpen |
 | Effects ▸ Render | Fibers, Flame, Lens Flare, Lighting Effects, Picture Frame, Tree |
 | Effects ▸ Sketch (new) | Bas Relief, Chalk & Charcoal, Charcoal, Chrome, Conté Crayon, Graphic Pen, Note Paper, Photocopy, Plaster, Reticulation, Stamp, Torn Edges, Water Paper |
 | Effects ▸ Stylize | Custom Kernel, Extrude, Glowing Edges, High Pass, Neon Glow, Plastic Wrap, Solarize, Tiles, Trace Contour, Wind |
@@ -128,6 +128,22 @@ the same gray plus as PhotoCraft's additions.
 | Effects ▸ Selection (new) | Bevel Selection, Blur Selection Edge, Feather Selection, Inner Shadow, Outline Selection |
 | Effects ▸ Stylize | Edge Detect Classic, Floyd-Steinberg Dithering |
 | Effects ▸ Text Formations (new) | Text Fun Factory |
+
+---
+
+## Forum Plugins (inspired by dpy and Tanel)
+
+Eight more plugins follow two packs from the Paint.NET forum:
+[dpy's plugin pack](https://forums.paint.net/topic/16643-dpys-plugin-pack-2014-05-04/) for text along a
+shape, and [Tanel's photo and color plugins](https://forums.paint.net/topic/11619-tanels-photo-and-color-plugins-2012-03-05/).
+They carry the same gray plus. Sharpen+ takes the place of PhotoCraft's Unsharp Mask, and Tanel's
+Color to Alpha is named Color Range to Alpha beside PhotoCraft's Color to Alpha.
+
+| Menu | Additions |
+|---|---|
+| Effects ▸ Color | Color Range to Alpha |
+| Effects ▸ Photo | Sharpen+ |
+| Effects ▸ Text Formations (new) | Circle Text, RotateText, RotateTextSUI, SpiralText, WaveText, WaveTextSUI |
 
 ---
 
@@ -252,6 +268,8 @@ their own licences, listed in [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md
   with it.
 - **[BoltBait's Paint.NET Plugin Pack](https://www.boltbait.com/pdn/)**, the inspiration for the plugins. No BoltBait code or
   artwork is included.
+- **dpy's plugin pack** and **Tanel's photo and color plugins** from the Paint.NET forum, the
+  inspiration for the forum plugins. None of their code or artwork is included.
 - **[paint.js](https://github.com/LabyStudio/paintdotjs)** by LabyStudio, a reference during
   development. Some code is adapted from it under its MIT licence. None of its artwork is used.
 - **PhotoCraft** by the ArtCraft Team and contributors (MIT), the source of the additions above.

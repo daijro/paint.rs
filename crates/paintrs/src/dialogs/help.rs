@@ -66,7 +66,8 @@ pub fn help_text(id: &str) -> Option<&'static str> {
         bbFeatherSelection,
         bbInnerShadowSelection,
         bbOutlineSelection,
-        bbFloydSteinbergDithering
+        bbFloydSteinbergDithering,
+        tanelSharpenPlus
     )
 }
 

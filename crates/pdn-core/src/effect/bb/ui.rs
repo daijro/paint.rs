@@ -28,6 +28,8 @@ pub struct IndirectUi {
     /// open, every notification and Repeat.
     pub external_for: fn(&Values) -> External,
     pub tabs: &'static [TabStrip],
+    /// Controls on no tab page drawn above the tab strips, in this order (the rest follow them).
+    pub above_tabs: &'static [&'static str],
     /// Presentation-only values, omitted from successful effect tokens and Repeat.
     pub transient_keys: &'static [&'static str],
     pub controls: &'static [(&'static str, ControlUi)],
@@ -55,6 +57,7 @@ impl IndirectUi {
         width: 1.0,
         external_for: |_| External::None,
         tabs: &[],
+        above_tabs: &[],
         transient_keys: &[],
         controls: &[],
         enabled: always,

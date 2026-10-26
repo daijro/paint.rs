@@ -8,6 +8,7 @@ pub mod blur;
 pub mod color;
 pub mod distort;
 pub mod extra;
+pub mod forum;
 pub mod levels_ui;
 pub mod mix;
 pub mod noise;
@@ -223,7 +224,7 @@ impl EffectDef {
 /// Effect `id`'s menu name: a plugin's or an Extra's untranslated manifest name, else the
 /// translated name.
 pub fn display_name_of(id: &str) -> String {
-    bb::manifest::manifest(id)
+    plugin_manifest(id)
         .map(|m| m.name)
         .or_else(|| extra::manifest::manifest(id).map(|m| m.name))
         .map_or_else(|| i18n::t(&format!("{id}.name")), String::from)
@@ -237,9 +238,21 @@ pub enum Provenance {
     Extra,
 }
 
+/// The manifest row of a plugin effect id: BB's pack or the other forum plugins (`forum`).
+pub fn plugin_manifest(effect_id: &str) -> Option<&'static bb::manifest::PluginItem> {
+    bb::manifest::manifest(effect_id).or_else(|| forum::manifest(effect_id))
+}
+
+/// Every plugin effect: BB's pack, then the other forum plugins.
+pub fn plugin_effects() -> Vec<EffectDef> {
+    let mut effects = bb::effects();
+    effects.extend(forum::effects());
+    effects
+}
+
 /// Effect `effect_id`'s provenance; an id is never both Plugin and Extra.
 pub fn provenance_of(effect_id: &str) -> Provenance {
-    if bb::manifest::manifest(effect_id).is_some() {
+    if plugin_manifest(effect_id).is_some() {
         Provenance::Plugin
     } else if extra::manifest::manifest(effect_id).is_some() {
         Provenance::Extra
@@ -519,7 +532,7 @@ pub const CATEGORIES: [(&str, &[&str]); 9] = [
 
 /// The registered plugin effects, then the Extra effects, each when shown.
 fn registered(plugins: bool, extras: bool) -> impl Iterator<Item = EffectDef> {
-    let plugins = plugins.then(bb::effects).into_iter().flatten();
+    let plugins = plugins.then(plugin_effects).into_iter().flatten();
     plugins.chain(extras.then(extra::effects).into_iter().flatten())
 }
 
@@ -608,7 +621,7 @@ fn all() -> impl Iterator<Item = EffectDef> {
     definitions()
         .into_iter()
         .chain(effects())
-        .chain(bb::effects())
+        .chain(plugin_effects())
         .chain(extra::effects())
         .chain(std::iter::once(rotate_zoom()))
 }

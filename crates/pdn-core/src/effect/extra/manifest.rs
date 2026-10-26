@@ -66,7 +66,6 @@ pub const MANIFEST: &[ExtraItem] = &[
     ExtraItem { id: "pcHsbHsl", name: "HSB/HSL", category: E("color"), configurable: true, icon: "hsb_hsl_effect.png" },
     ExtraItem { id: "pcNtscColors", name: "NTSC Colors", category: E("color"), configurable: false, icon: "ntsc_colors_effect.png" },
     ExtraItem { id: "pcDeInterlace", name: "De-Interlace", category: E("photo"), configurable: true, icon: "de_interlace_effect.png" },
-    ExtraItem { id: "pcUnsharpMask", name: "Unsharp Mask", category: E("photo"), configurable: true, icon: "unsharp_mask_effect.png" },
     ExtraItem { id: "pcSmartSharpen", name: "Smart Sharpen", category: E("photo"), configurable: true, icon: "smart_sharpen_effect.png" },
     ExtraItem { id: "pcHighPass", name: "High Pass", category: E("stylize"), configurable: true, icon: "high_pass_effect.png" },
     ExtraItem { id: "pcBasRelief", name: "Bas Relief", category: E("sketch"), configurable: true, icon: "bas_relief_effect.png" },

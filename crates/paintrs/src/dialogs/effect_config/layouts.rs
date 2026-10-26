@@ -127,9 +127,9 @@ pub(crate) enum Row {
     },
 }
 
-/// common.md §3 "Tabs", "Enable rules": every top-level tab strip (one whose key no page lists),
-/// each followed by its selected page's controls (a nested strip where its page lists it), then
-/// the controls on no page, in definition order. `Value` controls never show; the selected index
+/// common.md §3 "Tabs", "Enable rules": the controls `above_tabs` lists, then every top-level tab
+/// strip (one whose key no page lists), each followed by its selected page's controls (a nested
+/// strip where its page lists it), then the other controls on no page, in definition order. `Value` controls never show; the selected index
 /// is clamped to the strip.
 pub(crate) fn indirect_rows(ui: &IndirectUi, controls: &[Control], values: &Values) -> Vec<Row> {
     let on_page = |k: &str| {
@@ -139,10 +139,16 @@ pub(crate) fn indirect_rows(ui: &IndirectUi, controls: &[Control], values: &Valu
             .any(|t| t.keys.contains(&k))
     };
     let mut rows = vec![];
+    for &key in ui.above_tabs {
+        push_control(ui, key, controls, values, &mut rows);
+    }
     for strip in ui.tabs.iter().filter(|s| !on_page(s.key)) {
         push_strip(ui, strip, controls, values, &mut rows);
     }
-    for c in controls.iter().filter(|c| !on_page(c.key())) {
+    let rest = controls
+        .iter()
+        .filter(|c| !on_page(c.key()) && !ui.above_tabs.contains(&c.key()));
+    for c in rest {
         push_control(ui, c.key(), controls, values, &mut rows);
     }
     rows

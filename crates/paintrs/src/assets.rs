@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn every_bundled_svg_rasterizes() {
-        assert_eq!(embedded::ICON_SVGS.len(), 473);
+        assert_eq!(embedded::ICON_SVGS.len(), 478);
         for (name, bytes) in embedded::ICON_SVGS {
             assert!(raster_svg(bytes, 1.0).is_some(), "{name}");
         }

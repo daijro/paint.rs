@@ -1,7 +1,8 @@
 //! Photocraft phase spec: S§4.2; research R§B (Photo)
 //!
-//! The Extra Photo effects: Unsharp Mask and Smart Sharpen (`extra::fx::sharpen`). Upstream's
-//! Smart Sharpen has only Amount, Radius and Reduce Noise, so every control is a plain Range.
+//! The Extra Photo effect Smart Sharpen (`extra::fx::sharpen`). Upstream's Smart Sharpen has
+//! only Amount, Radius and Reduce Noise, so every control is a plain Range. PhotoCraft's Unsharp
+//! Mask gave way to Tanel's Sharpen+ (`effect::forum::tanel`), an unsharp mask with more control.
 
 use crate::canvas::ImageData;
 use crate::effect::{Category, Control, EffectDef, EffectEnv, EffectKind, Values, num, range};
@@ -27,26 +28,15 @@ fn def(id: &'static str, controls: Vec<Control>, render: RenderFn) -> EffectDef 
 type RenderFn = fn(&ImageData, &Values, &EffectEnv) -> ImageData;
 
 pub fn effects() -> Vec<EffectDef> {
-    vec![
-        def(
-            "pcUnsharpMask",
-            vec![
-                range("amount", "Amount", 1.0, 500.0, 50.0),
-                range("radius", "Radius", 0.1, 1000.0, 1.0).slider_keys(1, 0.1, 1.0, true),
-                range("threshold", "Threshold", 0.0, 255.0, 0.0),
-            ],
-            unsharp_mask,
-        ),
-        def(
-            "pcSmartSharpen",
-            vec![
-                range("amount", "Amount", 1.0, 500.0, 100.0),
-                range("radius", "Radius", 0.1, 64.0, 1.0).slider_keys(1, 0.1, 1.0, false),
-                range("reduceNoise", "Reduce Noise", 0.0, 100.0, 10.0),
-            ],
-            smart_sharpen,
-        ),
-    ]
+    vec![def(
+        "pcSmartSharpen",
+        vec![
+            range("amount", "Amount", 1.0, 500.0, 100.0),
+            range("radius", "Radius", 0.1, 64.0, 1.0).slider_keys(1, 0.1, 1.0, false),
+            range("reduceNoise", "Reduce Noise", 0.0, 100.0, 10.0),
+        ],
+        smart_sharpen,
+    )]
 }
 
 /// Kernel on the whole layer; a cancelled run returns the source (the worker discards it).
@@ -63,13 +53,6 @@ fn run(
     }
 }
 
-fn unsharp_mask(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
-    let (a, r, t) = (num(v, "amount"), num(v, "radius"), num(v, "threshold"));
-    run(src, env, |b, w, h, c| {
-        fx::sharpen::unsharp(b, w, h, a as f32, r as f32, t as f32, c)
-    })
-}
-
 fn smart_sharpen(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
     let (a, r, n) = (num(v, "amount"), num(v, "radius"), num(v, "reduceNoise"));
     run(src, env, |b, w, h, c| {
@@ -79,7 +62,7 @@ fn smart_sharpen(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
 
 #[cfg(test)]
 mod tests {
-    use crate::effect::test_util::{from_fn, px, run, solid};
+    use crate::effect::test_util::{from_fn, run, solid};
     use serde_json::json;
 
     fn edge() -> crate::canvas::ImageData {
@@ -90,38 +73,6 @@ mod tests {
                 [180, 180, 180, 255]
             }
         })
-    }
-
-    #[test]
-    fn unsharp_mask_increases_edge_contrast() {
-        let out = run(
-            "pcUnsharpMask",
-            json!({"amount": 200, "radius": 1.5}),
-            &edge(),
-        );
-        assert!(px(&out, 7, 1)[0] < 80 && px(&out, 8, 1)[0] > 180);
-        assert_eq!(px(&out, 0, 1)[0], 80);
-    }
-
-    /// Noise below the threshold is left alone; above it, sharpened.
-    #[test]
-    fn unsharp_threshold_leaves_flat_noise() {
-        let noise = from_fn(8, 8, |x, y| {
-            let v = 120 + ((x + y) % 2) as u8 * 2;
-            [v, v, v, 255]
-        });
-        let off = run(
-            "pcUnsharpMask",
-            json!({"amount": 500, "radius": 1, "threshold": 20}),
-            &noise,
-        );
-        assert_eq!(off.data, noise.data);
-        let on = run(
-            "pcUnsharpMask",
-            json!({"amount": 500, "radius": 1, "threshold": 0}),
-            &noise,
-        );
-        assert_ne!(on.data, noise.data);
     }
 
     #[test]
@@ -138,7 +89,7 @@ mod tests {
         let flag = AtomicBool::new(true);
         let mut env = EffectEnv::whole(16, 4);
         env.cancel = Some(&flag);
-        let def = find("pcUnsharpMask").unwrap();
+        let def = find("pcSmartSharpen").unwrap();
         assert_eq!(
             apply(&edge(), &def, &defaults(&def), &env).data,
             edge().data
