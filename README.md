@@ -150,6 +150,9 @@ Builds for Linux, Windows, macOS and the web are on the
   From the `.tar.gz`, run `sh scripts/linux-install-desktop.sh ./paintrs` once.
 - The macOS and Windows builds are unsigned, so the system warns the first time you open them.
   The macOS download needs macOS 11 or newer.
+- Pen tablets paint with pressure on every platform. On a Wayland desktop with a pen plugged in,
+  the app opens its window through Xwayland, because Wayland gives a pen only to apps that speak
+  its tablet protocol. Set `PAINTRS_NATIVE_WAYLAND=1` to stay on Wayland without pressure.
 - In the Linux `.tar.gz` and the Windows `.zip`, keep `paintrs` beside its `assets` folder. The
   fonts load from there.
 - If the Windows app doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach
@@ -224,6 +227,12 @@ tools/web-dist.sh --zip    # also write a zip
 | JPEG XL | Yes | Yes (lossless only on the web) |
 | DDS | Yes | Yes, uncompressed 32-bit |
 | HEIC / HEIF, JPEG XR | Yes | No |
+| Photoshop (`.psd`, `.psb`), with its layers | Yes | Yes |
+
+Photoshop files open as Paint.NET's PSD plugin opens them: every layer with its name, opacity,
+visibility, blend mode and masks, groups as "Layer Group" marker layers, and shape layers in their
+colour. Text opens as Photoshop last drew it; layer styles, adjustment layers and gradient or
+pattern fills are left out. Saving writes the layers back, and the marker layers as groups.
 
 ICO isn't supported. Colour profiles and EXIF metadata aren't kept. The DPI is.
 

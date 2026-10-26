@@ -50,6 +50,9 @@ pub struct PaintApp {
     /// Drag and drop on a Wayland window (winit has it only on X11).
     #[cfg(target_os = "linux")]
     pub wayland_dnd: Option<platform::wayland_dnd::Dnd>,
+    /// The AppKit tablet monitor (platform/tablet.rs), installed while the app lives.
+    #[cfg(target_os = "macos")]
+    pub tablet_monitor: Option<photocraft_tablet::macos::Monitor>,
     #[cfg(target_arch = "wasm32")]
     pub web_pen_events: std::rc::Rc<std::cell::RefCell<platform::web::PenEvents>>,
     #[cfg(target_arch = "wasm32")]
@@ -244,6 +247,8 @@ impl PaintApp {
             native_launch: None,
             #[cfg(target_os = "linux")]
             wayland_dnd: None,
+            #[cfg(target_os = "macos")]
+            tablet_monitor: None,
             #[cfg(target_arch = "wasm32")]
             web_pen_events: Default::default(),
             #[cfg(target_arch = "wasm32")]

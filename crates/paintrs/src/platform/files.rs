@@ -440,6 +440,9 @@ fn decode_snapshot(file: &PickedFile) -> Result<PdnDocument, String> {
     if format == "pdn" {
         return pdn_core::io::pdn::decode(&file.bytes).map_err(|e| e.to_string());
     }
+    if format == "psd" {
+        return pdn_core::io::psd::decode(&file.bytes).map_err(|e| e.to_string());
+    }
     let decoded = codecs::decode(format, &file.bytes).map_err(|e| e.to_string())?;
     Ok(single_layer(decoded.image, decoded.dpi))
 }
@@ -457,7 +460,7 @@ pub fn message(title: &str, text: String) {
     });
 }
 
-pub const IMAGE_ACCEPT: &str = ".pdn,.png,.jpg,.jpeg,.jpe,.webp,.gif,.bmp,.tif,.tiff,.jxl,.avif,.heic,.heif,.dds,.tga,.jxr,.wdp,.wmp,.json";
+pub const IMAGE_ACCEPT: &str = ".pdn,.png,.jpg,.jpeg,.jpe,.webp,.gif,.bmp,.tif,.tiff,.jxl,.avif,.heic,.heif,.dds,.tga,.jxr,.wdp,.wmp,.psd,.psb,.json";
 impl Files {
     /// Chooses retained sources before reading bytes, so accepted import commits its tool first.
     pub fn choose_open(

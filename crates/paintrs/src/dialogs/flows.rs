@@ -124,6 +124,9 @@ pub(super) fn encode_document(
     if format == "pdn" {
         return pdn::encode(&ws.document).map_err(|e| e.to_string());
     }
+    if format == "psd" {
+        return pdn_core::io::psd::encode(&ws.document).map_err(|e| e.to_string());
+    }
     let mut options = options.clone();
     options.dpi = ws.document.resolution;
     let image = ws
@@ -538,7 +541,8 @@ fn chosen_destination(
     } else {
         Value::Null
     };
-    let config = destination.format != "pdn" && (save_as || old.options.is_null());
+    // PDN and PSD have nothing to configure.
+    let config = !matches!(destination.format, "pdn" | "psd") && (save_as || old.options.is_null());
     let plan = Plan {
         id,
         destination,

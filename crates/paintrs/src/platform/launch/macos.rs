@@ -360,6 +360,8 @@ pub fn run(bridge: Bridge, options: fn() -> eframe::NativeOptions) -> eframe::Re
             options(),
             Box::new(move |cc| {
                 let mut app = crate::PaintApp::new(cc);
+                app.tablet_monitor =
+                    super::super::tablet::install_macos(&app.shell.canvas_view.pen.stylus);
                 delivery.attach(&cc.egui_ctx);
                 app.native_launch = Some(delivery);
                 Ok(Box::new(app))

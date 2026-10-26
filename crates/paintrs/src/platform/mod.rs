@@ -19,6 +19,8 @@ mod clipboard_image;
 pub use clipboard_image::{ImageRead, ImageReadRequest};
 pub mod pen;
 pub use pen::{PenInput, PenState};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod tablet;
 
 use pdn_core::canvas::ImageData;
 

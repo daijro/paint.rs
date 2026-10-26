@@ -42,6 +42,9 @@ bcdec_rs = "0.2"
 gif = "0.14"
 # Task 47b: palette TIFFs re-tagged as grey (io/tiff.rs); 0.11 is the version `image` already locks.
 tiff = "0.11"
+# PSD and PSB open and save (io/psd.rs): PhotoCraft's reader and writer (MIT OR Apache-2.0, pure
+# Rust on every target), vendored without its swatch, action and preset parsers.
+photocraft-psd = { path = "../vendor/photocraft-psd" }
 candle-core = { version = "=0.9.2", optional = true }
 candle-nn = { version = "=0.9.2", optional = true }
 candle-transformers = { version = "=0.9.2", optional = true }

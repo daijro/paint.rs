@@ -40,6 +40,10 @@ fn main() -> std::process::ExitCode {
                     bridge.attach(&cc.egui_ctx);
                     #[cfg(target_os = "linux")]
                     if let Some(window) = cc.winit_window() {
+                        paintrs::platform::tablet::start_x11(
+                            &app.shell.canvas_view.pen.stylus,
+                            window,
+                        );
                         bridge.attach_wayland_attention(window);
                         app.wayland_dnd =
                             paintrs::platform::wayland_dnd::Dnd::start(window, &cc.egui_ctx);
@@ -93,6 +97,18 @@ fn native_options() -> eframe::NativeOptions {
         persistence_path: eframe::storage_dir("paint.rs").map(|dir| dir.join("app.ron")),
         ..Default::default()
     };
+    // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; a pen needs Xwayland there
+    // (platform/tablet.rs). Decided once: the renderer fallbacks call this again.
+    #[cfg(target_os = "linux")]
+    {
+        static XWAYLAND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *XWAYLAND.get_or_init(paintrs::platform::tablet::use_xwayland) {
+            use winit::platform::x11::EventLoopBuilderExtX11 as _;
+            options.event_loop_builder = Some(Box::new(|builder| {
+                builder.with_x11();
+            }));
+        }
+    }
     // eframe's default surface (`SurfaceConfig::LOW_LATENCY`) already queues one frame ahead of
     // the display, vsync'd. `PAINTRS_FRAME_LATENCY` (1-3) overrides it: 2 or 3 trade a refresh of
     // input lag each for headroom when frames overrun the refresh.

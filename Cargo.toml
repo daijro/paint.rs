@@ -2,10 +2,14 @@
 resolver = "3"
 members = ["crates/pdn-core", "crates/paintrs", "crates/sam-worker"]
 # Vendored third-party crates (patched below) are not workspace members: no lint, test or fmt gate.
-exclude = ["crates/vendor/heic-rs"]
+exclude = [
+    "crates/vendor/heic-rs",
+    "crates/vendor/photocraft-psd",
+    "crates/vendor/photocraft-tablet",
+]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"

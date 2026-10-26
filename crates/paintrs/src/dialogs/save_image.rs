@@ -42,6 +42,7 @@ pub const FORMATS: &[FormatInfo] = &[
     format_info!("bmp", "BMP", [".bmp"], None, false),
     format_info!("tga", "TGA", [".tga"], None, false),
     format_info!("jxr", "JPEG XR", [".jxr", ".wdp", ".wmp"], Some(90), false),
+    format_info!("psd", "Photoshop", [".psd", ".psb"], None, true),
 ];
 pub const CHROMA_CHOICES: [&str; 4] = ["4:4:4", "4:4:0", "4:2:2", "4:2:0"];
 pub fn find_format(id: &str) -> &'static FormatInfo {
@@ -139,10 +140,13 @@ impl SaveImageDialog {
         let result =
             super::flows::encode_document(cx.app, self.document, f, &self.options[self.format])
                 .and_then(|bytes| {
-                    let image = if f == "pdn" {
-                        let doc = pdn_core::io::pdn::decode(&bytes)
-                            .map_err(|e| e.to_string())?
-                            .to_document();
+                    let image = if f == "pdn" || f == "psd" {
+                        let doc = if f == "pdn" {
+                            pdn_core::io::pdn::decode(&bytes).map_err(|e| e.to_string())?
+                        } else {
+                            pdn_core::io::psd::decode(&bytes).map_err(|e| e.to_string())?
+                        }
+                        .to_document();
                         doc.composite().get_image_data(0, 0, doc.width, doc.height)
                     } else {
                         pdn_core::io::codecs::decode(f, &bytes)
@@ -667,7 +671,7 @@ mod tests {
             FORMATS.iter().map(|f| f.id).collect::<Vec<_>>(),
             [
                 "pdn", "png", "jpeg", "jxl", "avif", "webp", "dds", "heic", "tiff", "gif", "bmp",
-                "tga", "jxr"
+                "tga", "jxr", "psd"
             ]
         );
         assert_eq!(CHROMA_CHOICES, ["4:4:4", "4:4:0", "4:2:2", "4:2:0"]);

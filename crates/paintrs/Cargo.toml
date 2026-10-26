@@ -57,6 +57,8 @@ winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] 
 objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSAppleEventManager", "NSAppleEventDescriptor", "NSNotification", "NSString", "NSURL", "NSObject"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem"] }
+# Pen pressure that winit drops (platform/pen.rs): PhotoCraft's AppKit tablet monitor (vendored).
+photocraft-tablet = { path = "../vendor/photocraft-tablet" }
 
 [target.'cfg(windows)'.dependencies]
 widestring = "1.2.1"
@@ -64,6 +66,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Secur
 
 [target.'cfg(target_os = "linux")'.dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+# Pen pressure that winit drops (platform/pen.rs): PhotoCraft's XInput2 reader on X11 and Xwayland
+# (MIT OR Apache-2.0, vendored; pure-Rust x11rb, already locked through winit).
+photocraft-tablet = { path = "../vendor/photocraft-tablet" }
 # Wayland: clipboard images through data-control (KDE, wlroots; arboard falls back to X11 where the
 # compositor lacks it), and drag and drop on the window's own connection (platform/wayland_dnd.rs).
 # All three are already in the build through arboard and winit.

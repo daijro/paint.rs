@@ -420,6 +420,8 @@ pub fn argv_files(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<Pat
                     | "jxr"
                     | "wdp"
                     | "wmp"
+                    | "psd"
+                    | "psb"
                     | "json"
             )
             && !files.contains(&path)

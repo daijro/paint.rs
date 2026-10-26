@@ -1,0 +1,22 @@
+[package]
+name = "photocraft-tablet"
+description = "Pen tablet pressure, tilt, rotation and eraser end on macOS (AppKit) and Linux X11 (XInput2)"
+version = "0.15.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Only `src/macos.rs` allows `unsafe` (the AppKit event monitor needs Objective-C interop).
+[lints.rust]
+unsafe_code = "deny"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSEvent"] }
+
+# Pure-Rust X11 client (no unsafe in the RustConnection path used here).
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13", default-features = false, features = ["xinput"] }

@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "paintrs"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "arboard",
  "eframe",
@@ -3230,6 +3230,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pdn-core",
  "percent-encoding",
+ "photocraft-tablet",
  "resvg",
  "rfd",
  "serde",
@@ -3293,7 +3294,7 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pdn-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "bcdec_rs",
  "candle-core",
@@ -3313,6 +3314,7 @@ dependencies = [
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "openreadout-jpegxr",
+ "photocraft-psd",
  "ravif",
  "rayon",
  "roxmltree 0.20.0",
@@ -3402,6 +3404,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6fd9027e2d9319be6349febd1db4e8d02aa544921200c9b777720ac34a3aa89"
 dependencies = [
  "siphasher",
+]
+
+[[package]]
+name = "photocraft-psd"
+version = "0.15.0"
+dependencies = [
+ "flate2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "photocraft-tablet"
+version = "0.15.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "x11rb",
 ]
 
 [[package]]
@@ -4004,7 +4025,7 @@ dependencies = [
 
 [[package]]
 name = "sam-worker"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "js-sys",
  "pdn-core",

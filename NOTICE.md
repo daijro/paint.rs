@@ -174,8 +174,10 @@ GPL-3.0-or-later (Playground's `patches/README.md`). `crates/paintrs/src/live.rs
 
 PhotoCraft (ArtCraft Team and the PhotoCraft contributors, MIT License) — algorithms for the Extra
 effects and tools ported in `crates/pdn-core/src/extra/`, `crates/pdn-core/src/tool/` and
-`crates/paintrs/src/dialogs/` (from commits `ff47388` and `e6d6fb45`), and the live-editing adapter
-above. PhotoCraft is
+`crates/paintrs/src/dialogs/` (from commits `ff47388` and `e6d6fb45`), its PSD reader and writer and
+its pen tablet readers, vendored in `crates/vendor/photocraft-psd/` and
+`crates/vendor/photocraft-tablet/` (commit `e6d6fb45`, see their `PAINTRS-PATCH.md`), and the
+live-editing adapter above. PhotoCraft is
 dual-licensed MIT OR Apache-2.0; paint.rs uses it under MIT. It is third-party code, not Paint.NET
 code. Its license:
 
@@ -200,3 +202,31 @@ code. Its license:
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+PsdPlugin (Frank Blumenberg and Tao Yue, MIT License; https://github.com/PsdPlugin/PsdPlugin), the
+Photoshop file type plugin for Paint.NET — `crates/pdn-core/src/io/psd.rs` follows how it opens
+and saves PSD files: its blend mode mapping, its layer group marker names and its layer masks. Its
+license:
+
+> Copyright (c) 2006-2007 Frank Blumenberg
+> Copyright (c) 2010-2020 Tao Yue
+>
+> MIT License: http://www.opensource.org/licenses/mit-license.php
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+> THE SOFTWARE.

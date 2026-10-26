@@ -98,6 +98,7 @@ pub fn detect_format(file_name: &str, mime: Option<&str>, bytes: &[u8]) -> Optio
         Some("avif") => Some("avif"),
         Some("heic" | "heif") => Some("heic"),
         Some("jxr" | "wdp" | "wmp") => Some("jxr"),
+        Some("psd" | "psb") => Some("psd"),
         _ => None,
     };
     let by_mime = || match mime?.to_ascii_lowercase().as_str() {
@@ -113,12 +114,13 @@ pub fn detect_format(file_name: &str, mime: Option<&str>, bytes: &[u8]) -> Optio
         "image/tiff" => Some("tiff"),
         "image/x-tga" => Some("tga"),
         "image/vnd.ms-photo" => Some("jxr"),
+        "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some("psd"),
         _ => None,
     };
     by_ext.or_else(by_mime).or_else(|| magic(bytes))
 }
 
-/// The PNG/JPEG/GIF/BMP/TIFF/WebP/PDN3 signature at the start of `bytes`.
+/// The PNG/JPEG/GIF/BMP/TIFF/WebP/PDN3/PSD signature at the start of `bytes`.
 fn magic(bytes: &[u8]) -> Option<&'static str> {
     match bytes {
         [0x89, b'P', b'N', b'G', 13, 10, 26, 10, ..] => Some("png"),
@@ -130,6 +132,7 @@ fn magic(bytes: &[u8]) -> Option<&'static str> {
             Some("webp")
         }
         [b'P', b'D', b'N', b'3', ..] => Some("pdn"),
+        [b'8', b'B', b'P', b'S', ..] => Some("psd"),
         _ => None,
     }
 }
@@ -139,7 +142,7 @@ fn magic(bytes: &[u8]) -> Option<&'static str> {
 /// The WIC types sniff the content (§2.1): a PNG/JPEG/GIF/BMP/TIFF file whose bytes are another
 /// of those formats, or WebP, decodes as what it is. AVIF, HEIC and JPEG XR decode natively only
 /// (`native`; the web build gets them from the browser, Task 48w); `.pdn` is layered
-/// (`io::pdn::decode`).
+/// (`io::pdn::decode`), and so is PSD (`io::psd::decode`), which comes here as one picture.
 pub fn decode(format: &str, bytes: &[u8]) -> Result<Decoded, CodecError> {
     decode_within(format, bytes, MAX_DECODE_BYTES)
 }
@@ -177,6 +180,13 @@ pub(crate) fn decode_within(
             });
         }
         "dds" => return decode_dds(bytes).map(|image| Decoded { image, dpi: None }),
+        "psd" => {
+            let (image, dpi) = super::psd::decode_flat(bytes)?;
+            return Ok(Decoded {
+                image,
+                dpi: Some(dpi),
+            });
+        }
         "jxl" => return decode_jxl(bytes).map(|image| Decoded { image, dpi: None }),
         #[cfg(not(target_arch = "wasm32"))]
         "avif" | "heic" | "jxr" => {
@@ -589,6 +599,13 @@ mod tests {
             Some("jpeg")
         );
         assert_eq!(detect_format("a", None, b"RIFF\0\0\0\0WAVE"), None);
+        assert_eq!(detect_format("a.PSD", None, &[]), Some("psd"));
+        assert_eq!(detect_format("a.psb", None, &[]), Some("psd"));
+        assert_eq!(
+            detect_format("a", Some("image/vnd.adobe.photoshop"), &[]),
+            Some("psd")
+        );
+        assert_eq!(detect_format("a", None, b"8BPS\0\x01"), Some("psd"));
     }
 
     #[test]

@@ -1,0 +1,20 @@
+[package]
+name = "photocraft-psd"
+description = "Faithful, lossless reader and writer for Adobe Photoshop PSD (v1) and PSB (v2) files"
+version = "0.15.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "photocraft_psd"
+path = "src/lib.rs"
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = "2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { version = "1", features = ["derive"], optional = true }
