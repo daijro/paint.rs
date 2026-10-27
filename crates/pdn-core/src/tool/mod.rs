@@ -4,6 +4,7 @@
 //! Reference: paintdotjs @ b4e6fc5
 pub mod base;
 pub mod brush;
+mod click_lasso;
 pub mod drawing;
 pub mod fill;
 pub mod flood;

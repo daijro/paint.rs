@@ -9,7 +9,8 @@
 
 use std::marker::PhantomData;
 
-use super::{CursorRequest, MouseButton, PointerInput, Tool, ToolType};
+use super::click_lasso::ClickLasso;
+use super::{CursorRequest, KeyPress, MouseButton, PointerInput, Tool, ToolType};
 use crate::app::AppWorkspace;
 use crate::document::workspace::DocumentWorkspace;
 use crate::history::{HistoryMemento, MementoKind};
@@ -385,7 +386,139 @@ impl SelectionShape for LassoShape {
 
 pub type RectangleSelectTool = SelectionTool<RectShape>;
 pub type EllipseSelectTool = SelectionTool<EllipseShape>;
-pub type LassoSelectTool = SelectionTool<LassoShape>;
+
+/// Lasso Select: Paint.NET's drag ([`SelectionTool`]), or with the Extra Click points option a
+/// border placed point by point ([`ClickLasso`]). Both show it on the drag's live layer.
+#[derive(Default)]
+pub struct LassoSelectTool {
+    drag: SelectionTool<LassoShape>,
+    clicks: ClickLasso,
+    /// The status bar's hint while Click points is on.
+    status: Option<String>,
+}
+
+/// Lasso Select's Extra Click points option.
+fn click_points(app: &AppWorkspace) -> bool {
+    app.tool_settings.get(ToolType::LassoSelect, "clickPoints") == true
+}
+
+impl LassoSelectTool {
+    fn sync_status(&mut self, app: &AppWorkspace) {
+        let t = crate::i18n::t;
+        self.status = click_points(app).then(|| {
+            crate::i18n::tf(
+                "statusBar.context.help.text.format",
+                &[
+                    &t("lassoSelectTool.name"),
+                    &t("lassoSelectTool.clickPointsHelpText"),
+                ],
+            )
+        });
+    }
+}
+
+impl Tool for LassoSelectTool {
+    fn tool_type(&self) -> ToolType {
+        ToolType::LassoSelect
+    }
+
+    fn live_gesture(&self, app: &AppWorkspace) -> Option<super::LiveGesture> {
+        if self.clicks.active() {
+            return self.clicks.live_gesture(app);
+        }
+        self.drag.live_gesture(app)
+    }
+
+    fn on_activate(&mut self, app: &mut AppWorkspace) {
+        self.drag.on_activate(app);
+        self.sync_status(app);
+    }
+
+    /// A tool or document switch, or a command that commits the tool first, drops a border being
+    /// placed (as the Magnetic Lasso does) and ends a drag as Paint.NET does.
+    fn on_deactivate(&mut self, app: &mut AppWorkspace) {
+        self.clicks.cancel(app, self.drag.live);
+        self.drag.on_deactivate(app);
+    }
+
+    fn on_executing_history_memento(&mut self, app: &mut AppWorkspace) {
+        self.clicks.cancel(app, self.drag.live);
+    }
+
+    fn on_setting_changed(&mut self, app: &mut AppWorkspace, key: &str) {
+        if key == "clickPoints" {
+            self.clicks.cancel(app, self.drag.live);
+            self.sync_status(app);
+        }
+    }
+
+    fn status_text(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    fn on_mouse_down(
+        &mut self,
+        app: &mut AppWorkspace,
+        x: f64,
+        y: f64,
+        b: MouseButton,
+        i: &PointerInput,
+    ) -> bool {
+        let clicks = self.clicks.active() || (!self.drag.is_tracking() && click_points(app));
+        if !clicks {
+            return self.drag.on_mouse_down(app, x, y, b, i);
+        }
+        // A second button while one is held changes nothing.
+        if !matches!(b, MouseButton::Left | MouseButton::Right)
+            || app.active_ws().is_none()
+            || self.clicks.pressed()
+        {
+            return self.clicks.active();
+        }
+        self.clicks.down(app, x, y, b, self.drag.live);
+        true
+    }
+
+    fn on_mouse_move(&mut self, app: &mut AppWorkspace, x: f64, y: f64, i: &PointerInput) -> bool {
+        if self.clicks.active() {
+            return self.clicks.moved(app, x, y, i, self.drag.live);
+        }
+        self.drag.on_mouse_move(app, x, y, i)
+    }
+
+    fn on_mouse_up(
+        &mut self,
+        app: &mut AppWorkspace,
+        x: f64,
+        y: f64,
+        b: MouseButton,
+        i: &PointerInput,
+    ) -> bool {
+        if self.clicks.pressed() {
+            return self.clicks.up(app, x, y, i, self.drag.live);
+        }
+        self.drag.on_mouse_up(app, x, y, b, i)
+    }
+
+    fn on_key_press(&mut self, app: &mut AppWorkspace, key: &KeyPress) -> bool {
+        self.clicks.key(app, key, self.drag.live)
+    }
+
+    fn on_modifier_keys_changed(&mut self, app: &mut AppWorkspace) {
+        self.drag.on_modifier_keys_changed(app);
+    }
+
+    fn cursor(&self) -> CursorRequest {
+        if self.clicks.active() {
+            return CursorRequest::Image(LassoShape::CURSORS[1]);
+        }
+        self.drag.cursor()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
 
 /// `SelectionTool` (§2.5): tracks a floored pointer trace and keeps the selection's continuation
 /// on its shape; the release emits, clears or reverts it.

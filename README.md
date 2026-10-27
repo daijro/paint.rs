@@ -38,6 +38,10 @@ paint.rs is a free and open source photo editor in the style of Paint.NET, for W
 Linux and the web. It adds features Paint.NET is missing: Linux support, content-aware fill, object
 selection, healing brushes, many more effects, text that stays editable after you place it, etc.
 
+Lasso Select's **Click points** option places the outline point by point, as Photoshop's Polygonal
+Lasso and GIMP's Free Select do. Click to place points, or drag between them to draw freehand. Then
+click the first point, double-click or press Enter to select. Backspace removes the last point.
+
 paint.rs is an independent project and is not affiliated with Paint.NET or dotPDN LLC. All of its
 icons and artwork are original.
 
@@ -173,7 +177,9 @@ Builds for Linux, Windows, macOS and the web are on the
   The macOS download needs macOS 11 or newer.
 - Pen tablets paint with pressure on every platform. On a Wayland desktop with a pen plugged in,
   the app opens its window through Xwayland, because Wayland gives a pen only to apps that speak
-  its tablet protocol. Set `PAINTRS_NATIVE_WAYLAND=1` to stay on Wayland without pressure.
+  its tablet protocol. Started from a terminal, it prints which it chose and why. If the pen still
+  does nothing, start it with `PAINTRS_X11=1` to open through Xwayland anyway.
+  `PAINTRS_NATIVE_WAYLAND=1` keeps Wayland, where a pen can't paint.
 - In the Linux `.tar.gz` and the Windows `.zip`, keep `paintrs` beside its `assets` folder. The
   fonts load from there.
 - If the Windows app doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach

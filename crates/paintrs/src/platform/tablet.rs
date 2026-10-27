@@ -7,7 +7,8 @@
 //! doesn't (and binding it on winit's own connection needs foreign-display interop). Xwayland
 //! binds it and serves the pen as an XInput2 device, so with a pen attached the window opens
 //! through Xwayland (PhotoCraft does the same, its #639), where the X11 reader applies.
-//! `PAINTRS_NATIVE_WAYLAND=1` keeps native Wayland, where the pen paints at full size.
+//! `PAINTRS_NATIVE_WAYLAND=1` keeps native Wayland, where the pen does nothing; `PAINTRS_X11=1`
+//! opens through Xwayland whether a pen is found or not.
 
 use super::pen::StylusFeed;
 
@@ -16,25 +17,44 @@ fn sink(feed: StylusFeed) -> impl Fn(Option<photocraft_tablet::Sample>) + Send +
     move |s| feed.set(s.map(|s| s.pressure))
 }
 
-/// `BTN_TOOL_PEN`, `ABS_X` and `ABS_Y` (linux/input-event-codes.h).
+/// `BTN_TOOL_PEN`, `BTN_STYLUS`, `ABS_X` and `ABS_Y` (linux/input-event-codes.h).
 #[cfg(any(target_os = "linux", test))]
 const BTN_TOOL_PEN: u32 = 0x140;
+#[cfg(any(target_os = "linux", test))]
+const BTN_STYLUS: u32 = 0x14b;
 #[cfg(any(target_os = "linux", test))]
 const ABS_X: u32 = 0x00;
 #[cfg(any(target_os = "linux", test))]
 const ABS_Y: u32 = 0x01;
 
 /// Is a pen among the devices `/proc/bus/input/devices` lists? One whose key bitmap has
-/// `BTN_TOOL_PEN` and whose absolute-axis bitmap has `ABS_X` and `ABS_Y`, as libinput asks of a
-/// tablet tool (a uinput virtual keyboard claims every key but has no absolute axes; PhotoCraft
-/// `has_pen`).
+/// `BTN_TOOL_PEN` or `BTN_STYLUS` and whose absolute-axis bitmap has `ABS_X` and `ABS_Y`: udev's
+/// rule for `ID_INPUT_TABLET`, which makes libinput (and so the compositor) take it for a tablet.
+/// Some pens report `BTN_STYLUS` alone, which PhotoCraft's `has_pen` (`BTN_TOOL_PEN` only)
+/// misses. A uinput virtual keyboard claims every key but has no absolute axes.
 #[cfg(any(target_os = "linux", test))]
 fn has_pen(devices: &str) -> bool {
     devices.split("\n\n").any(|device| {
         let bitmap = |name: &str| device.lines().find_map(|l| l.strip_prefix(name));
-        bitmap("B: KEY=").is_some_and(|keys| bit_set(keys, BTN_TOOL_PEN))
+        let pen_key = |keys: &str| bit_set(keys, BTN_TOOL_PEN) || bit_set(keys, BTN_STYLUS);
+        bitmap("B: KEY=").is_some_and(pen_key)
             && bitmap("B: ABS=").is_some_and(|axes| bit_set(axes, ABS_X) && bit_set(axes, ABS_Y))
     })
+}
+
+/// Does udev mark an input device as a tablet (`ID_INPUT_TABLET=1` in its database, which
+/// libinput reads)? Covers what a hardware database entry or a udev rule adds to the key rule.
+#[cfg(target_os = "linux")]
+fn udev_tablet() -> bool {
+    let Ok(dir) = std::fs::read_dir("/run/udev/data") else {
+        return false;
+    };
+    dir.flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("c13:"))
+        .any(|e| {
+            std::fs::read_to_string(e.path())
+                .is_ok_and(|d| d.lines().any(|l| l == "E:ID_INPUT_TABLET=1"))
+        })
 }
 
 /// Bit `bit` of a `/proc/bus/input/devices` bitmap: hex words of the kernel's `long`, most
@@ -88,22 +108,44 @@ fn x11_libs() -> bool {
     })
 }
 
-/// Open the window through Xwayland? On a Wayland session with a pen attached, when Xwayland can
-/// run the window (`$DISPLAY` set, the X11 libraries installed) and `PAINTRS_NATIVE_WAYLAND` is
-/// not set.
+/// Open the window through Xwayland? On a Wayland session with a pen attached (or
+/// `PAINTRS_X11` set), when Xwayland can run the window (`$DISPLAY` set, the X11 libraries
+/// installed) and `PAINTRS_NATIVE_WAYLAND` is not set. On a Wayland session the choice and its
+/// reason go to stderr.
 #[cfg(target_os = "linux")]
 pub fn use_xwayland() -> bool {
     let set = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "0");
-    let wayland = set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET");
-    let pen = || std::fs::read_to_string("/proc/bus/input/devices").is_ok_and(|d| has_pen(&d));
-    let decided =
-        wayland && !set("PAINTRS_NATIVE_WAYLAND") && set("DISPLAY") && pen() && x11_libs();
-    if decided {
-        eprintln!(
-            "paint.rs: pen found; opening the window through Xwayland, where its pressure reaches \
-             the app (PAINTRS_NATIVE_WAYLAND=1 keeps Wayland)"
-        );
+    if !(set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET")) {
+        return false;
     }
+    let pen = || {
+        std::fs::read_to_string("/proc/bus/input/devices").is_ok_and(|d| has_pen(&d))
+            || udev_tablet()
+    };
+    let (decided, why) = if set("PAINTRS_NATIVE_WAYLAND") {
+        (false, "PAINTRS_NATIVE_WAYLAND is set")
+    } else if !set("DISPLAY") {
+        (false, "no Xwayland ($DISPLAY is not set)")
+    } else if !set("PAINTRS_X11") && !pen() {
+        (
+            false,
+            "no pen found (PAINTRS_X11=1 opens it through Xwayland)",
+        )
+    } else if !x11_libs() {
+        (false, "the X11 libraries are not installed")
+    } else if set("PAINTRS_X11") {
+        (true, "PAINTRS_X11 is set")
+    } else {
+        (true, "pen found (PAINTRS_NATIVE_WAYLAND=1 keeps Wayland)")
+    };
+    eprintln!(
+        "paint.rs: opening the window {}: {why}",
+        if decided {
+            "through Xwayland, where a pen works"
+        } else {
+            "on Wayland, where a pen does nothing"
+        }
+    );
     decided
 }
 
@@ -144,6 +186,9 @@ mod tests {
                       ffffffffffffffff ffffffffffffffff ffffffffffffffff ffffffffffffffff";
         assert!(has_pen(wacom));
         assert!(has_pen(&format!("{mouse}\n\n{wacom}")));
+        // BTN_STYLUS (0x14b, word 5 bit 11) without BTN_TOOL_PEN: still a tablet to udev.
+        let stylus = "N: Name=\"Tablet Monitor Pen\"\nB: KEY=800 0 0 0 0 0\nB: ABS=3";
+        assert!(has_pen(stylus));
         assert!(!has_pen(mouse));
         assert!(!has_pen(uinput));
     }

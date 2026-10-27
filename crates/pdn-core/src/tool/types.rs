@@ -212,7 +212,9 @@ impl ToolType {
                 }),
                 &selection,
             ),
-            LassoSelect | EllipseSelect => selection,
+            // Click points (Extra, `tool::click_lasso`): off is Paint.NET's drag.
+            LassoSelect => merge(json!({"clickPoints": false}), &selection),
+            EllipseSelect => selection,
             MoveSelection => json!({"renderingQuality": "high", "snap": false}),
             Zoom | Pan => json!({"renderingQuality": "high"}),
             Move => json!({
@@ -1334,7 +1336,13 @@ pub fn option_definitions_with_fonts(
         }
         // R16: every tool shows the selection quality (Q); after the chooser's separator, or
         // after its own.
-        LassoSelect | EllipseSelect => vec![combine(), section(quality())],
+        LassoSelect => vec![
+            combine(),
+            section(quality()),
+            // Extra (`tool::click_lasso`): a border placed point by point.
+            section(extra_checkbox("Click points", "clickPoints")),
+        ],
+        EllipseSelect => vec![combine(), section(quality())],
         MoveSelection => vec![quality(), section(finish()), section(snap())],
         Move => vec![
             choices(

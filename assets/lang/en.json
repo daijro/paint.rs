@@ -1425,6 +1425,7 @@
         "name": "Julia Fractal"
     },
     "lassoSelectTool": {
+        "clickPointsHelpText": "Click to place points, or drag to draw freehand. Click the first point, double-click or press Enter to select. Backspace removes the last point.",
         "helpText": "Click and drag to draw the outline for a selection area.",
         "name": "Lasso Select"
     },
