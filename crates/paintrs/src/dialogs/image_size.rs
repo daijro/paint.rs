@@ -582,12 +582,6 @@ impl ImageSizeDialog {
         let unit_x = input_x + iw + g;
         let enabled = !percent_mode;
         y = fieldset(ui, x0, x1, y, "Pixel size") + fs_top + body_top;
-        let pointer = ui.input(|i| i.pointer.hover_pos());
-        let row_hovered = |top: f32, h: f32| {
-            pointer.is_some_and(|p| {
-                Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x1, top + h)).contains(p)
-            })
-        };
         let number_row = |ui: &mut Ui,
                           id: &str,
                           name: &str,
@@ -605,7 +599,6 @@ impl ImageSizeDialog {
             );
             let rect =
                 Rect::from_min_size(Pos2::new(input_x, top + (h - ih) / 2.0), Vec2::new(iw, ih));
-            let style = style.hovered(row_hovered(top, h));
             inputs::number_input(ui, id, name, rect, value, min, max, step, enabled, style)
         };
         let side = (1.0, MAX_SIDE as f64, 1.0);

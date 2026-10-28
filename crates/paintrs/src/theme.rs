@@ -1072,13 +1072,6 @@ pub const SELECT_NATIVE_LIGHT: (Color32, Color32) = (rgb(0xFFFFFF), rgb(0x767676
 
 // ---- Form controls of the size and layer dialogs (Task 44; measured from the references) ----
 
-/// Chromium's `::-webkit-inner-spin-button` (`-webkit-appearance: auto`, dark scheme): a 15×14
-/// `#2c2c2c` box with two hard-edged 7-wide `#9f9f9f` triangles (dialog-resize).
-pub const INNER_SPIN_SIZE: (f32, f32) = (15.0, 14.0);
-pub const INNER_SPIN_FILL: Color32 = rgb(0x2C2C2C);
-pub const INNER_SPIN_ARROW: Color32 = rgb(0x9F9F9F);
-/// The light scheme's (fill, arrows), so the light theme's number fields don't show a dark box.
-pub const INNER_SPIN_LIGHT: (Color32, Color32) = (rgb(0xEFEFEF), rgb(0x505050));
 /// `.pdn-number-input:has(input:disabled) { opacity: .55 }` (css/component.css).
 pub const NUMBER_DISABLED_OPACITY: f32 = 0.55;
 /// `.new-file-row input[type=number] { padding: 2px 5px }`; `.image-size-percent`,

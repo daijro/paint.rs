@@ -31,7 +31,9 @@ use pdn_core::render::ruler::{
 use pdn_core::render::selection::{SelectionRenderer, mask_builds};
 use pdn_core::render::view::{CanvasStyle, ViewTransform};
 use pdn_core::settings::AppSettings;
-use pdn_core::tool::{CursorRequest, MouseButton, PointerInput, PointerSample, PointerType};
+use pdn_core::tool::{
+    CursorRequest, KeyPress, MouseButton, PointerInput, PointerSample, PointerType,
+};
 use pdn_core::util::color::Color;
 use pdn_core::util::geom::Point;
 use pdn_core::util::geom::Rectangle;
@@ -80,6 +82,8 @@ pub struct CanvasView {
     buttons: u8,
     /// `lastAutoScrollTime` (app ms).
     last_auto_scroll: f64,
+    /// Alt+wheel notches not yet sent as size keys (a touchpad's pixel deltas come in fractions).
+    size_wheel: f32,
     /// The document and view last shown, and when the view last changed (app ms, frame): a change
     /// soon after another, or in the frame after one, is a pan or zoom in progress.
     view: Option<(u64, ViewTransform, f64, Option<u64>)>,
@@ -903,13 +907,35 @@ impl CanvasView {
                     modifiers,
                     ..
                 } if hover.is_some_and(over) => {
+                    // Cmd is Ctrl on a Mac (`pdn_modifiers`; paintdotjs read `ctrlKey` only).
+                    let modifiers = crate::pdn_modifiers(modifiers);
+                    // Alt+wheel sizes the tool: a notch is one `]` (up) or `[` (down), the keys
+                    // every sized tool takes; Ctrl+Alt five, as Ctrl+`[`/`]` step by 5.
+                    if modifiers.alt && !modifiers.shift {
+                        self.size_wheel += match unit {
+                            MouseWheelUnit::Point => delta.y / 100.0,
+                            MouseWheelUnit::Line | MouseWheelUnit::Page => delta.y,
+                        };
+                        let notches = self.size_wheel.trunc();
+                        self.size_wheel -= notches;
+                        let presses = notches.abs() as usize * if modifiers.ctrl { 5 } else { 1 };
+                        let key = if notches > 0.0 { "]" } else { "[" };
+                        for _ in 0..presses {
+                            app.on_key_press(&KeyPress {
+                                key: key.into(),
+                                shift: false,
+                                ctrl: false,
+                                alt: false,
+                                meta: false,
+                            });
+                        }
+                        continue;
+                    }
                     let pivot = to_canvas(hover.unwrap_or_default());
                     let Some(ws) = app.active_ws_mut() else {
                         continue;
                     };
                     let dy = delta.y as f64;
-                    // Cmd is Ctrl on a Mac (`pdn_modifiers`; paintdotjs read `ctrlKey` only).
-                    let modifiers = crate::pdn_modifiers(modifiers);
                     let only = |shift: bool, ctrl: bool| {
                         (modifiers.shift, modifiers.ctrl, modifiers.alt) == (shift, ctrl, false)
                     };

@@ -188,20 +188,11 @@ pub struct NumberStyle {
     pub pad_right: f32,
     /// The input's own border inside the wrapper (`--pdn-control-border`), 0 for none.
     pub inner_border: f32,
-    /// Chromium's `::-webkit-inner-spin-button` (`-webkit-appearance: auto`): the width it keeps
-    /// at the right of the text area, 0 when hidden.
-    pub spin_reserve: f32,
     /// `toFixed(n)` instead of the number's own string (`input.value = numeric`).
     pub decimals: Option<usize>,
     /// The input's `padding-left` and vertical padding (component.css: 3 px and 1 px).
     pub pad_left: f32,
     pub pad_y: f32,
-    /// Chromium draws its inner spin button (`spin_reserve` wide) while the input is hovered or
-    /// focused.
-    pub spin_glyph: bool,
-    /// The input matches `:hover` through its `<label>` (Blink: a hovered label hovers its
-    /// control).
-    pub hovered: bool,
     /// A strict step overflow lands on the opposite endpoint (plugin RangeWraps, R107).
     pub wrap: bool,
     /// Native hue numeric stepping discards overshoot (§7.4).
@@ -217,12 +208,9 @@ impl NumberStyle {
         font: TOOL_FONT_SIZE,
         pad_right: NUMBER_PADDING.1,
         inner_border: 0.0,
-        spin_reserve: 0.0,
         decimals: None,
         pad_left: NUMBER_PADDING.1,
         pad_y: NUMBER_PADDING.0,
-        spin_glyph: false,
-        hovered: false,
         wrap: false,
         wrap_endpoint: false,
         native_step: false,
@@ -233,12 +221,9 @@ impl NumberStyle {
         font: FONT_SIZE_PX,
         pad_right: NUMBER_PADDING.1,
         inner_border: 0.0,
-        spin_reserve: 0.0,
         decimals: None,
         pad_left: NUMBER_PADDING.1,
         pad_y: NUMBER_PADDING.0,
-        spin_glyph: false,
-        hovered: false,
         wrap: false,
         wrap_endpoint: false,
         native_step: false,
@@ -251,12 +236,9 @@ impl NumberStyle {
         font: FORM_FONT_SIZE,
         pad_right: NUMBER_PADDING.1,
         inner_border: 0.0,
-        spin_reserve: 0.0,
         decimals: None,
         pad_left: NUMBER_PADDING.1,
         pad_y: NUMBER_PADDING.0,
-        spin_glyph: false,
-        hovered: false,
         wrap: false,
         wrap_endpoint: false,
         native_step: false,
@@ -268,12 +250,9 @@ impl NumberStyle {
         font: DIALOG_FONT_SIZE,
         pad_right: EFFECT_NUMBER_PADDING_RIGHT,
         inner_border: 0.0,
-        spin_reserve: 0.0,
         decimals: None,
         pad_left: NUMBER_PADDING.1,
         pad_y: NUMBER_PADDING.0,
-        spin_glyph: false,
-        hovered: false,
         wrap: false,
         wrap_endpoint: false,
         native_step: false,
@@ -287,12 +266,9 @@ impl NumberStyle {
         font: DIALOG_FONT_SIZE,
         pad_right: NUMBER_PADDING.1,
         inner_border: EFFECT_SPECIAL_NUMBER_BORDER,
-        spin_reserve: 15.0,
         decimals: None,
         pad_left: NUMBER_PADDING.1,
         pad_y: NUMBER_PADDING.0,
-        spin_glyph: true,
-        hovered: false,
         wrap: false,
         wrap_endpoint: false,
         native_step: false,
@@ -311,8 +287,6 @@ impl NumberStyle {
         pad_left: IMAGE_SIZE_NUMBER_PADDING.1,
         pad_y: IMAGE_SIZE_NUMBER_PADDING.0,
         pad_right: IMAGE_SIZE_NUMBER_PADDING.1,
-        spin_reserve: INNER_SPIN_SIZE.0,
-        spin_glyph: true,
         ..NumberStyle::EFFECT
     };
     /// `.image-size-percent`: its own `padding: 2px 4px` loses to `.pdn-number-input >
@@ -329,12 +303,6 @@ impl NumberStyle {
         pad_right: NUMBER_PADDING.1,
         ..NumberStyle::EFFECT
     };
-
-    /// `hovered` set (`label:hover`).
-    pub const fn hovered(mut self, on: bool) -> Self {
-        self.hovered = on;
-        self
-    }
 
     /// `wrap` set.
     pub const fn wrap(mut self, on: bool) -> Self {
@@ -365,6 +333,8 @@ struct NumberEdit {
     /// The text was typed or stepped since the focus came: blurring applies it (`change` fires
     /// only for a value the user changed).
     edited: bool,
+    /// Wheel notches not yet stepped (a touchpad's pixel deltas come in fractions).
+    wheel: f32,
 }
 
 /// `HTMLInputElement.stepUp()`/`stepDown()` by one step from `value`: an off-grid value snaps to
@@ -444,6 +414,32 @@ fn arrow_steps(ui: &Ui, unmodified: bool) -> Vec<f64> {
             _ => true,
         });
         steps
+    })
+}
+
+/// Unmodified wheel notches this frame, consumed: +1 a notch up, a pixel delta 100 px a notch
+/// (Chromium's notch), the remainder kept in `acc`. A scroll area under the field stays put.
+fn wheel_steps(ui: &Ui, acc: &mut f32) -> Vec<f64> {
+    ui.input_mut(|i| {
+        i.events.retain(|e| match e {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } if modifiers.is_none() => {
+                *acc += match unit {
+                    egui::MouseWheelUnit::Point => delta.y / 100.0,
+                    _ => delta.y,
+                };
+                false
+            }
+            _ => true,
+        });
+        i.smooth_scroll_delta = Vec2::ZERO;
+        let n = acc.trunc();
+        *acc -= n;
+        vec![n.signum() as f64; n.abs() as usize]
     })
 }
 
@@ -675,12 +671,12 @@ pub fn number_input(
         painter.rect_filled(input_px.shrink(ib), 0.0, f(theme.number_input_background));
         content = content.shrink(style.inner_border);
     }
-    let padded = Rect::from_min_max(
+    // The padding box. Chromium's inner spin button is left out: it would be a second, inert pair
+    // of arrows beside the field's own spin buttons.
+    let content = Rect::from_min_max(
         content.min + Vec2::new(style.pad_left, style.pad_y),
         content.max - Vec2::new(style.pad_right, style.pad_y),
     );
-    // Chromium's inner spin button keeps its width at the right of the text area.
-    let content = Rect::from_min_max(padded.min, padded.max - Vec2::new(style.spin_reserve, 0.0));
     let font = FontSpec::new(style.font);
     let mut edit = ui
         .data(|d| d.get_temp::<NumberEdit>(id))
@@ -746,6 +742,14 @@ pub fn number_input(
             step_input(&mut edit, value, dir);
         }
     }
+    // The wheel over the field steps it like the arrow keys.
+    if enabled && ui.rect_contains_pointer(px::snap_rect(inner, ppp)) {
+        let mut acc = edit.wheel;
+        for dir in wheel_steps(ui, &mut acc) {
+            step_input(&mut edit, value, dir);
+        }
+        edit.wheel = acc;
+    }
     // The spin buttons' `pointerdown` is default-prevented: pressing them keeps the input's
     // focus (egui would surrender it to a press elsewhere).
     let col = Rect::from_min_size(
@@ -789,10 +793,6 @@ pub fn number_input(
         );
         painter.with_clip_rect(px::snap_rect(area, ppp).intersect(painter.clip_rect()))
     };
-    let hot = enabled && (focused || field.hovered() || style.hovered);
-    if style.spin_glyph && hot {
-        paint_inner_spin(&painter, padded, text_top);
-    }
     match edit.text.as_mut() {
         Some(buffer) => {
             let edit_rect = Rect::from_min_max(Pos2::new(content.min.x, text_top), content.max);
@@ -890,49 +890,6 @@ pub fn number_input(
     ui.set_clip_rect(outer_clip);
     ui.data_mut(|d| d.insert_temp(id, edit));
     field
-}
-
-/// Chromium's `::-webkit-inner-spin-button` (`-webkit-appearance: auto`) at the right of the
-/// padding box `padded`, on the text's line box (its top `line_top`), shown while the input is
-/// hovered or focused: a 15×14 box with two 7-wide triangles (measured from the dialog-resize and
-/// dialog-canvas-size references).
-fn paint_inner_spin(painter: &Painter, padded: Rect, line_top: f32) {
-    let ppp = painter.pixels_per_point();
-    let light = theme::current(painter.ctx()).scheme == theme::Scheme::Light;
-    let (fill, arrow) = if light {
-        INNER_SPIN_LIGHT
-    } else {
-        (INNER_SPIN_FILL, INNER_SPIN_ARROW)
-    };
-    let (w, h) = INNER_SPIN_SIZE;
-    let x0 = ((padded.max.x - w) * ppp).round() / ppp;
-    let y0 = (line_top * ppp).round() / ppp;
-    let one = 1.0 / ppp;
-    painter.rect_filled(
-        Rect::from_min_size(Pos2::new(x0, y0), Vec2::new(w, h)),
-        0.0,
-        fill,
-    );
-    // Rows 1–4 the up triangle (1, 3, 5, 7 px), rows 9–12 the down one, centred at x 7.
-    for (row, half) in [
-        (1, 0),
-        (2, 1),
-        (3, 2),
-        (4, 3),
-        (9, 3),
-        (10, 2),
-        (11, 1),
-        (12, 0),
-    ] {
-        painter.rect_filled(
-            Rect::from_min_size(
-                Pos2::new(x0 + (7 - half) as f32 * one, y0 + row as f32 * one),
-                Vec2::new((2 * half + 1) as f32 * one, one),
-            ),
-            0.0,
-            arrow,
-        );
-    }
 }
 
 /// A text `<input>` (`input[type=text]`) at `rect` (its border box), its text left-aligned after
@@ -1767,6 +1724,61 @@ mod tests {
         ]);
         run(vec![]);
         assert_eq!(ctx.memory(|m| m.focused()), focused);
+    }
+
+    /// The wheel over a number field steps it: a notch a step, 100 px of a pixel delta a notch,
+    /// clamped; not with a modifier (Ctrl zooms) or away from the field.
+    #[test]
+    fn wheel_over_the_field_steps_it() {
+        use egui::{Event, Modifiers, MouseWheelUnit, Pos2, Rect, Vec2};
+        let ctx = egui::Context::default();
+        crate::install_fonts(&ctx, pdn_core::fonts::FontPolicy::Bundled, "Selawik");
+        let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(80.0, 23.0));
+        let mut value = 5.0;
+        let mut run = |events: Vec<Event>| {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                super::number_input(
+                    ui,
+                    "n",
+                    "N",
+                    rect,
+                    &mut value,
+                    0.0,
+                    10.0,
+                    1.0,
+                    true,
+                    super::NumberStyle::DIALOG,
+                );
+            });
+            out.textures_delta.clear();
+            value
+        };
+        let wheel = |unit, y, modifiers| Event::MouseWheel {
+            unit,
+            delta: Vec2::new(0.0, y),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        let line = |y| wheel(MouseWheelUnit::Line, y, Modifiers::NONE);
+        run(vec![Event::PointerMoved(rect.center())]);
+        assert_eq!(run(vec![line(1.0), line(1.0)]), 7.0);
+        assert_eq!(run(vec![line(-1.0)]), 6.0);
+        let px = |y| wheel(MouseWheelUnit::Point, y, Modifiers::NONE);
+        assert_eq!(run(vec![px(60.0)]), 6.0);
+        assert_eq!(run(vec![px(60.0)]), 7.0);
+        assert_eq!(run(vec![line(9.0)]), 10.0);
+        assert_eq!(
+            run(vec![wheel(MouseWheelUnit::Line, -1.0, Modifiers::CTRL)]),
+            10.0
+        );
+        run(vec![Event::PointerMoved(Pos2::new(300.0, 300.0))]);
+        assert_eq!(run(vec![line(-1.0)]), 10.0);
     }
 
     /// BB common.md §3 "Slider": a range that wraps continues from the other end; one that

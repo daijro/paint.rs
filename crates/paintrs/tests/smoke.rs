@@ -2651,6 +2651,51 @@ fn wheel_and_middle_drag_move_the_view() {
     assert_eq!((x(&harness), y(&harness)), (x0 + 40.0, y0 + 50.0));
 }
 
+/// Alt+wheel over the canvas sizes the tool as `]`/`[` do: 1 a notch, 5 with Ctrl+Alt, and
+/// leaves the view alone.
+#[test]
+fn alt_wheel_sizes_the_tool() {
+    let mut harness = app_harness();
+    harness.event(egui::Event::PointerMoved(egui::pos2(640.0, 400.0)));
+    harness.run();
+    let wheel = |h: &mut Harness<'_, paintrs::PaintApp>, dy: f32, m: egui::Modifiers| {
+        h.event_modifiers(
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                source: egui::MouseWheelSource::Wheel,
+                delta: egui::vec2(0.0, dy),
+                phase: egui::TouchPhase::Move,
+                modifiers: m,
+            },
+            m,
+        );
+        h.run();
+    };
+    let width = |h: &Harness<'_, paintrs::PaintApp>| {
+        let app = &h.state().app;
+        app.tool_settings
+            .get(app.tool_type.unwrap(), "width")
+            .as_f64()
+            .unwrap()
+    };
+    let view = |h: &Harness<'_, paintrs::PaintApp>| {
+        let v = &h.state().app.active_ws().unwrap().view;
+        (v.zoom, v.viewport_x, v.viewport_y)
+    };
+    let (w0, v0) = (width(&harness), view(&harness));
+    wheel(&mut harness, 2.0, egui::Modifiers::ALT);
+    assert_eq!(width(&harness), w0 + 2.0);
+    wheel(
+        &mut harness,
+        1.0,
+        egui::Modifiers::ALT | egui::Modifiers::CTRL,
+    );
+    assert_eq!(width(&harness), w0 + 7.0);
+    wheel(&mut harness, -1.0, egui::Modifiers::ALT);
+    assert_eq!(width(&harness), w0 + 6.0);
+    assert_eq!(view(&harness), v0);
+}
+
 fn drag_with(
     harness: &mut Harness<'_, paintrs::PaintApp>,
     button: egui::PointerButton,
