@@ -360,8 +360,8 @@ fn paint_icon_button(ui: &mut Ui, id: Id, rect: Rect, icon: f32) -> Response {
     response
 }
 
-/// How a `<select>` draws: Chromium's native dark field, or the author-styled one
-/// (`.effect-special-select select`).
+/// How a `<select>` draws: Chromium's native field (dark, or light in the light theme), or the
+/// author-styled one (`.effect-special-select select`).
 #[derive(Clone, Copy)]
 pub(in crate::dialogs) struct SelectLook {
     pub(in crate::dialogs) native: bool,
@@ -406,7 +406,9 @@ pub(in crate::dialogs) fn select(
         n.set_value(shown);
     });
     let b = px::border_width(1.0, ppp);
-    let (fill, border) = if look.native {
+    let (fill, border) = if look.native && theme.scheme == theme::Scheme::Light {
+        SELECT_NATIVE_LIGHT
+    } else if look.native {
         SELECT_NATIVE
     } else {
         (theme.number_input_background, theme.pdn_control_border)

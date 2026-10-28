@@ -309,7 +309,13 @@ impl SaveImageDialog {
         }
         let painter = painter.with_clip_rect(viewport);
         if let Some(texture) = &self.preview {
-            let r = Rect::from_center_size(viewport.center() - self.scroll, size);
+            // On whole device pixels: a fractional edge let the checker beneath show through as
+            // a line of "transparency" under an opaque image.
+            let ppp = ui.ctx().pixels_per_point();
+            let r = px::snap_rect(
+                Rect::from_center_size(viewport.center() - self.scroll, size),
+                ppp,
+            );
             painter.rect_filled(
                 px::snap_rect(r.expand(1.0), ui.ctx().pixels_per_point()),
                 0.0,

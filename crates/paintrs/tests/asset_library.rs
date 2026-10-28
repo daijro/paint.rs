@@ -11,13 +11,16 @@ use pdn_core::{app::AppWorkspace, asset_pack::AssetPack};
 use std::collections::BTreeMap;
 const PNG: &[u8] = include_bytes!("../../../tests/fixtures/icon-64.png");
 const XAML: &str = r#"<s:SimpleGeometryShape xmlns:s="clr-namespace:PaintDotNet.Shapes;assembly=PaintDotNet.Framework" xmlns="clr-namespace:PaintDotNet.UI.Media;assembly=PaintDotNet.UI" DisplayName="Tri" Geometry="M0,0 L10,0 0,10Z"/>"#;
+/// Polls until the library's job is done: within 10 s (a yield count ran out under a loaded full
+/// test run).
 fn drain(m: &mut AssetLibrary, ctx: &egui::Context, a: &mut AppWorkspace, p: &mut Prefs) {
-    for _ in 0..10000 {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
         m.poll(ctx, a, p);
         if !m.busy() {
             return;
         }
-        std::thread::yield_now();
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     panic!("asset operation did not finish");
 }

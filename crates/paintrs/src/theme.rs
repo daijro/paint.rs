@@ -1066,6 +1066,9 @@ pub const SELECT_ARROW: [[u8; 10]; 7] = [
     [0, 0, 0, 0, 33, 29, 0, 0, 0, 0],
 ];
 pub const SELECT_NATIVE: (Color32, Color32) = (rgb(0x3B3B3B), rgb(0x858585)); // fill, border
+/// The native field in a light theme (Chromium's light `<select>`): its text is the theme's dark
+/// text, which the dark field hid.
+pub const SELECT_NATIVE_LIGHT: (Color32, Color32) = (rgb(0xFFFFFF), rgb(0x767676));
 
 // ---- Form controls of the size and layer dialogs (Task 44; measured from the references) ----
 
@@ -1326,7 +1329,6 @@ pub const SETTINGS_COLOR_EDITOR: (f32, f32, f32, f32) = (136., 495., 128., 3.);
 pub const SETTINGS_COLOR_SWATCH: f32 = 34.;
 pub const SETTINGS_COLOR_WHEEL: (f32, f32) = (126., 110.);
 pub const SETTINGS_COLOR_GAP: f32 = 9.;
-pub const SETTINGS_COLOR_CURSOR_DISTANCE: f32 = 48.;
 /// .settings-canvas-color-bars and neutral bar width, height and relative left offset.
 pub const SETTINGS_COLOR_BARS: (f32, f32, f32, f32) = (18., 15., 120., 29.);
 /// .settings-canvas-rgb: number wrapper width/height, row pitch, reset top offset.

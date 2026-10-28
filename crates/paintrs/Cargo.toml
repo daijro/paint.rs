@@ -75,3 +75,7 @@ photocraft-tablet = { path = "../vendor/photocraft-tablet" }
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 wayland-client = { version = "0.31.15", features = ["system"] }
 percent-encoding = "2.3.2"
+# Save As through the XDG portal, which says which file type was picked (platform/portal_save.rs).
+# Both are already in the build through accesskit; zbus gains only its blocking API.
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+futures-lite = "2.6.1"

@@ -3215,12 +3215,13 @@ dependencies = [
 
 [[package]]
 name = "paintrs"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "arboard",
  "eframe",
  "egui",
  "egui_kittest",
+ "futures-lite",
  "image",
  "interprocess",
  "js-sys",
@@ -3248,6 +3249,7 @@ dependencies = [
  "widestring",
  "windows-sys 0.61.2",
  "winit",
+ "zbus",
  "zip 2.6.1",
 ]
 
@@ -3294,7 +3296,7 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pdn-core"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "bcdec_rs",
  "candle-core",
@@ -4025,7 +4027,7 @@ dependencies = [
 
 [[package]]
 name = "sam-worker"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "js-sys",
  "pdn-core",

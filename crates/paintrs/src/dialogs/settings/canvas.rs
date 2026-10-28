@@ -279,24 +279,25 @@ pub(super) fn show(e: &mut EntryUi) {
             Sense::hover()
         },
     );
+    // As the wheel is drawn: hue clockwise from red at the top (the conic gradient's start),
+    // saturation out to a ring 4 px inside the rim, so the cursor stays on the wheel.
+    let reach = wheel.width() / 2. - 4.;
     if enabled
         && response.is_pointer_button_down_on()
         && let Some(p) = response.interact_pointer_pos()
     {
         let delta = p - wheel.center();
-        let h = (delta.y.atan2(delta.x) as f64 / std::f64::consts::TAU).rem_euclid(1.);
+        let h = (delta.y.atan2(delta.x) as f64 / std::f64::consts::TAU + 0.25).rem_euclid(1.);
         color = Color::from_hsl(
             h,
-            (delta.length() / (wheel_size / 2.)).min(1.) as f64,
+            (delta.length() / reach).min(1.) as f64,
             color.get_lightness(),
             255,
         );
     }
-    let angle = color.get_hue() * std::f64::consts::TAU;
+    let angle = (color.get_hue() - 0.25) * std::f64::consts::TAU;
     let cursor = wheel.center()
-        + Vec2::new(angle.cos() as f32, angle.sin() as f32)
-            * color.get_saturation() as f32
-            * SETTINGS_COLOR_CURSOR_DISTANCE;
+        + Vec2::new(angle.cos() as f32, angle.sin() as f32) * color.get_saturation() as f32 * reach;
     // CSS 7px circular border with its 1px translucent outline. Raster independently of egui's tessellation.
     let ppp = e.ui.ctx().pixels_per_point();
     let base = &e.state.wheel.as_ref().unwrap().3;
@@ -359,9 +360,15 @@ pub(super) fn show(e: &mut EntryUi) {
         Pos2::new(barx, y + 2.),
         Vec2::new(SETTINGS_COLOR_BARS.0, SETTINGS_COLOR_BARS.2),
     );
+    // The colour's lightness ramp, white through it to black (grey while disabled).
     for i in 0..120 {
-        let v = (255. - i as f32 / 119. * 250.).round() as u8;
-        let c = Color32::from_gray(v);
+        let c = if enabled {
+            let l = 1. - i as f64 / 119.;
+            let c = Color::from_hsl(color.get_hue(), color.get_saturation(), l, 255);
+            Color32::from_rgb(c.red, c.green, c.blue)
+        } else {
+            Color32::from_gray((255. - i as f32 / 119. * 250.).round() as u8)
+        };
         e.ui.painter().rect_filled(
             Rect::from_min_size(
                 bar.min + Vec2::new(0., i as f32),
@@ -386,6 +393,9 @@ pub(super) fn show(e: &mut EntryUi) {
             Sense::hover()
         },
     );
+    // The thumb's centre runs from 4 px above the bar's bottom (lightness 0) to 4 px below its
+    // top (lightness 1).
+    let travel = bar.height() - 8.;
     if enabled
         && vr.is_pointer_button_down_on()
         && let Some(p) = vr.interact_pointer_pos()
@@ -393,7 +403,7 @@ pub(super) fn show(e: &mut EntryUi) {
         color = Color::from_hsl(
             color.get_hue(),
             color.get_saturation(),
-            (1. - (p.y - bar.min.y) / bar.height()).clamp(0., 1.) as f64,
+            ((bar.max.y - 4. - p.y) / travel).clamp(0., 1.) as f64,
             255,
         );
     }
@@ -438,9 +448,7 @@ pub(super) fn show(e: &mut EntryUi) {
     let thumb = Rect::from_center_size(
         Pos2::new(
             bar.center().x,
-            bar.max.y - (4. + color.get_lightness() as f32 * (bar.height() - 8.))
-                + bar.height() / 2.
-                - 1.,
+            bar.max.y - 4. - color.get_lightness() as f32 * travel,
         ),
         Vec2::new(20., 8.),
     );

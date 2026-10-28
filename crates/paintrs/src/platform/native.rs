@@ -183,17 +183,57 @@ impl SaveTarget for Files {
             return Ok(None);
         }
         let types = super::files::chooser_formats(r.initial_format);
-        let mut dialog = rfd::FileDialog::new().set_file_name(&r.suggested_name);
-        for f in &types {
-            let extensions: Vec<_> = f
-                .extensions
+        // Linux: the portal's own dialog, which says which file type was picked, so the name gets
+        // that type's extension (`portal_save`); rfd where there is no portal.
+        #[cfg(target_os = "linux")]
+        let portal = {
+            use super::portal_save;
+            let filters: Vec<portal_save::Filter> = types
                 .iter()
-                .map(|e| e.trim_start_matches('.'))
+                .map(|f| {
+                    let exts = f.extensions.iter();
+                    let exts = exts.map(|e| e.trim_start_matches('.').to_owned()).collect();
+                    (f.name.to_owned(), exts)
+                })
                 .collect();
-            dialog = dialog.add_filter(f.name, &extensions);
-        }
-        let Some(mut path) = dialog.save_file() else {
-            return Ok(None);
+            let name = portal_save::dialog_name(&r.suggested_name);
+            match portal_save::save_file(&name, &filters) {
+                Ok(None) => return Ok(None),
+                Ok(Some((path, picked))) => {
+                    let chosen = picked.map_or(&[][..], |i| &filters[i].1[..]);
+                    let known = |e: &str| super::files::accepted_format(&format!("x.{e}")).is_ok();
+                    let suggested = &r.suggested_name;
+                    let fixed = portal_save::with_chosen_type(&path, suggested, chosen, known);
+                    Some((fixed != path, fixed))
+                }
+                Err(e) => {
+                    eprintln!(
+                        "paint.rs: the portal's save dialog is unavailable ({e}); using rfd's"
+                    );
+                    None
+                }
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
+        let portal: Option<(bool, PathBuf)> = None;
+        // `retyped`: the extension changed after the dialog, which asked only about its own name.
+        let (retyped, mut path) = match portal {
+            Some(chosen) => chosen,
+            None => {
+                let mut dialog = rfd::FileDialog::new().set_file_name(&r.suggested_name);
+                for f in &types {
+                    let extensions: Vec<_> = f
+                        .extensions
+                        .iter()
+                        .map(|e| e.trim_start_matches('.'))
+                        .collect();
+                    dialog = dialog.add_filter(f.name, &extensions);
+                }
+                let Some(path) = dialog.save_file() else {
+                    return Ok(None);
+                };
+                (false, path)
+            }
         };
         let appended = path.extension().is_none();
         if appended {
@@ -208,7 +248,7 @@ impl SaveTarget for Files {
             .to_string_lossy()
             .into_owned();
         let format = super::files::accepted_format(&name)?;
-        if appended && path.exists() {
+        if (appended || retyped) && path.exists() {
             self.state.borrow_mut().confirm.insert(r.workspace_id);
         }
         let destination = SaveDestination {
