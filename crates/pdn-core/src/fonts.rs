@@ -1085,7 +1085,7 @@ pub fn document_face_from(
     }
     regular
 }
-/// Re-scans per call; cache it if a document-font picker opens slowly.
+/// Re-scans per call (every font file parsed): the desktop app runs it once, off the UI thread.
 pub fn system_families(dirs: &[PathBuf], policy: FontPolicy) -> Vec<String> {
     if policy == FontPolicy::Bundled || cfg!(target_arch = "wasm32") {
         return vec![];

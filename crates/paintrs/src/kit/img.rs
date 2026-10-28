@@ -268,7 +268,12 @@ fn texture(ctx: &Context, key: Key, src: Option<Arc<image::RgbaImage>>) -> Optio
     }
     let src = match src {
         Some(src) => src,
-        None => Arc::new(crate::assets::Assets::icon_image(ctx, &key.name)?),
+        None => Arc::new(crate::assets::Assets::icon_image_sized(
+            ctx,
+            &key.name,
+            key.size[0].max(1) as u32,
+            key.size[1].max(1) as u32,
+        )?),
     };
     let ([x, y], [w, h]) = (key.origin, key.size);
     let rgba = render(&src, x, y, w as u32, h as u32, &key.backdrop, key.filter);

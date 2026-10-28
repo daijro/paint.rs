@@ -5340,6 +5340,16 @@ fn color_picker_picks_and_switches() {
     assert_eq!(app.tool_type, Some(ToolType::Pencil));
 }
 
+/// After click's default switches back: a pick from the Paintbrush returns to it, its colour set.
+#[test]
+fn color_picker_returns_to_the_previous_tool_by_default() {
+    let mut app = fresh_doc(4, 4, None);
+    app.set_active_tool_from_type(ToolType::PaintBrush);
+    let pick = [Ev::Down(1.0, 1.0, Left), Ev::Up(1.0, 1.0, Left)];
+    drive_tool(&mut app, ToolType::ColorPicker, &pick);
+    assert_eq!(app.tool_type, Some(ToolType::PaintBrush));
+}
+
 /// §3.13 steps 3 and 6: past 10 screen px the drag shows its rectangle (corners ∩ the layer) as
 /// ants on its integer bound; a second button moves the origin with the pointer; a short drag
 /// zooms in at the pointer, a right click out.

@@ -1029,7 +1029,8 @@ mod tests {
         ),
         (
             ToolType::ColorPicker,
-            None,
+            // The reference has Paint.NET's After click (paint.rs defaults to "previous").
+            Some(("afterClick", "none")),
             &[
                 ("sampleMode", [143.0, 59.5, 70.0, 23.0]),
                 ("sampleSize", [213.0, 59.5, 102.0, 23.0]),

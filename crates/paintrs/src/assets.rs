@@ -410,6 +410,27 @@ impl Assets {
         }
     }
 
+    /// `icon_image` for drawing at `w` × `h` device px: paint.rs's SVG rasterized at that size
+    /// (sharp at any size; at the icon's own size it is `icon_image`), a user pack's image as it
+    /// is (the painter resamples it).
+    pub fn icon_image_sized(ctx: &Context, name: &str, w: u32, h: u32) -> Option<image::RgbaImage> {
+        let svg = Self::icon_source(ctx, name) == IconSource::PaintRs;
+        match svg.then(|| svg_bytes(name, dark_theme(ctx))).flatten() {
+            Some(bytes) => {
+                let tree =
+                    resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
+                let size = tree.size();
+                let (w, h) = (w.clamp(1, 512), h.clamp(1, 512));
+                let scale = resvg::tiny_skia::Transform::from_scale(
+                    w as f32 / size.width(),
+                    h as f32 / size.height(),
+                );
+                render_svg(&tree, w, h, scale)
+            }
+            None => Self::icon_image(ctx, name),
+        }
+    }
+
     pub fn image(ctx: &Context, name: &str) -> Option<TextureHandle> {
         let key = format!(
             "images/{name}/{:?}/{}/{}",

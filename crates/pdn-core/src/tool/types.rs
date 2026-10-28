@@ -229,8 +229,10 @@ impl ToolType {
             PaintBrush => merge(json!({"fillStyle": "solid", "blendMode": "normal"}), &brush),
             Eraser => brush,
             Pencil => json!({"blendMode": "normal", "renderingQuality": "high"}),
+            // After click: Switch to previous tool, where Paint.NET's default doesn't switch (user,
+            // 2026-10-28: a pick goes straight back to the tool it was for).
             ColorPicker => json!({
-                "sampleMode": "layer", "sampleSize": 1, "afterClick": "none",
+                "sampleMode": "layer", "sampleSize": 1, "afterClick": "previous",
                 "renderingQuality": "high"
             }),
             Line => json!({

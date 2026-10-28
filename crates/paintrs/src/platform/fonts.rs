@@ -254,6 +254,9 @@ pub struct FontManager {
     synced: u64,
     tried: HashSet<(String, FaceStyle)>,
     system: Vec<String>,
+    /// The OS families' scan: started, and its result while it has not arrived.
+    #[cfg(not(target_arch = "wasm32"))]
+    system_scan: (bool, Option<std::sync::mpsc::Receiver<Vec<String>>>),
     batch_total: usize,
     batch_added: usize,
     batch_errors: Vec<String>,
@@ -276,6 +279,8 @@ impl FontManager {
             synced: 0,
             tried: HashSet::new(),
             system: vec![],
+            #[cfg(not(target_arch = "wasm32"))]
+            system_scan: (false, None),
             batch_total: 0,
             batch_added: 0,
             batch_errors: vec![],
@@ -560,16 +565,33 @@ impl FontManager {
         for f in requests.0 {
             self.ensure_family(&f, FaceStyle::Regular);
         }
+        // Enumeration is document-only; deterministic harnesses never walk OS directories. It
+        // parses every system font file (over a second on a cold start with many fonts), so it
+        // runs on its own thread and the font lists take the families when they arrive.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.policy == FontPolicy::System {
+            if !self.system_scan.0 {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (ctx, policy) = (ctx.clone(), self.policy);
+                std::thread::spawn(move || {
+                    let _ = tx.send(fonts::system_families(&fonts::os_font_dirs(), policy));
+                    ctx.request_repaint();
+                });
+                self.system_scan = (true, Some(rx));
+            } else if let Some(names) = self
+                .system_scan
+                .1
+                .as_ref()
+                .and_then(|rx| rx.try_recv().ok())
+            {
+                (self.system, self.system_scan.1) = (names, None);
+                self.publish_choices(ctx);
+            }
+        }
         if self.synced == self.revision {
             return;
         }
-        // Enumeration is document-only; deterministic harnesses never walk OS directories.
-        if self.system.is_empty() && self.policy == FontPolicy::System {
-            self.system = fonts::system_families(&fonts::os_font_dirs(), self.policy);
-        }
-        let choices = self.registry.choices(&self.system);
-        fonts::set_document_choices(choices.clone());
-        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(CHOICES_ID), FontChoices(choices)));
+        self.publish_choices(ctx);
         if self.ready() {
             prefs.set(
                 METADATA_KEY,
@@ -578,6 +600,12 @@ impl FontManager {
         }
         crate::install_fonts(ctx, FontPolicy::Bundled, ui_family);
         self.synced = self.revision;
+    }
+    /// The document font lists: the bundled families, the user's and the system's found so far.
+    fn publish_choices(&self, ctx: &egui::Context) {
+        let choices = self.registry.choices(&self.system);
+        fonts::set_document_choices(choices.clone());
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(CHOICES_ID), FontChoices(choices)));
     }
 }
 /// The family a face request loads: Calibri is the bundled Carlito.
