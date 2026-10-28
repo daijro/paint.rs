@@ -271,7 +271,8 @@ impl ToolType {
             // Paint.NET's sharing).
             // Their combine mode is the selection tools' (Ruling R20, [`READ_THROUGH`]).
             MagneticLasso => json!({
-                "width": 10, "contrast": 10, "frequency": 57, "renderingQuality": "high"
+                "width": 10, "contrast": 10, "frequency": 57, "renderingQuality": "high",
+                "clickPoints": false
             }),
             // The method: MobileSAM on desktop (built in), GrabCut on the web (MobileSAM's model
             // loads there only once picked).
@@ -285,7 +286,7 @@ impl ToolType {
             ),
             Patch => json!({
                 "patchMode": "normal", "patchSource": "source", "structure": 4, "colorAmount": 0,
-                "sampleImage": false, "renderingQuality": "high"
+                "sampleImage": false, "renderingQuality": "high", "clickPoints": false
             }),
             HealingBrush => merge(
                 json!({"blendMode": "normal", "aligned": true, "sampleImage": false}),
@@ -1423,6 +1424,8 @@ pub fn option_definitions_with_fonts(
                 extra(slider("Contrast:", "contrast", 1.0, 100.0)),
                 extra(slider("Frequency:", "frequency", 0.0, 100.0)),
                 section(quality()),
+                // Extra (`tool::magnetic_lasso`): a drag's release fastens a point, not closes.
+                section(extra_checkbox("Click points", "clickPoints")),
             ]
         }
         // S§4.3.
@@ -1495,7 +1498,12 @@ pub fn option_definitions_with_fonts(
                 let source = choices("", "patchSource", sources, Some(100.0), false, false, false);
                 options.push(section(extra(source)));
             }
-            options.extend([section(sample_image()), section(quality())]);
+            options.extend([
+                section(sample_image()),
+                section(quality()),
+                // Extra (`tool::click_lasso`): the selection placed point by point.
+                section(extra_checkbox("Click points", "clickPoints")),
+            ]);
             options
         }
         // S§4.3: the brush controls (no blend mode: the heal is written Normal), then the two
@@ -2395,8 +2403,8 @@ mod tests {
         assert_eq!(s.get(ToolType::MagneticLasso, "width"), json!(10));
     }
 
-    /// S§4.3: the combine modes and the quality are Paint.NET's (no plus); Width, Contrast and
-    /// Frequency are the Magnetic Lasso's own.
+    /// S§4.3: the combine modes and the quality are Paint.NET's (no plus); Width, Contrast,
+    /// Frequency and Click points are the Magnetic Lasso's own.
     #[test]
     fn magnetic_lasso_options() {
         let defs = option_definitions(ToolType::MagneticLasso, &ToolSettings::default());
@@ -2418,6 +2426,7 @@ mod tests {
                     true
                 ),
                 ("renderingQuality", None, None, None, false),
+                ("clickPoints", Some("Click points"), None, None, true),
             ]
         );
         assert_eq!(defs[1].kind, OptionKind::Size);

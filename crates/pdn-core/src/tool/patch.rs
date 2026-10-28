@@ -2,8 +2,8 @@
 //!
 //! Photocraft phase spec: S§4.3 "Patch", "Resource limits"
 //!
-//! The Patch tool: select an area (Lasso Select's drag, with Paint.NET's combine modes), then drag
-//! the selection. In Normal mode Source repairs the selection with the texture where it is dropped
+//! The Patch tool: select an area (Lasso Select's drag, with Paint.NET's combine modes, or with the
+//! Extra Click points option point by point, `click_lasso`), then drag the selection. In Normal mode Source repairs the selection with the texture where it is dropped
 //! and Destination repairs the dropped-on place with the selection's, both seamless-cloned
 //! (`extra::patch`), with a live preview while dragging; Content-Aware fills the selection from
 //! where it is dropped (`extra::patch::land`). The release runs it as a background job (busy
@@ -12,8 +12,9 @@
 use std::sync::Arc;
 
 use super::base::ToolBase;
+use super::click_lasso::ClickLasso;
 use super::healing::Heal;
-use super::selection_tools::{LassoShape, SelectionShape, SelectionTool};
+use super::selection_tools::{LassoShape, SelectionShape, SelectionTool, click_points};
 use super::{CursorRequest, KeyPress, MouseButton, PointerInput, Tool, ToolType};
 use crate::action::UiRequest;
 use crate::app::{AppEvent, AppWorkspace};
@@ -75,6 +76,10 @@ struct Running {
 #[derive(Default)]
 pub struct PatchTool {
     lasso: SelectionTool<PatchLasso>,
+    /// Click points: the selection placed point by point.
+    clicks: ClickLasso,
+    /// The status bar's hint while Click points is on.
+    status: Option<String>,
     drag: Option<Drag>,
     running: Option<Running>,
     preview: Option<RendererId>,
@@ -173,6 +178,17 @@ fn write(app: &mut AppWorkspace, rect: IntRect, mode: ContentBlendMode, out: (Ve
 }
 
 impl PatchTool {
+    /// Click points' hint for the status bar while it is on.
+    fn sync_status(&mut self, app: &AppWorkspace) {
+        let t = crate::i18n::t;
+        self.status = click_points(app, ToolType::Patch).then(|| {
+            crate::i18n::tf(
+                "statusBar.context.help.text.format",
+                &[&t("patchTool.name"), &t("patchTool.clickPointsHelpText")],
+            )
+        });
+    }
+
     /// Upstream's `patch_drags_selection`: a left press with no modifiers inside the selection
     /// grabs the patch.
     fn grab(app: &AppWorkspace, x: f64, y: f64, b: MouseButton) -> Option<Drag> {
@@ -347,6 +363,7 @@ impl Tool for PatchTool {
     /// Lasso Select's layers, and the preview's (empty).
     fn on_activate(&mut self, app: &mut AppWorkspace) {
         self.lasso.on_activate(app);
+        self.sync_status(app);
         if let Some(ws) = app.active_ws_mut() {
             self.preview = Some(ws.surface_box.add_renderer(Renderer::Tint(Tint::default())));
         }
@@ -368,15 +385,17 @@ impl Tool for PatchTool {
             write(app, rect, mode, out);
         }
         self.hint = None;
+        self.clicks.cancel(app, self.lasso.live_layer());
         self.lasso.on_deactivate(app);
         if let (Some(id), Some(ws)) = (self.preview.take(), app.active_ws_mut()) {
             ws.surface_box.remove_renderer(id);
         }
     }
 
-    /// A press while a patch is held or runs is swallowed. A plain left press inside the
-    /// selection grabs the patch (a text layer asks to rasterize first, S§4.5); any other press
-    /// is Lasso Select's.
+    /// A press while a patch is held or runs is swallowed, and one while Click points places a
+    /// selection is its. A plain left press inside the selection grabs the patch (a text layer
+    /// asks to rasterize first, S§4.5); any other press is Lasso Select's, or with Click points
+    /// the first point.
     fn on_mouse_down(
         &mut self,
         app: &mut AppWorkspace,
@@ -389,6 +408,16 @@ impl Tool for PatchTool {
             return true;
         }
         self.set_hint(app, None);
+        let (layer, button) = (
+            self.lasso.live_layer(),
+            matches!(b, MouseButton::Left | MouseButton::Right),
+        );
+        if self.clicks.active() {
+            if button && !self.clicks.pressed() {
+                self.clicks.down(app, ToolType::Patch, x, y, b, layer);
+            }
+            return true;
+        }
         if !self.lasso.is_tracking()
             && let Some(d) = Self::grab(app, x, y, b)
         {
@@ -397,11 +426,18 @@ impl Tool for PatchTool {
             }
             return true;
         }
+        if button && !self.lasso.is_tracking() && click_points(app, ToolType::Patch) {
+            self.clicks.down(app, ToolType::Patch, x, y, b, layer);
+            return true;
+        }
         self.lasso.on_mouse_down(app, x, y, b, i)
     }
 
     fn on_mouse_move(&mut self, app: &mut AppWorkspace, x: f64, y: f64, i: &PointerInput) -> bool {
         if self.drag.is_none() {
+            if self.clicks.active() {
+                return self.clicks.moved(app, x, y, i, self.lasso.live_layer());
+            }
             return self.lasso.on_mouse_move(app, x, y, i);
         }
         self.follow(app, x, y);
@@ -418,6 +454,9 @@ impl Tool for PatchTool {
         i: &PointerInput,
     ) -> bool {
         if self.drag.is_none() {
+            if self.clicks.pressed() {
+                return self.clicks.up(app, x, y, i, self.lasso.live_layer());
+            }
             return self.lasso.on_mouse_up(app, x, y, b, i);
         }
         self.follow(app, x, y);
@@ -431,8 +470,12 @@ impl Tool for PatchTool {
         true
     }
 
-    /// Escape lets a held patch go, or stops a running one.
+    /// Click points' keys while it places a selection; else Escape lets a held patch go, or stops a
+    /// running one.
     fn on_key_press(&mut self, app: &mut AppWorkspace, key: &KeyPress) -> bool {
+        if self.clicks.key(app, key, self.lasso.live_layer()) {
+            return true;
+        }
         if key.key != "Escape" || (self.drag.is_none() && self.running.is_none()) {
             return false;
         }
@@ -444,9 +487,17 @@ impl Tool for PatchTool {
         self.lasso.on_modifier_keys_changed(app);
     }
 
-    /// An undo or redo stops a running patch.
+    /// An undo or redo drops a selection being placed and stops a running patch.
     fn on_executing_history_memento(&mut self, app: &mut AppWorkspace) {
+        self.clicks.cancel(app, self.lasso.live_layer());
         self.cancel(app);
+    }
+
+    fn on_setting_changed(&mut self, app: &mut AppWorkspace, key: &str) {
+        if key == "clickPoints" {
+            self.clicks.cancel(app, self.lasso.live_layer());
+            self.sync_status(app);
+        }
     }
 
     fn on_frame(&mut self, app: &mut AppWorkspace) {
@@ -462,10 +513,13 @@ impl Tool for PatchTool {
     }
 
     fn status_text(&self) -> Option<&str> {
-        self.hint
+        self.hint.or(self.status.as_deref())
     }
 
     fn cursor(&self) -> CursorRequest {
+        if self.clicks.active() {
+            return CursorRequest::Image(LassoShape::CURSORS[1]);
+        }
         self.lasso.cursor()
     }
 
@@ -510,6 +564,39 @@ mod tests {
     fn undo_names(app: &AppWorkspace) -> Vec<String> {
         let ws = app.active_ws().unwrap();
         ws.history.undo.iter().map(|m| m.name.clone()).collect()
+    }
+
+    /// Click points: clicks place the patch's selection and a click on the first point selects
+    /// it, one entry named after the Patch tool; a press inside it then grabs the patch.
+    #[test]
+    fn click_points_place_the_selection() {
+        let mut app = fresh_doc(80, 60, None);
+        app.tool_settings.set(T, "clickPoints", true.into());
+        let corners = [
+            (10.0, 10.0),
+            (40.0, 10.0),
+            (40.0, 30.0),
+            (10.0, 30.0),
+            (10.0, 10.0),
+        ];
+        let events: Vec<Ev> = corners
+            .into_iter()
+            .flat_map(|(x, y)| [Ev::Down(x, y, Left), Ev::Up(x, y, Left), Ev::Wait(600.0)])
+            .collect();
+        let n = undo_names(&app).len();
+        drive_tool(&mut app, T, &events);
+        assert_eq!(undo_names(&app)[n..], ["Patch"]);
+        let bounds = app
+            .active_ws()
+            .unwrap()
+            .selection
+            .create_path(true)
+            .get_bounds();
+        assert_eq!(bounds, Rectangle::new(10.0, 10.0, 30.0, 20.0));
+        drive_tool(&mut app, T, &[Ev::Down(20.0, 20.0, Left)]);
+        let mut grabbed = false;
+        crate::testing::with_tool::<super::PatchTool>(&mut app, |t, _| grabbed = t.drag.is_some());
+        assert!(grabbed);
     }
 
     /// The bottom layer as `f(x, y)`.
@@ -1108,8 +1195,8 @@ mod tests {
 
     /// S§4.1, S§4.3: Paint.NET's combine row and quality (no plus), then the Extra options (the
     /// plus): Patch mode, then Source / Destination in Normal or Structure and Color in
-    /// Content-Aware, then Sample. The defaults are S§4.3's; the combine mode is the selection
-    /// tools' shared one.
+    /// Content-Aware, then Sample, and Click points last (`click_lasso`). The defaults are S§4.3's;
+    /// the combine mode is the selection tools' shared one.
     #[test]
     fn patch_toolbar_and_defaults() {
         let keys = |settings: &ToolSettings| -> Vec<(&str, bool)> {
@@ -1125,6 +1212,7 @@ mod tests {
                 ("patchSource", true),
                 ("sampleImage", true),
                 ("renderingQuality", false),
+                ("clickPoints", true),
             ]
         );
         let defaults = |s: &ToolSettings| {
@@ -1155,6 +1243,7 @@ mod tests {
                 ("colorAmount", true),
                 ("sampleImage", true),
                 ("renderingQuality", false),
+                ("clickPoints", true),
             ]
         );
         let defs = option_definitions_with_fonts(T, &s, &[]);

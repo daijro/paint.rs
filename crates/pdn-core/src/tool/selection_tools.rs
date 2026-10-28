@@ -397,15 +397,15 @@ pub struct LassoSelectTool {
     status: Option<String>,
 }
 
-/// Lasso Select's Extra Click points option.
-fn click_points(app: &AppWorkspace) -> bool {
-    app.tool_settings.get(ToolType::LassoSelect, "clickPoints") == true
+/// `tool`'s Extra Click points option (Lasso Select, Patch, Magnetic Lasso).
+pub(super) fn click_points(app: &AppWorkspace, tool: ToolType) -> bool {
+    app.tool_settings.get(tool, "clickPoints") == true
 }
 
 impl LassoSelectTool {
     fn sync_status(&mut self, app: &AppWorkspace) {
         let t = crate::i18n::t;
-        self.status = click_points(app).then(|| {
+        self.status = click_points(app, ToolType::LassoSelect).then(|| {
             crate::i18n::tf(
                 "statusBar.context.help.text.format",
                 &[
@@ -464,7 +464,8 @@ impl Tool for LassoSelectTool {
         b: MouseButton,
         i: &PointerInput,
     ) -> bool {
-        let clicks = self.clicks.active() || (!self.drag.is_tracking() && click_points(app));
+        let clicks = self.clicks.active()
+            || (!self.drag.is_tracking() && click_points(app, ToolType::LassoSelect));
         if !clicks {
             return self.drag.on_mouse_down(app, x, y, b, i);
         }
@@ -475,7 +476,8 @@ impl Tool for LassoSelectTool {
         {
             return self.clicks.active();
         }
-        self.clicks.down(app, x, y, b, self.drag.live);
+        let tool = ToolType::LassoSelect;
+        self.clicks.down(app, tool, x, y, b, self.drag.live);
         true
     }
 
@@ -580,6 +582,11 @@ fn pixel_rows(p: &GraphicsPath) -> Vec<(i32, i32, i32)> {
 impl<S: SelectionShape> SelectionTool<S> {
     pub fn is_tracking(&self) -> bool {
         self.tracking
+    }
+
+    /// The live (untinted) selection layer, while active.
+    pub(super) fn live_layer(&self) -> Option<RendererId> {
+        self.live
     }
 
     fn update_cursor(&mut self, app: &AppWorkspace) {

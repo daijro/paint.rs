@@ -840,7 +840,9 @@ pub const SYSTEM_HIGHLIGHT: Color32 = rgb(0x0078D7);
 pub const SYSTEM_HIGHLIGHT_TEXT: Color32 = rgb(0xFFFFFF);
 pub const TOOL_FORM_BUTTON: (f32, f32) = (30.0, 30.0); // min width, height
 pub const TOOL_FORM_BUTTON_PADDING: f32 = 4.0;
-pub const TOOL_FORM_ICON: f32 = 20.0;
+/// The tool icons at their artwork's own 16-px grid, as the toolbars draw them: paintdotjs's 20 px
+/// stretched the 16-px rendering 1.25×, which blurred them (a user, Linux/X11).
+pub const TOOL_FORM_ICON: f32 = 16.0;
 /// S§4.1: the plus at an Extra tool button's top-right (6×6, 2-px arms, inset 2 px), gray as
 /// `plugin_indicator.svg` (user, 2026-10-24). One flat mid gray between its fill (#AAAAAA, too
 /// light on the light window) and edge (#727272, dim on the dark one): about 3.2–3.6:1 on the

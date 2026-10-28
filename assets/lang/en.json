@@ -2298,6 +2298,7 @@
         }
     },
     "patchTool": {
+        "clickPointsHelpText": "Click to place points around an area (drag to draw freehand), then click the first point, double-click or press Enter to select it. Drag the selection to the area you want to sample from.",
         "helpText": "Select an area, then drag it to the area you want to sample from.",
         "name": "Patch"
     },

@@ -1,5 +1,5 @@
-//! Extra (paint.rs): Lasso Select's Click points option (`clickPoints`), after Photoshop's
-//! Polygonal Lasso and GIMP's Free Select. A click places a point and the border runs on from it
+//! Extra (paint.rs): the Click points option (`clickPoints`) of Lasso Select and the Patch tool's
+//! selecting, after Photoshop's Polygonal Lasso and GIMP's Free Select. A click places a point and the border runs on from it
 //! to the pointer with the button up; a drag from a point draws freehand. A click on the first
 //! point, a double-click or Enter closes the border and selects it by Lasso Select's release rules
 //! ([`select_path`]); Backspace or Delete takes the last point back, Esc cancels. A drag from the
@@ -38,8 +38,9 @@ pub(super) struct ClickLasso {
     dragged: bool,
     /// The last click (time, point), for the double-click.
     last_click: Option<(f64, Point)>,
-    /// The first press's combine mode, the selection then (the history memento's payload) and its
-    /// path.
+    /// The tool placing it (its combine mode and its history entry's name), the first press's
+    /// combine mode, the selection then (the history memento's payload) and its path.
+    tool: Option<ToolType>,
     mode: CombineMode,
     before: SelectionData,
     old_path: GraphicsPath,
@@ -64,11 +65,12 @@ impl ClickLasso {
         self.press.is_some()
     }
 
-    /// A press: the first point (the combine mode from Lasso Select's modifiers), a point, or the
-    /// close (on the first point, or a double-click).
+    /// A press of `tool`: the first point (the combine mode from Lasso Select's modifiers), a
+    /// point, or the close (on the first point, or a double-click).
     pub(super) fn down(
         &mut self,
         app: &mut AppWorkspace,
+        tool: ToolType,
         x: f64,
         y: f64,
         b: MouseButton,
@@ -88,7 +90,7 @@ impl ClickLasso {
                 self.anchors.push(self.points.len() - 1);
             }
         } else {
-            self.mode = press_mode(app, ToolType::LassoSelect, b);
+            (self.tool, self.mode) = (Some(tool), press_mode(app, tool, b));
             let Some(ws) = app.active_ws_mut() else {
                 return;
             };
@@ -197,11 +199,11 @@ impl ClickLasso {
     pub(super) fn close(&mut self, app: &mut AppWorkspace, layer: Option<RendererId>) {
         self.pointer = self.points.last().copied().unwrap_or_default();
         let polygon = self.polygon(app);
-        let mode = self.mode;
+        let (mode, tool) = (self.mode, self.tool.unwrap_or(ToolType::LassoSelect));
         self.cancel(app, layer);
         if let Some(ws) = app.active_ws_mut() {
             let path = GraphicsPath::from_points(&polygon);
-            select_path(ws, path, mode, ToolType::LassoSelect);
+            select_path(ws, path, mode, tool);
         }
     }
 

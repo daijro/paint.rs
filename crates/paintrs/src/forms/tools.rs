@@ -100,8 +100,8 @@ pub fn show(ui: &mut Ui, app: &AppWorkspace) -> Option<ToolType> {
         );
         let (name, size) = icon(tool);
         let inner = rect.shrink(MENU_ITEM_BORDER + TOOL_FORM_BUTTON_PADDING);
-        // `justify-content: center`; the image fills the content height.
-        let at = Pos2::new(inner.center().x - size.x / 2.0, inner.min.y);
+        // `justify-content: center`, and centred in the content height.
+        let at = inner.center() - size / 2.0;
         img::paint_icon(
             &painter,
             name,

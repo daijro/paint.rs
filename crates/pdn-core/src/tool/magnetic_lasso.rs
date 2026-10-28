@@ -11,7 +11,8 @@
 //! point; Alt+click draws a straight segment and Alt+drag a freehand one (its release closes the
 //! border, as every drag's does). Backspace or Delete removes the last fastening point. A click on
 //! the start, a double-click or Enter closes the border along the edges (Alt: with a straight
-//! segment); Esc cancels. `[` and `]` change the detection width by 1. While it is drawn the
+//! segment); Esc cancels. With the Extra Click points option (`clickPoints`) a later drag's release
+//! fastens a point instead of closing, as Lasso Select's Click points does (`click_lasso`). `[` and `]` change the detection width by 1. While it is drawn the
 //! border shows as Lasso Select's selection does: tinted, with marching ants.
 
 use std::collections::VecDeque;
@@ -19,8 +20,8 @@ use std::collections::VecDeque;
 use serde_json::Value;
 
 use super::selection_tools::{
-    add_live_layer, begin_live, clip_shape, end_live, points_per_px, press_mode, remove_live_layer,
-    select_path, show_live,
+    add_live_layer, begin_live, click_points, clip_shape, end_live, points_per_px, press_mode,
+    remove_live_layer, select_path, show_live,
 };
 use super::{CursorRequest, KeyPress, MouseButton, PointerInput, Tool, ToolType};
 use crate::app::AppWorkspace;
@@ -71,6 +72,8 @@ pub struct MagneticLassoTool {
     press: Option<([f64; 2], MouseButton, bool)>,
     /// The held button went farther than a click from its press: its release closes the border.
     dragged: bool,
+    /// The held button placed the first fastening point.
+    opening: bool,
     /// The combine mode the first press set.
     mode: CombineMode,
     /// The selection when the border began (the history memento's payload), and its path.
@@ -218,6 +221,7 @@ impl MagneticLassoTool {
             let trail = vec![inside(app, p)];
             (self.path, self.anchors, self.trail) = (vec![start], vec![0], trail);
             self.last_press = Some((now, p));
+            self.opening = true;
             return;
         }
         let (ms, near) = DOUBLE_CLICK;
@@ -538,9 +542,20 @@ impl Tool for MagneticLassoTool {
         };
         self.on_mouse_move(app, x, y, i);
         self.press = None;
+        let opening = std::mem::take(&mut self.opening);
         if std::mem::take(&mut self.dragged) && self.active() {
-            let straight = app.alt_key_down && !alt_at_press;
-            self.close(app, straight, false);
+            if click_points(app, ToolType::MagneticLasso) && !opening {
+                // Click points: the drag's end is a fastening point; the border stays open.
+                self.catch_up(app, usize::MAX);
+                if self.freehand {
+                    self.end_freehand();
+                } else {
+                    self.fasten_live();
+                }
+            } else {
+                let straight = app.alt_key_down && !alt_at_press;
+                self.close(app, straight, false);
+            }
         } else {
             self.catch_up(app, usize::MAX);
             self.end_freehand();
@@ -665,6 +680,29 @@ mod tests {
             .iter()
             .map(|m| m.name.clone())
             .collect()
+    }
+
+    /// Click points: a later drag's release fastens a point and the border stays open until it
+    /// is closed.
+    #[test]
+    fn click_points_keep_the_border_open_after_drags() {
+        let mut app = square_doc();
+        app.tool_settings
+            .set(ToolType::MagneticLasso, "clickPoints", true.into());
+        let events = [
+            Ev::Down(52.0, 37.0, Left),
+            Ev::Up(52.0, 37.0, Left),
+            Ev::Down(90.0, 37.0, Left),
+            Ev::Move(110.0, 37.0),
+            Ev::Move(133.0, 37.0),
+            Ev::Up(133.0, 37.0, Left),
+        ];
+        drive_tool(&mut app, ToolType::MagneticLasso, &events);
+        let (anchors, _) = border(&mut app);
+        assert!(anchors.len() >= 3, "{anchors:?}");
+        assert!(undo_names(&app).is_empty(), "the border is still open");
+        drive_tool(&mut app, ToolType::MagneticLasso, &[Ev::Key("Enter")]);
+        assert_eq!(undo_names(&app), ["Magnetic Lasso"]);
     }
 
     /// (fastening points, border points) of the border being drawn.
