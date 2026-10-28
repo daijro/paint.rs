@@ -898,6 +898,12 @@ pub fn number_input(
 /// dialog-canvas-size references).
 fn paint_inner_spin(painter: &Painter, padded: Rect, line_top: f32) {
     let ppp = painter.pixels_per_point();
+    let light = theme::current(painter.ctx()).scheme == theme::Scheme::Light;
+    let (fill, arrow) = if light {
+        INNER_SPIN_LIGHT
+    } else {
+        (INNER_SPIN_FILL, INNER_SPIN_ARROW)
+    };
     let (w, h) = INNER_SPIN_SIZE;
     let x0 = ((padded.max.x - w) * ppp).round() / ppp;
     let y0 = (line_top * ppp).round() / ppp;
@@ -905,7 +911,7 @@ fn paint_inner_spin(painter: &Painter, padded: Rect, line_top: f32) {
     painter.rect_filled(
         Rect::from_min_size(Pos2::new(x0, y0), Vec2::new(w, h)),
         0.0,
-        INNER_SPIN_FILL,
+        fill,
     );
     // Rows 1–4 the up triangle (1, 3, 5, 7 px), rows 9–12 the down one, centred at x 7.
     for (row, half) in [
@@ -924,7 +930,7 @@ fn paint_inner_spin(painter: &Painter, padded: Rect, line_top: f32) {
                 Vec2::new((2 * half + 1) as f32 * one, one),
             ),
             0.0,
-            INNER_SPIN_ARROW,
+            arrow,
         );
     }
 }

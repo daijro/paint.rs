@@ -1077,6 +1077,8 @@ pub const SELECT_NATIVE_LIGHT: (Color32, Color32) = (rgb(0xFFFFFF), rgb(0x767676
 pub const INNER_SPIN_SIZE: (f32, f32) = (15.0, 14.0);
 pub const INNER_SPIN_FILL: Color32 = rgb(0x2C2C2C);
 pub const INNER_SPIN_ARROW: Color32 = rgb(0x9F9F9F);
+/// The light scheme's (fill, arrows), so the light theme's number fields don't show a dark box.
+pub const INNER_SPIN_LIGHT: (Color32, Color32) = (rgb(0xEFEFEF), rgb(0x505050));
 /// `.pdn-number-input:has(input:disabled) { opacity: .55 }` (css/component.css).
 pub const NUMBER_DISABLED_OPACITY: f32 = 0.55;
 /// `.new-file-row input[type=number] { padding: 2px 5px }`; `.image-size-percent`,

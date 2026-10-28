@@ -478,9 +478,17 @@ impl CanvasView {
                     );
                     let alpha = t.caret_alpha(app.now_ms);
                     let painter = ui.painter().with_clip_rect(visible);
+                    let at = |p: [f64; 2]| rect.min + Vec2::new(p[0] as f32, p[1] as f32);
+                    // The selected text's highlight (the system selection blue), under the caret.
+                    for q in t.selection_quads(app) {
+                        painter.add(egui::Shape::convex_polygon(
+                            q.into_iter().map(at).collect(),
+                            Color32::from_rgba_unmultiplied(0, 120, 215, 96),
+                            egui::Stroke::NONE,
+                        ));
+                    }
                     match t.caret_quad(app) {
                         Some(q) => {
-                            let at = |p: [f64; 2]| rect.min + Vec2::new(p[0] as f32, p[1] as f32);
                             let corners: Vec<Pos2> = q.into_iter().map(at).collect();
                             cursor = Rect::from_points(&corners);
                             paint_text_caret_quad(&painter, corners, ppp, alpha);

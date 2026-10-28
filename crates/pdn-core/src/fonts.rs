@@ -758,6 +758,22 @@ mod manager_tests {
             )
             .is_none()
         );
+        // The index picks what the full scan picks: Bold for Semibold, Regular for Italic.
+        let files = font_files(std::slice::from_ref(&dir));
+        let (_, index) = scan_faces(std::slice::from_ref(&dir));
+        for (family, style) in [
+            ("selawik", FaceStyle::Semibold),
+            ("Selawik", FaceStyle::Italic),
+            ("Carlito", FaceStyle::Regular),
+            ("Missing family", FaceStyle::Regular),
+        ] {
+            assert_eq!(
+                face_in(&index, family, style),
+                document_face_from(&files, FontPolicy::System, family, style),
+                "{family} {style:?}"
+            );
+        }
+        assert!(face_in(&index, "Selawik", FaceStyle::Semibold).is_some());
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
@@ -1085,21 +1101,48 @@ pub fn document_face_from(
     }
     regular
 }
+/// Every face `system_families` saw, by lowercase family: its file, collection index and style.
+type FaceIndex = std::collections::HashMap<String, Vec<(PathBuf, u32, FaceStyle)>>;
+static SYSTEM_FACES: std::sync::OnceLock<FaceIndex> = std::sync::OnceLock::new();
+/// `document_face_from` over the faces the first `system_families` scan indexed, reading one
+/// file instead of every one. `None` until that scan has finished.
+pub fn indexed_face(family: &str, style: FaceStyle) -> Option<Option<Vec<u8>>> {
+    Some(face_in(SYSTEM_FACES.get()?, family, style))
+}
+fn face_in(index: &FaceIndex, family: &str, style: FaceStyle) -> Option<Vec<u8>> {
+    let faces = index.get(&family.to_ascii_lowercase())?;
+    let (path, i, _) = faces
+        .iter()
+        .find(|f| f.2 == style || (style == FaceStyle::Semibold && f.2 == FaceStyle::Bold))
+        .or_else(|| faces.iter().find(|f| f.2 == FaceStyle::Regular))?;
+    collection_face(&read_font_file(path)?, *i)
+}
 /// Re-scans per call (every font file parsed): the desktop app runs it once, off the UI thread.
+/// The first scan also indexes the faces for `indexed_face`.
 pub fn system_families(dirs: &[PathBuf], policy: FontPolicy) -> Vec<String> {
     if policy == FontPolicy::Bundled || cfg!(target_arch = "wasm32") {
         return vec![];
     }
+    let (names, index) = scan_faces(dirs);
+    let _ = SYSTEM_FACES.set(index);
+    names
+}
+fn scan_faces(dirs: &[PathBuf]) -> (Vec<String>, FaceIndex) {
     let mut names = Vec::new();
+    let mut index = FaceIndex::new();
     for path in font_files(dirs) {
         let Some(bytes) = read_font_file(&path) else {
             continue;
         };
-        for index in face_indices(&bytes) {
-            let Ok(face) = ttf_parser::Face::parse(&bytes, index) else {
+        for i in face_indices(&bytes) {
+            let Ok(face) = ttf_parser::Face::parse(&bytes, i) else {
                 continue;
             };
             let Ok(meta) = face_meta(&face) else { continue };
+            index
+                .entry(meta.family.to_ascii_lowercase())
+                .or_default()
+                .push((path.clone(), i, meta.style));
             if !meta.family.starts_with('@') {
                 names.push(meta.family);
             }
@@ -1107,5 +1150,5 @@ pub fn system_families(dirs: &[PathBuf], policy: FontPolicy) -> Vec<String> {
     }
     names.sort_by_key(|n| n.to_ascii_lowercase());
     names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    names
+    (names, index)
 }

@@ -356,7 +356,13 @@ impl FontManager {
         if !self.tried.insert(key) {
             return;
         }
-        self.queue.push_back(Job::Family(family.into(), style));
+        // Newest first: the face just chosen and the rows just scrolled to, before the backlog.
+        let at = self
+            .queue
+            .iter()
+            .take_while(|j| !matches!(j, Job::Family(..)))
+            .count();
+        self.queue.insert(at, Job::Family(family.into(), style));
     }
     /// Only the consumer still needing this face schedules a wakeup. Failed jobs do not run
     /// each frame, and a canceled/closed Text owner does not keep retrying in the background.
@@ -562,8 +568,8 @@ impl FontManager {
                 d.remove_temp::<PreviewRequests>(egui::Id::unique("font-preview-requests"))
             })
             .unwrap_or_default();
-        for f in requests.0 {
-            self.ensure_family(&f, FaceStyle::Regular);
+        for f in requests.0.iter().rev() {
+            self.ensure_family(f, FaceStyle::Regular);
         }
         // Enumeration is document-only; deterministic harnesses never walk OS directories. It
         // parses every system font file (over a second on a cold start with many fonts), so it
@@ -599,6 +605,8 @@ impl FontManager {
             );
         }
         crate::install_fonts(ctx, FontPolicy::Bundled, ui_family);
+        // New fonts take effect next frame; without one the previews wait for input.
+        ctx.request_repaint();
         self.synced = self.revision;
     }
     /// The document font lists: the bundled families, the user's and the system's found so far.
@@ -697,14 +705,31 @@ async fn load_family(
             return super::font_web::fetch(&path).await;
         }
     }
+    // Off the UI thread: without the index a lookup parses every system font file (~100 ms).
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(bytes) =
-        fonts::document_face_from(&fonts::system_font_files(policy), policy, family, style)
-    {
-        // R157: an unusable system face is a load failure (a fallback family may follow), not
-        // a silent registration miss that leaves its consumer waiting.
-        fonts::validate_font(&bytes).map_err(|e| e.to_string())?;
-        return Ok(bytes);
+    if policy == FontPolicy::System {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let name = family.to_owned();
+        std::thread::spawn(move || {
+            let bytes = fonts::indexed_face(&name, style).unwrap_or_else(|| {
+                fonts::document_face_from(&fonts::system_font_files(policy), policy, &name, style)
+            });
+            // R157: an unusable system face is a load failure (a fallback family may follow),
+            // not a silent registration miss that leaves its consumer waiting.
+            let _ = tx.send(bytes.map(|b| match fonts::validate_font(&b) {
+                Ok(_) => Ok(b),
+                Err(e) => Err(e.to_string()),
+            }));
+        });
+        // `FontManager` repaints and polls again while a job is pending.
+        let found = std::future::poll_fn(|_| match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => std::task::Poll::Pending,
+            found => std::task::Poll::Ready(found.ok().flatten()),
+        })
+        .await;
+        if let Some(bytes) = found {
+            return bytes;
+        }
     }
     let _ = policy;
     Err(format!("The font {family} is not available"))

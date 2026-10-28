@@ -1081,6 +1081,14 @@ pub struct TextTool {
     angle: f64,
     /// A rotate-handle drag.
     turning: Option<Turning>,
+    /// Extra (paint.rs; Paint.NET's Text tool has a caret only): the selection's other end, the
+    /// caret being one; a press selecting (its drag moves the caret); the last press in the text
+    /// (time, point) for a double-click's word; and text Ctrl+C / Ctrl+X took, for the app's
+    /// clipboard (`take_copied`).
+    anchor: Option<(usize, usize)>,
+    selecting: bool,
+    last_press: Option<(f64, [f64; 2])>,
+    copied: Option<String>,
 }
 /// A rotate-handle drag: its pivot, the pointer's screen angle at the press (radians), and the
 /// text's angle and click point then.
@@ -1183,6 +1191,7 @@ impl TextTool {
         self.mode = EditMode::Empty;
         self.lines = vec![vec![]];
         self.caret = (0, 0);
+        (self.anchor, self.selecting) = (None, false);
         self.click = click;
         if self.handles.is_none() {
             self.handles = Some(ws.surface_box.add_renderer(Renderer::Handles(vec![])));
@@ -1283,6 +1292,8 @@ impl TextTool {
             return;
         }
         self.cancel_composition();
+        // Typing replaces the selection.
+        self.delete_selection();
         for u in text.encode_utf16() {
             self.character(app, u);
         }
@@ -1293,6 +1304,9 @@ impl TextTool {
             return false;
         }
         self.cancel_composition();
+        if self.drag.is_none() {
+            self.delete_selection();
+        }
         for u in text.encode_utf16() {
             if u == 10 {
                 self.newline();
@@ -1350,6 +1364,7 @@ impl TextTool {
             return;
         }
         self.cancel_composition();
+        self.anchor = None;
         let (row, col) = self.caret;
         let l = &mut self.lines[row];
         // Scalar boundaries of each independently decoded side preserve a caret inside a pair.
@@ -1381,6 +1396,118 @@ impl TextTool {
         l.drain(lo..hi);
         self.caret.1 = lo;
         self.redraw(app);
+    }
+    /// The selected range, its start first; `None` when nothing is selected.
+    fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        let a = self.anchor.filter(|&a| a != self.caret)?;
+        Some(if a < self.caret {
+            (a, self.caret)
+        } else {
+            (self.caret, a)
+        })
+    }
+    /// The selected text, its lines joined with LF.
+    pub fn selected_text(&self) -> Option<String> {
+        let ((r0, c0), (r1, c1)) = self.selection()?;
+        let mut units = vec![];
+        for r in r0..=r1 {
+            let l = &self.lines[r];
+            let a = if r == r0 { c0 } else { 0 };
+            let b = if r == r1 { c1 } else { l.len() };
+            units.extend_from_slice(&l[a..b]);
+            if r < r1 {
+                units.push(10);
+            }
+        }
+        Some(String::from_utf16_lossy(&units))
+    }
+    /// The text Ctrl+C or Ctrl+X took since the last call, for the clipboard.
+    pub fn take_copied(&mut self) -> Option<String> {
+        self.copied.take()
+    }
+    /// Removes the selected text, the caret at its start, and clears the selection. False when
+    /// nothing was selected.
+    fn delete_selection(&mut self) -> bool {
+        let selected = self.selection();
+        self.anchor = None;
+        let Some(((r0, c0), (r1, c1))) = selected else {
+            return false;
+        };
+        let tail = self.lines[r1].split_off(c1);
+        self.lines[r0].truncate(c0);
+        self.lines[r0].extend(tail);
+        self.lines.drain(r0 + 1..=r1);
+        self.caret = (r0, c0);
+        true
+    }
+    /// Selects the run of the caret's character class (a word, its punctuation or its spaces).
+    fn select_word(&mut self) {
+        let (row, col) = self.caret;
+        let l = &self.lines[row];
+        if l.is_empty() {
+            return;
+        }
+        let at = col.min(l.len() - 1);
+        let class = category(l[at]);
+        let (mut a, mut b) = (at, at + 1);
+        while a > 0 && category(l[a - 1]) == class {
+            a -= 1;
+        }
+        while b < l.len() && category(l[b]) == class {
+            b += 1;
+        }
+        (self.anchor, self.caret) = (Some((row, a)), (row, b));
+    }
+    /// The selection's highlight on the canvas viewport (as `caret_rect`): a box per line, or per
+    /// character where the text is placed on a shape or turned, so it follows the glyphs.
+    pub fn selection_quads(&self, app: &AppWorkspace) -> Vec<[[f64; 2]; 4]> {
+        let (Some(((r0, c0), (r1, c1))), Some(layout), Some(ws)) =
+            (self.selection(), &self.layout, app.active_ws())
+        else {
+            return vec![];
+        };
+        let s = Self::settings(app);
+        let px = text_px_size(s.size, s.metric, self.dpi(app));
+        let place = Placement::new(layout, &s, self.click);
+        let (t, k) = (ws.view.view_transform(), ws.view.ppp);
+        let screen = |p: [f64; 2]| {
+            let q = place.as_ref().map_or(p, |pl| pl.map(p));
+            [
+                (q[0] * t.scale + t.origin[0]) / k,
+                (q[1] * t.scale + t.origin[1]) / k,
+            ]
+        };
+        let mut out = vec![];
+        for r in r0..=r1.min(layout.lines.len().saturating_sub(1)) {
+            let (l, units) = (&layout.lines[r], &self.lines[r]);
+            let (mut widths, _) = layout_raw_units_px(units, &[], &s, px);
+            widths.push(l.width);
+            let a = if r == r0 { c0 } else { 0 };
+            let b = if r == r1 { c1 } else { units.len() };
+            let xs: Vec<f64> = (a..=b)
+                .map(|i| l.origin[0] + widths[i.min(widths.len() - 1)])
+                .collect();
+            let mut spans: Vec<(f64, f64)> = if place.is_some() {
+                xs.windows(2).map(|w| (w[0], w[1])).collect()
+            } else {
+                vec![(xs[0], xs[xs.len() - 1])]
+            };
+            // A selected line break shows past the line's end.
+            if r < r1 {
+                let end = xs[xs.len() - 1];
+                spans.push((end, end + layout.space_height / 4.0));
+            }
+            let (top, bottom) = (l.origin[1], l.origin[1] + l.height);
+            for (x0, x1) in spans.into_iter().filter(|(x0, x1)| x1 > x0) {
+                out.push([
+                    screen([x0, top]),
+                    screen([x1, top]),
+                    screen([x1, bottom]),
+                    screen([x0, bottom]),
+                ]);
+            }
+        }
+        out
     }
     fn preview_lines(&self) -> Vec<Vec<u16>> {
         let mut lines = self.lines.clone();
@@ -1826,6 +1953,7 @@ impl TextTool {
         self.drag = None;
         self.turning = None;
         (self.placed_bounds, self.turn_handle) = (None, None);
+        (self.anchor, self.selecting) = (None, false);
         // The angle is the edited text's: the next text starts straight.
         if Self::settings(app).angle != 0.0 {
             app.tool_settings
@@ -2061,7 +2189,32 @@ impl TextTool {
         if k.alt || app.alt_key_down {
             return false;
         }
-        let ctrl = k.ctrl && !k.shift && !k.meta;
+        let plain_ctrl = k.ctrl && !k.shift && !k.meta;
+        // Ctrl+A selects all the text being typed, not the image.
+        if plain_ctrl && k.key.eq_ignore_ascii_case("a") {
+            self.cancel_composition();
+            let last = self.lines.len() - 1;
+            (self.anchor, self.caret) = (Some((0, 0)), (last, self.lines[last].len()));
+            self.redraw(app);
+            return true;
+        }
+        // Ctrl+C / Ctrl+X copy or cut the selected text; with none they are the image's.
+        let cut = k.key.eq_ignore_ascii_case("x");
+        if plain_ctrl && (cut || k.key.eq_ignore_ascii_case("c")) {
+            let Some(text) = self.selected_text() else {
+                return false;
+            };
+            self.copied = Some(text);
+            if cut {
+                self.cancel_composition();
+                self.delete_selection();
+                self.redraw(app);
+            }
+            return true;
+        }
+        let ctrl = plain_ctrl;
+        // Ctrl moves by words, with Shift too (it then selects them).
+        let word = k.ctrl && !k.meta;
         let (row, col) = self.caret;
         let len = self.lines[row].len();
         if matches!(
@@ -2078,6 +2231,33 @@ impl TextTool {
         ) {
             self.cancel_composition();
         }
+        // The selection: Shift with a move extends it from where the caret was; a plain Left or
+        // Right goes to its side; Backspace, Delete and Enter remove it (Enter then breaks the
+        // line); any other key clears it.
+        let nav = matches!(
+            k.key.as_str(),
+            "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
+        );
+        let selected = self.selection();
+        if nav && k.shift {
+            self.anchor.get_or_insert(self.caret);
+        } else if let Some((start, end)) =
+            selected.filter(|_| !word && matches!(k.key.as_str(), "ArrowLeft" | "ArrowRight"))
+        {
+            self.caret = if k.key == "ArrowLeft" { start } else { end };
+            self.anchor = None;
+            self.redraw(app);
+            return true;
+        } else if selected.is_some() && matches!(k.key.as_str(), "Backspace" | "Delete" | "Enter") {
+            self.delete_selection();
+            if k.key == "Enter" {
+                self.newline();
+            }
+            self.redraw(app);
+            return true;
+        } else {
+            self.anchor = None;
+        }
         match k.key.as_str() {
             "Enter" => self.newline(),
             "Home" => self.caret.1 = 0,
@@ -2088,7 +2268,7 @@ impl TextTool {
                         self.caret = (row - 1, self.lines[row - 1].len());
                     }
                 } else {
-                    self.caret.1 = if ctrl {
+                    self.caret.1 = if word {
                         word_left(&self.lines[row], col)
                     } else {
                         col - 1
@@ -2101,7 +2281,7 @@ impl TextTool {
                         self.caret = (row + 1, 0);
                     }
                 } else {
-                    self.caret.1 = if ctrl {
+                    self.caret.1 = if word {
                         word_right(&self.lines[row], col)
                     } else {
                         col + 1
@@ -2312,7 +2492,26 @@ impl Tool for TextTool {
         self.cancel_composition();
         let h = self.layout.as_ref().map_or(0.0, |l| l.space_height);
         if self.is_editing() && self.near(x, y, h.ceil()) {
+            let before = self.caret;
             self.hit_position(app, x, y + h / 2.0);
+            // Shift extends the selection; a double-click selects the word; a press starts one,
+            // which its drag spans.
+            let now = app.now_ms;
+            let reach = app
+                .active_ws()
+                .map_or(4.0, |ws| 4.0 * ws.view.ppp / ws.view.zoom);
+            let double = self
+                .last_press
+                .is_some_and(|(t, p)| now - t <= 500.0 && (p[0] - x).hypot(p[1] - y) <= reach);
+            if app.shift_key_down {
+                self.anchor.get_or_insert(before);
+            } else if double {
+                self.select_word();
+            } else {
+                self.anchor = Some(self.caret);
+            }
+            self.selecting = !double;
+            self.last_press = (!double).then_some((now, [x, y]));
             self.redraw(app);
         } else {
             self.start(app, [x.floor(), y.floor()]);
@@ -2333,6 +2532,12 @@ impl Tool for TextTool {
             self.click = shape::turn_point(t.click, t.pivot, angle - t.angle);
             app.tool_settings
                 .set(ToolType::Text, "textAngle", number(angle));
+            self.redraw(app);
+            return true;
+        }
+        if self.selecting {
+            let h = self.layout.as_ref().map_or(0.0, |l| l.space_height);
+            self.hit_position(app, x, y + h / 2.0);
             self.redraw(app);
             return true;
         }
@@ -2367,6 +2572,14 @@ impl Tool for TextTool {
             self.on_mouse_move(app, x, y, i);
             self.turning = None;
             self.update_status(app);
+            return true;
+        }
+        if self.selecting {
+            self.on_mouse_move(app, x, y, i);
+            self.selecting = false;
+            if self.anchor == Some(self.caret) {
+                self.anchor = None;
+            }
             return true;
         }
         if self.drag.is_none() {
@@ -2892,8 +3105,10 @@ mod tests {
         key(&mut t, &mut app, "Delete", true, false);
         assert_eq!(t.lines[0], "ab ef".encode_utf16().collect::<Vec<_>>());
         assert_eq!(t.caret, (0, 3));
+        // Ctrl+Shift selects by word (Paint.NET moved one character).
         key(&mut t, &mut app, "ArrowRight", true, true);
-        assert_eq!(t.caret, (0, 4));
+        assert_eq!(t.caret, (0, 5));
+        assert_eq!(t.selected_text().as_deref(), Some("ef"));
     }
     #[test]
     fn enter_home_and_paste_control_rules() {
@@ -4187,5 +4402,82 @@ mod tests {
         let width = xs.clone().max().unwrap() - xs.min().unwrap();
         let height = ys.clone().max().unwrap() - ys.min().unwrap();
         assert!(width.abs_diff(height) <= width / 5, "{width} × {height}");
+    }
+    /// Extra: Shift with the arrows, Home/End and Ctrl (by words) selects; typing, Backspace
+    /// and Enter replace it; a plain arrow goes to its side; Ctrl+A selects the text (not the
+    /// image) and Ctrl+C / Ctrl+X copy and cut it, leaving the image's when nothing is selected.
+    #[test]
+    fn keyboard_selects_text() {
+        let text = |t: &TextTool| String::from_utf16_lossy(&t.lines.join(&[10u16][..]));
+        let (mut t, mut app) = edit("hello big world");
+        key(&mut t, &mut app, "ArrowLeft", true, true);
+        assert_eq!(t.selected_text().as_deref(), Some("world"));
+        key(&mut t, &mut app, "ArrowLeft", false, true);
+        assert_eq!(t.selected_text().as_deref(), Some(" world"));
+        t.insert_text(&mut app, "!");
+        assert_eq!(text(&t), "hello big!");
+        key(&mut t, &mut app, "Home", false, true);
+        assert_eq!(t.selected_text().as_deref(), Some("hello big!"));
+        key(&mut t, &mut app, "ArrowRight", false, false);
+        assert_eq!((t.selected_text(), t.caret), (None, (0, 10)));
+        key(&mut t, &mut app, "A", true, false);
+        assert_eq!(t.selected_text().as_deref(), Some("hello big!"));
+        key(&mut t, &mut app, "C", true, false);
+        assert_eq!(t.take_copied().as_deref(), Some("hello big!"));
+        assert_eq!(text(&t), "hello big!");
+        key(&mut t, &mut app, "X", true, false);
+        assert_eq!(t.take_copied().as_deref(), Some("hello big!"));
+        assert_eq!(text(&t), "");
+        t.insert_text(&mut app, "one");
+        key(&mut t, &mut app, "C", true, false);
+        assert_eq!(t.take_copied(), None, "no selection: the image's copy");
+        key(&mut t, &mut app, "Enter", false, false);
+        t.insert_text(&mut app, "two");
+        for _ in 0..4 {
+            key(&mut t, &mut app, "ArrowLeft", false, true);
+        }
+        assert_eq!(t.selected_text().as_deref(), Some("\ntwo"));
+        key(&mut t, &mut app, "Backspace", false, false);
+        assert_eq!(text(&t), "one");
+    }
+    /// Extra: a drag across the text selects it, Shift+press extends the selection and a
+    /// double-click selects a word; the highlight has a box for the selected line.
+    #[test]
+    fn the_mouse_selects_text() {
+        let mut app = crate::testing::fresh_doc(240, 80, None);
+        app.set_active_tool_from_type(ToolType::Text);
+        click(&mut app, 10.0, 30.0);
+        type_text(&mut app, "hello world");
+        let mut line = (0.0, 0.0, 0.0);
+        crate::testing::with_tool::<TextTool>(&mut app, |t, _| {
+            let l = &t.layout.as_ref().unwrap().lines[0];
+            line = (l.origin[0], l.width, l.origin[1] + l.height / 2.0);
+        });
+        let (x0, w, y) = line;
+        let b = MouseButton::Left;
+        let drag = [
+            Ev::Down(x0 - 1.0, y, b),
+            Ev::Move(x0 + w / 2.0, y),
+            Ev::Up(x0 + w - 0.5, y, b),
+            Ev::Wait(600.0),
+        ];
+        drive_tool(&mut app, ToolType::Text, &drag);
+        let selected = |app: &mut AppWorkspace| {
+            let mut out = (None, 0);
+            crate::testing::with_tool::<TextTool>(app, |t, app| {
+                out = (t.selected_text(), t.selection_quads(app).len());
+            });
+            out
+        };
+        assert_eq!(selected(&mut app), (Some("hello world".into()), 1));
+        let word = x0 + w * 0.8;
+        let twice = [
+            Ev::Down(word, y, b),
+            Ev::Up(word, y, b),
+            Ev::Down(word, y, b),
+            Ev::Up(word, y, b),
+        ];
+        drive_tool(&mut app, ToolType::Text, &twice);
+        assert_eq!(selected(&mut app).0.as_deref(), Some("world"));
     }
 }

@@ -1560,6 +1560,15 @@ impl Shell {
                         *m,
                         capture.at(&events, index),
                     );
+                    // Text the Text tool copied or cut from its selection (Ctrl+C / Ctrl+X).
+                    let copied = app.with_tool(|tool, _| {
+                        tool.as_any_mut()
+                            .downcast_mut::<pdn_core::tool::text::TextTool>()
+                            .and_then(|t| t.take_copied())
+                    });
+                    if let Some(text) = copied.flatten() {
+                        clipboard.write_text(&text);
+                    }
                     if previous != app.active_ws().map(|w| w.document.id) {
                         key_ctx.memory_mut(|memory| {
                             memory.request_focus(egui::Id::unique("canvas-input"))

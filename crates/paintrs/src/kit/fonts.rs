@@ -229,10 +229,12 @@ pub fn install_document_previews(ctx: &egui::Context, defs: &mut FontDefinitions
         let name = format!("document-preview:{family}");
         defs.font_data.insert(
             name.clone(),
-            Arc::new(FontData::from_owned(bytes.to_vec()).tweak(egui::FontTweak {
-                hinting: Some(false),
-                ..Default::default()
-            })),
+            Arc::new(
+                FontData::from_blob(Arc::new(bytes), 0).tweak(egui::FontTweak {
+                    hinting: Some(false),
+                    ..Default::default()
+                }),
+            ),
         );
         defs.families.insert(
             FontFamily::Name(name.clone().into()),
