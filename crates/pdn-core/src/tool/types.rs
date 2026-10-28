@@ -271,8 +271,7 @@ impl ToolType {
             // Paint.NET's sharing).
             // Their combine mode is the selection tools' (Ruling R20, [`READ_THROUGH`]).
             MagneticLasso => json!({
-                "width": 10, "contrast": 10, "frequency": 57, "renderingQuality": "high",
-                "clickPoints": false
+                "width": 10, "contrast": 10, "frequency": 57, "renderingQuality": "high"
             }),
             // The method: MobileSAM on desktop (built in), GrabCut on the web (MobileSAM's model
             // loads there only once picked).
@@ -286,7 +285,7 @@ impl ToolType {
             ),
             Patch => json!({
                 "patchMode": "normal", "patchSource": "source", "structure": 4, "colorAmount": 0,
-                "sampleImage": false, "renderingQuality": "high", "clickPoints": false
+                "sampleImage": false, "renderingQuality": "high"
             }),
             HealingBrush => merge(
                 json!({"blendMode": "normal", "aligned": true, "sampleImage": false}),
@@ -348,6 +347,10 @@ pub const SHARED_KEYS: &[(&str, &[ToolType])] = &[
         "combineMode",
         &[RectangleSelect, LassoSelect, EllipseSelect, MagicWand],
     ),
+    // Extra (`tool::click_lasso`, user 2026-10-28): one Click points toggle for every tool that
+    // has it, held by Lasso Select and read through by the Extra tools ([`READ_THROUGH`]). With
+    // one owner there is nothing to migrate: its saved value loads as it is.
+    ("clickPoints", &[LassoSelect]),
 ];
 
 /// Ruling R20: (tool, key) an Extra tool reads and writes through to its [`SHARED_KEYS`] group
@@ -356,6 +359,8 @@ const READ_THROUGH: &[(ToolType, &str)] = &[
     (MagneticLasso, "combineMode"),
     (ObjectSelection, "combineMode"),
     (Patch, "combineMode"),
+    (MagneticLasso, "clickPoints"),
+    (Patch, "clickPoints"),
 ];
 
 /// Paint.NET defaults that differ from paintdotjs's `setSettings` (R19).
@@ -2700,6 +2705,19 @@ mod tests {
         for (key, owners) in SHARED_KEYS {
             for t in ToolType::shown(false).filter(|t| !owners.contains(t)) {
                 assert!(!t.default_settings().contains_key(*key), "{t:?} has {key}");
+            }
+        }
+    }
+
+    /// Click points is one toggle: set from any tool that has it, every one of them reads it.
+    #[test]
+    fn click_points_is_one_toggle() {
+        let mut s = ToolSettings::default();
+        let tools = [LassoSelect, MagneticLasso, Patch];
+        for (from, on) in [(Patch, true), (MagneticLasso, false), (LassoSelect, true)] {
+            s.set(from, "clickPoints", json!(on));
+            for t in tools {
+                assert_eq!(s.get(t, "clickPoints"), json!(on), "{from:?} → {t:?}");
             }
         }
     }

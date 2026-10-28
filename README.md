@@ -42,7 +42,7 @@ Lasso Select's **Click points** option places the outline point by point, as Pho
 Lasso and GIMP's Free Select do. Click to place points, or drag between them to draw freehand. Then
 click the first point, double-click or press Enter to select. Backspace removes the last point. The
 Patch tool has the option too, for the area it patches, and so does the Magnetic Lasso, where a
-drag then fastens a point instead of closing the outline.
+drag then fastens a point instead of closing the outline. It is one toggle for all three.
 
 paint.rs is an independent project and is not affiliated with Paint.NET or dotPDN LLC. All of its
 icons and artwork are original.
