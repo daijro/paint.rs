@@ -438,6 +438,43 @@ fn shortcuts_dispatch_actions() {
     assert_eq!(layers(&harness), 1);
 }
 
+/// On a Mac Cmd is Ctrl (`pdn_modifiers`): Cmd+Shift+N adds a layer and Cmd+Z undoes it. A
+/// trackpad pinch (`Event::Zoom`) over the canvas zooms about the pointer.
+#[test]
+fn mac_command_shortcuts_and_pinch_zoom() {
+    let cmd = egui::Modifiers {
+        mac_cmd: true,
+        command: true,
+        ..Default::default()
+    };
+    let pdn = paintrs::pdn_modifiers(cmd);
+    assert!(pdn.ctrl && !pdn.mac_cmd);
+    let windows = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    assert_eq!(paintrs::pdn_modifiers(windows), windows);
+    let mut harness = app_harness();
+    let layers = |h: &Harness<'_, paintrs::PaintApp>| {
+        h.state().app.active_ws().unwrap().document.layers.size()
+    };
+    harness.key_press_modifiers(cmd | egui::Modifiers::SHIFT, egui::Key::N);
+    harness.run();
+    assert_eq!(layers(&harness), 2);
+    harness.key_press_modifiers(cmd, egui::Key::Z);
+    harness.run();
+    assert_eq!(layers(&harness), 1);
+    let zoom = |h: &Harness<'_, paintrs::PaintApp>| h.state().app.active_ws().unwrap().view.zoom;
+    let before = zoom(&harness);
+    let middle = harness.ctx.content_rect().center();
+    harness.event(egui::Event::PointerMoved(middle));
+    harness.run();
+    harness.event(egui::Event::Zoom(2.0));
+    harness.run();
+    assert!(
+        (zoom(&harness) - before * 2.0).abs() < 1e-6,
+        "{before} → {}",
+        zoom(&harness)
+    );
+}
+
 fn colors_control_point(h: &Harness<'_, paintrs::PaintApp>, x: f32, y: f32) -> egui::Pos2 {
     use paintrs::theme::{
         WINDOW_BORDER, WINDOW_TITLE_HEIGHT, WINDOW_TITLE_MARGIN_TOP, WINDOW_TITLE_PADDING,

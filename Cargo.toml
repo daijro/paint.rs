@@ -9,7 +9,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
@@ -22,6 +22,11 @@ tiny-skia = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp"] }
+
+# Debug and test builds keep line tables only (file and line in backtraces): with full debug info
+# each test binary was ~1.2 GB, and target/debug passed 200 GB after a few full test runs.
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2

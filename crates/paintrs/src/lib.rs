@@ -568,7 +568,8 @@ impl eframe::App for PaintApp {
             .observe(&ui.input(|i| i.events.clone()));
         self.app.tool_settings.pen_seen =
             self.shell.canvas_view.pen.state.pen_seen && self.shell.canvas_view.pen.enabled;
-        self.app.set_modifier_keys(m.ctrl, m.shift, m.alt);
+        let pdn = pdn_modifiers(m);
+        self.app.set_modifier_keys(pdn.ctrl, pdn.shift, pdn.alt);
         // A key repeats alone, so the tools learn the other arrows held from here.
         self.app.arrow_keys_down = ui.input(|i| {
             use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp};
@@ -1109,6 +1110,16 @@ pub fn install_fonts(ctx: &egui::Context, _policy: pdn_core::fonts::FontPolicy, 
     });
 }
 
+/// Paint.NET's modifiers from egui's: on a Mac, Cmd (egui's `command`) is Ctrl, as Mac users
+/// press Cmd+Z, Cmd+S and Cmd+click where Paint.NET has Ctrl, and then no longer counts as Meta.
+/// Elsewhere `command` is Ctrl itself, so nothing changes.
+pub fn pdn_modifiers(mut m: egui::Modifiers) -> egui::Modifiers {
+    if m.command {
+        (m.ctrl, m.mac_cmd) = (true, false);
+    }
+    m
+}
+
 /// One key in the ordered canvas event stream. Widget ownership is checked by Shell.
 fn dispatch_canvas_key(
     app: &mut pdn_core::app::AppWorkspace,
@@ -1119,6 +1130,7 @@ fn dispatch_canvas_key(
     m: egui::Modifiers,
     captured: bool,
 ) {
+    let m = pdn_modifiers(m);
     let now = app.now_ms;
     // Ctrl+Page is an outer form command; focused Ctrl+Tab reaches Text first (§10.11).
     if key != "Tab" && strip.navigate(app, key, m, captured) {

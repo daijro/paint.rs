@@ -900,8 +900,8 @@ impl CanvasView {
                         continue;
                     };
                     let dy = delta.y as f64;
-                    // quirk: paintdotjs reads `event.ctrlKey` only, no Ctrl↔Cmd mapping (macOS;
-                    // Paint.NET has no counterpart).
+                    // Cmd is Ctrl on a Mac (`pdn_modifiers`; paintdotjs read `ctrlKey` only).
+                    let modifiers = crate::pdn_modifiers(modifiers);
                     let only = |shift: bool, ctrl: bool| {
                         (modifiers.shift, modifiers.ctrl, modifiers.alt) == (shift, ctrl, false)
                     };
@@ -927,6 +927,15 @@ impl CanvasView {
                         };
                         let v = &mut ws.view;
                         v.set_view_position(v.viewport_x - sx, v.viewport_y - sy);
+                    }
+                }
+                // A trackpad pinch (winit's PinchGesture on macOS, the browser's pinch on the web)
+                // zooms smoothly about the pointer.
+                Event::Zoom(factor) if hover.is_some_and(over) => {
+                    let pivot = to_canvas(hover.unwrap_or_default());
+                    if let Some(ws) = app.active_ws_mut() {
+                        let zoom = ws.view.zoom * factor as f64;
+                        ws.view.set_zoom(zoom, pivot.0, pivot.1);
                     }
                 }
                 _ => {}
@@ -963,6 +972,7 @@ impl CanvasView {
             return;
         };
         let (x, y) = (p.x, p.y);
+        let modifiers = crate::pdn_modifiers(*modifiers);
         app.set_modifier_keys(modifiers.ctrl, modifiers.shift, modifiers.alt);
         let b = mouse_button(*button);
         let bit = 1 << b as u8;

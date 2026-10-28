@@ -1535,6 +1535,7 @@ impl Shell {
                     return;
                 }
                 if let egui::Event::Key { modifiers: m, .. } = event {
+                    let m = crate::pdn_modifiers(*m);
                     app.set_modifier_keys(m.ctrl, m.shift, m.alt);
                 }
                 if let egui::Event::Key {
