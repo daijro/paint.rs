@@ -1,9 +1,11 @@
 //! Plugins from the Paint.NET forum beside BoltBait's pack (`effect::bb`): Tanel's photo and
 //! colour effects (`tanel`), from the clean-room functional specs in paintdn-plugin-spec
-//! (color-color-to-alpha.md, photo-sharpen-plus.md). dpy's text effects live on in the Text
-//! tool's Angle and Shape (`tool::text::shape`). They carry the plugins' gray plus and their
-//! untranslated names, as BB's do.
+//! (color-color-to-alpha.md, photo-sharpen-plus.md), and Nicholas Hayes's Content Aware Fill,
+//! ported from its source (`content_aware_fill`). dpy's text effects live on in the Text tool's
+//! Angle and Shape (`tool::text::shape`). They carry the plugins' gray plus and their untranslated
+//! names, as BB's do.
 
+pub mod content_aware_fill;
 pub mod tanel;
 
 use super::Category::Effect as E;
@@ -11,11 +13,13 @@ use super::EffectDef;
 use super::bb::manifest::PluginItem;
 
 /// The menu items, in menu order within each submenu: effect id, name as the plugin gives it,
-/// menu, whether it opens a dialog, and icon (`assets/icons-svg/plugins/<stem>.svg`).
+/// menu, whether it opens a dialog, and icon (`assets/icons-svg/plugins/<stem>.svg`; Content Aware
+/// Fill shares Edit ▸ Fill Selection (Content-Aware)'s).
 #[rustfmt::skip]
-pub const MANIFEST: [PluginItem; 2] = [
+pub const MANIFEST: [PluginItem; 3] = [
     PluginItem { id: "tanelColorToAlpha", name: "Color Range to Alpha", category: E("color"), configurable: true, icon: "tanel_color_to_alpha.png" },
     PluginItem { id: "tanelSharpenPlus", name: "Sharpen+", category: E("photo"), configurable: true, icon: "tanel_sharpen_plus.png" },
+    PluginItem { id: content_aware_fill::ID, name: "Content Aware Fill", category: E("selection"), configurable: true, icon: "menu_edit_fill_selection_content_aware_icon.png" },
 ];
 
 /// The manifest row of one of these plugins.
@@ -26,6 +30,7 @@ pub fn manifest(effect_id: &str) -> Option<&'static PluginItem> {
 /// The effects, in manifest order.
 pub fn effects() -> Vec<EffectDef> {
     let mut effects = tanel::effects();
+    effects.push(content_aware_fill::effect());
     effects.sort_by_key(|def| {
         MANIFEST
             .iter()

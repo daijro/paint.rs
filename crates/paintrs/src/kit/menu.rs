@@ -842,10 +842,14 @@ pub const FROM_PHOTOCRAFT: &str = "(from PhotoCraft)";
 pub const PLUS_TEXT: &str = " +";
 
 /// S§4.1 "Tooltips": an Extra item's name (a dialog command's without its "..."), then
-/// [`FROM_PHOTOCRAFT`] on the next line.
+/// [`FROM_PHOTOCRAFT`] on the next line. paint.rs's own Batch Export has none; Fill Selection
+/// (Content-Aware) runs the Content Aware Fill plugin, so it tips as that plugin does.
 pub fn extra_tooltip(action_id: &str) -> Option<String> {
+    if action_id == "menu.edit.fillSelectionContentAware" {
+        return Some("Plugin: Content Aware Fill".into());
+    }
     let name = action::get(action_id)
-        .filter(|_| action::is_extra(action_id))?
+        .filter(|_| action::is_extra(action_id) && action_id != action::BATCH_EXPORT)?
         .label?
         .trim_end_matches("...");
     Some(format!("{name}\n{FROM_PHOTOCRAFT}"))

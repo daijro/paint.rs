@@ -249,13 +249,13 @@ pub struct AppWorkspace {
     pub current_palette: Vec<crate::pixel::Px>,
     /// The date effects see instead of today's (tests); `None` reads the clock.
     pub date_override: Option<crate::effect::rng::CivilDate>,
-    /// Edit ▸ Fill Selection (Content-Aware)'s running fill (`tool::remove`). Meanwhile the tools
-    /// take no press and no key; Esc, an undo and every commit-first command cancel it.
-    pub content_fill: Option<crate::tool::remove::Removal>,
     /// Layers ▸ Perspective Warp's canvas mode (`tool::perspective_warp`). Meanwhile it takes the
     /// canvas presses (the middle-button pan still pans) and Enter / Esc, the tool takes none; a
     /// tool or image switch and every commit-first command commit it, an undo cancels it.
     pub perspective: Option<crate::tool::perspective_warp::PerspectiveWarp>,
+    /// The documents picked in the image strip besides the active one (ids): an effect, an
+    /// adjustment or Image ▸ Resize on the active document runs on them too (`for_each_picked`).
+    pub picked: Vec<u64>,
     /// Move Selected Pixels shows a pointer drag's pixels through the canvas's display-resolution
     /// float (`render::float`) instead of re-rendering the layer each frame; the drag's end
     /// renders them in exactly. Set by a UI that draws `DocumentWorkspace::float`.
@@ -311,8 +311,8 @@ impl Default for AppWorkspace {
             view_height: 0.0,
             current_palette: vec![],
             date_override: None,
-            content_fill: None,
             perspective: None,
+            picked: vec![],
             float_moves: false,
         }
     }
@@ -549,6 +549,8 @@ impl AppWorkspace {
         // a commit hook against the active image. Its workspace and scratch go away together.
         let parked = self.documents[i].parked_tool.take();
         self.drop_tool(parked);
+        let id = self.documents[i].document.id;
+        self.picked.retain(|&p| p != id);
         self.documents.remove(i);
         // Indices after `i` shifted down.
         match self.active {
@@ -574,6 +576,24 @@ impl AppWorkspace {
         }
     }
 
+    /// Runs `f` with each open picked document active in turn, then the active one again: only
+    /// the index moves (no tool switch or event), as `f` edits that document alone. One whose
+    /// active layer is a text layer is skipped: its rasterize prompt would face another image.
+    pub fn for_each_picked(&mut self, mut f: impl FnMut(&mut Self)) {
+        let back = self.active;
+        for id in self.picked.clone() {
+            let Some(i) = self.documents.iter().position(|ws| ws.document.id == id) else {
+                continue;
+            };
+            self.active = Some(i);
+            let layer = self.documents[i].active_layer;
+            if Some(i) != back && !crate::document::text_layer::is_text(self, layer) {
+                f(self);
+            }
+        }
+        self.active = back;
+    }
+
     /// Each image keeps its own tool instance while its transaction is open
     /// (painting-tools-2.md §7.6 "Switching to another image tab"): leaving parks it in its
     /// workspace, and returning resumes it, or commits it there when the global tool changed
@@ -581,9 +601,7 @@ impl AppWorkspace {
     pub fn set_active_document_workspace(&mut self, i: Option<usize>) {
         if i != self.active {
             self.release_canvas_capture();
-            // A running Fill Selection (Content-Aware) is cancelled, as by a commit-first command;
             // Perspective Warp commits, as a tool switch commits Move.
-            self.content_fill = None;
             crate::tool::perspective_warp::end(self, true);
         }
         let open = self.tool.as_mut().is_some_and(|t| {
@@ -701,7 +719,6 @@ impl AppWorkspace {
     /// no tool has to forward it.
     pub fn on_frame(&mut self, now_ms: f64) {
         self.now_ms = now_ms;
-        crate::tool::remove::poll_content_fill(self);
         crate::tool::object_select::release_model(self);
         self.with_transacted(|t, app| t.poll(app));
         self.tool_hook(|t, app| t.on_frame(app));
@@ -735,7 +752,6 @@ impl AppWorkspace {
     /// command that changes pixels, layers, the document or the selection runs through it, plus
     /// Cut, Paste, Save and Print (`action::perform`); nested calls are plain calls.
     pub fn commit_tool_first<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        self.content_fill = None;
         crate::tool::perspective_warp::end(self, true);
         let active = self.tool_active;
         self.deactivate_tool();
@@ -809,17 +825,14 @@ impl AppWorkspace {
     /// The active tool's settings window is open, or a timer of its own runs (a nudge burst): the
     /// UI keeps frames coming for its ticks.
     pub fn tool_ticking(&mut self) -> bool {
-        self.content_fill.is_some()
-            || self
-                .tool
-                .as_mut()
-                .is_some_and(|t| t.needs_ticks() || t.transacted().is_some_and(|t| t.ticking()))
+        self.tool
+            .as_mut()
+            .is_some_and(|t| t.needs_ticks() || t.transacted().is_some_and(|t| t.ticking()))
     }
 
-    /// The active tool's background job runs (`Tool::busy`), or Fill Selection (Content-Aware)'s:
-    /// the canvas shows the busy cursor.
+    /// The active tool's background job runs (`Tool::busy`): the canvas shows the busy cursor.
     pub fn tool_busy(&self) -> bool {
-        self.content_fill.is_some() || self.tool.as_ref().is_some_and(|t| t.busy())
+        self.tool.as_ref().is_some_and(|t| t.busy())
     }
 
     fn activate_tool(&mut self) {
@@ -917,9 +930,6 @@ impl AppWorkspace {
             }
             return true;
         }
-        if self.content_fill.is_some() {
-            return true;
-        }
         // S§4.5: a press that would start a pixel edit of a text layer asks to rasterize it
         // first; the tool never sees it.
         let ctrl = self.control_key_down;
@@ -1010,13 +1020,7 @@ impl AppWorkspace {
             crate::tool::perspective_warp::end(self, commit);
             return true;
         }
-        // A running Fill Selection (Content-Aware): Esc cancels it, and the tool takes no key.
-        if self.content_fill.is_some() {
-            if key.key == "Escape" {
-                self.content_fill = None;
-                return true;
-            }
-        } else if self
+        if self
             .with_tool(|t, app| t.on_key_press(app, key))
             .unwrap_or(false)
         {
@@ -1112,8 +1116,6 @@ impl AppWorkspace {
             crate::tool::perspective_warp::end(self, false);
             return true;
         }
-        // Ruling R29: an undo cancels a running fill, as it does a running removal.
-        self.content_fill = None;
         self.with_transacted(|t, app| t.cancel_gesture(app));
         self.tool_hook(|t, app| t.on_executing_history_memento(app));
         let done = self.step_once(forward);

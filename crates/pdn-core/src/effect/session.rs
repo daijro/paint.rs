@@ -262,13 +262,27 @@ impl EffectSession {
     }
 
     /// `commit` with the final already rendered (`rendered` must be `render(&values)` of this
-    /// session: a finished current preview, byte-identical by the shared instance seed).
+    /// session: a finished current preview, byte-identical by the shared instance seed). The
+    /// images picked in the strip then get the same effect and values, each its own entry.
     pub fn commit_with(
         self,
         app: &mut AppWorkspace,
         values: Values,
         rendered: Option<ImageData>,
     ) -> bool {
+        let def = self.def.clone();
+        let landed = self.land(app, values.clone(), rendered);
+        if landed {
+            app.for_each_picked(|app| {
+                if let Some(s) = EffectSession::begin(app, def.clone()) {
+                    s.land(app, values.clone(), None);
+                }
+            });
+        }
+        landed
+    }
+
+    fn land(self, app: &mut AppWorkspace, values: Values, rendered: Option<ImageData>) -> bool {
         let out = rendered.unwrap_or_else(|| self.render(&values));
         let mut values = values;
         if let Some(ui) = self.def.indirect {
@@ -344,6 +358,47 @@ mod tests {
         let mut app = fresh_doc(8, 6, Some(4));
         app.effect_seed = Some(0);
         app
+    }
+
+    /// The images picked in the strip get the committed effect too, each its own entry; the
+    /// active image stays active, and an unpicked one is left alone.
+    #[test]
+    fn commit_runs_on_the_picked_images() {
+        let mut app = app();
+        for _ in 0..2 {
+            app.create_blank_document_in_new_workspace(8, 6, 96.0, true);
+        }
+        let ids: Vec<u64> = app.documents.iter().map(|ws| ws.document.id).collect();
+        app.set_active_document_workspace(Some(0));
+        app.picked = vec![ids[2]];
+        let bytes = |app: &AppWorkspace, i: usize| {
+            app.documents[i]
+                .document
+                .layers
+                .get_at(0)
+                .unwrap()
+                .surface
+                .data()
+                .to_vec()
+        };
+        let before: Vec<_> = (0..3).map(|i| bytes(&app, i)).collect();
+        let s = EffectSession::begin(&mut app, crate::effect::find("invertColorsEffect").unwrap())
+            .unwrap();
+        assert!(s.commit(&mut app, Values::new()));
+        assert_eq!(app.active, Some(0));
+        assert_ne!(bytes(&app, 0), before[0]);
+        assert_eq!(bytes(&app, 1), before[1], "not picked");
+        assert_ne!(bytes(&app, 2), before[2]);
+        let entries: Vec<_> = app
+            .documents
+            .iter()
+            .map(|ws| ws.history.undo.len())
+            .collect();
+        assert_eq!(
+            (entries[0], entries[1] + 1),
+            (entries[2], entries[2]),
+            "an entry each"
+        );
     }
 
     /// §2.2 step 5: Cancel restores the layer and the dirty flag; no history entry.

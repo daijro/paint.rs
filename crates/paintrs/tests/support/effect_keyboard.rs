@@ -183,7 +183,8 @@ fn checkbox_space_release_and_enter_outcomes() {
     assert_eq!(undo_len(&h), before + 1, "one acceptance");
 }
 
-// Values are literal analyst vectors, not values derived from slider metadata.
+// Values are literal analyst vectors, not values derived from slider metadata, at the property's
+// decimals (an exponential step's native value, 5.8269…, is rounded to the shown 5.8).
 #[test]
 fn registered_slider_keyboard_values() {
     for (effect, key, initial, input, want) in [
@@ -233,28 +234,10 @@ fn registered_slider_keyboard_values() {
         ("reduceNoiseEffect", "strength", 0.4, Key::PageUp, 0.5),
         ("cloudsEffect", "scale", 250.0, Key::PageUp, 255.0),
         ("addNoiseEffect", "coverage", 10.125, Key::ArrowRight, 11.13),
-        (
-            "bokehEffect",
-            "radius",
-            2.0,
-            Key::ArrowRight,
-            5.826920333333333,
-        ),
-        ("blurEffect", "gamma", 0.0, Key::PageUp, 0.199712),
-        (
-            "blurEffect",
-            "gamma",
-            -0.25,
-            Key::ArrowRight,
-            -0.03309191919191919,
-        ),
-        (
-            "vignetteEffect",
-            "radius",
-            0.5,
-            Key::ArrowRight,
-            0.9206464102564103,
-        ),
+        ("bokehEffect", "radius", 2.0, Key::ArrowRight, 5.8),
+        ("blurEffect", "gamma", 0.0, Key::PageUp, 0.2),
+        ("blurEffect", "gamma", -0.25, Key::ArrowRight, -0.03),
+        ("vignetteEffect", "radius", 0.5, Key::ArrowRight, 0.92),
         (
             "bbCombinedAdjustments",
             "temperature",
@@ -358,7 +341,7 @@ fn exponential_keyboard_uses_transformed_absolute_steps() {
     for (key, want) in [
         (Key::ArrowRight, 9.0),
         (Key::ArrowLeft, 1.0),
-        (Key::PageUp, 17.943696),
+        (Key::PageUp, 17.94),
         (Key::PageDown, 0.0),
     ] {
         let mut h = app_harness();
@@ -3045,10 +3028,11 @@ fn d59_pointer(h: &mut Harness<'_, paintrs::PaintApp>, key: &str, fraction: f32)
 fn d59_registered_pointer_coordinates_are_independent_of_numeric_increment() {
     for ppp in [1.0, 1.25] {
         for (id, key, fraction, want) in [
-            ("blurEffect", "radius", 0.25, 18.75),
+            // At the property's decimals: 18.75 → 18.8, 4.045 → 4.05.
+            ("blurEffect", "radius", 0.25, 18.8),
             ("blurEffect", "radius", 0.5, 75.0),
-            ("blurEffect", "radius", 0.75, 168.75),
-            ("rotateZoomEffect", "zoom", 0.5, 4.045),
+            ("blurEffect", "radius", 0.75, 168.8),
+            ("rotateZoomEffect", "zoom", 0.5, 4.05),
             ("polarInversion", "amount", 0.25, -2.0),
             ("polarInversion", "amount", 0.5, 0.0),
             ("polarInversion", "amount", 0.75, 2.0),
@@ -3063,9 +3047,10 @@ fn d59_registered_pointer_coordinates_are_independent_of_numeric_increment() {
             d59_pointer(&mut h, key, fraction);
             let got = finish(&mut h, id)[key].as_f64().unwrap();
             // At 1.25x AccessKit snaps the chosen centre to x=576.799987793. The unchanged
-            // DIP track [433,721], 14-wide thumb and f32 fraction select q=8018, not8030.
+            // DIP track [433,721], 14-wide thumb and f32 fraction select q=8018, not8030
+            // (4.0330…, shown as 4.03).
             let want = if ppp == 1.25 && id == "rotateZoomEffect" {
-                4.03300903387704
+                4.03
             } else {
                 want
             };
@@ -3494,7 +3479,7 @@ fn d59_thumb_offset_drag_clamps_release_and_reset_keep_existing_geometry() {
         modifiers: Modifiers::NONE,
     });
     h.run_steps(1);
-    assert_eq!(finish(&mut h, "blurEffect")["radius"], 168.75);
+    assert_eq!(finish(&mut h, "blurEffect")["radius"], 168.8);
     open_effect(&mut h, "blurEffect");
     let rect = h.get_by_role_and_label(Role::Slider, "radius").rect();
     pos = egui::pos2(rect.center().x, rect.center().y);
@@ -3531,10 +3516,7 @@ fn d59_thumb_offset_drag_clamps_release_and_reset_keep_existing_geometry() {
 /// BB26 Controls tables: actual slider coordinates and numeric metadata on both clipboard dialogs.
 #[test]
 fn bb26_clipboard_fractional_keyboard_controls() {
-    for (id, zoom) in [
-        ("bbFillFromClipboard", 2.417550316185697),
-        ("bbPasteAlpha", 1.30),
-    ] {
+    for (id, zoom) in [("bbFillFromClipboard", 2.417), ("bbPasteAlpha", 1.30)] {
         let mut h = Harness::builder()
             .with_max_steps(16)
             .with_size(egui::vec2(1280.0, 800.0))
@@ -3563,8 +3545,8 @@ fn bb26_clipboard_fractional_keyboard_controls() {
         h.get_by_label("Nearest neighbor sampling").click();
         h.run_steps(1);
         let token = finish(&mut h, id);
-        // Fill uses independently calculated native coordinates 39308+4592+18002=61902,
-        // inverted over [.06,16]. Paste Alpha uses linear 1+.05+.25.
+        // Fill steps native coordinates from each rounded value (3 decimals), inverted over
+        // [.06,16]: 2.417. Paste Alpha uses linear 1+.05+.25.
         assert!(
             (token["zoom"].as_f64().unwrap() - zoom).abs() < 1e-12,
             "{id}: {token:?}"

@@ -472,6 +472,17 @@ pub fn argv_files(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<Pat
     files
 }
 
+/// Batch Export's output folder, the chooser starting in `start` when it is one.
+pub fn choose_folder(start: &str) -> Option<PathBuf> {
+    let dialog = rfd::FileDialog::new();
+    let dialog = if Path::new(start).is_dir() {
+        dialog.set_directory(start)
+    } else {
+        dialog
+    };
+    dialog.pick_folder()
+}
+
 /// BB36: one file through a titled chooser with one filter.
 pub fn choose_data(request: super::files::DataFile) -> Pending<Result<Vec<PickedFile>, String>> {
     let picked = rfd::FileDialog::new()

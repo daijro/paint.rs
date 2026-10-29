@@ -6,7 +6,7 @@
 //! with "Remove after each stroke" off, strokes collect as a 50 % red tint until Enter (Esc drops
 //! them). The fill runs as a background job (`extra::job`): the busy cursor shows, Esc cancels
 //! it, and the result lands as one "Remove" entry, written only where the hole meets the
-//! selection. Edit ▸ Fill Selection (Content-Aware) runs the same pipeline over the selection.
+//! selection.
 
 use std::sync::Arc;
 
@@ -113,18 +113,16 @@ fn brush(app: &AppWorkspace) -> (BrushSettings, bool) {
 /// What a finished removal writes: the hole over the window and the filled window.
 type Filled = (Vec<bool>, ImageData);
 
-/// What the job found: nothing to change, a hole that covers its whole window (nothing to fill it
-/// from), or the filled window.
+/// What the job found: nothing to change (or nothing around the hole to fill it from), or the
+/// filled window.
 enum Outcome {
     Nothing,
-    NoSource,
     Filled(Filled),
 }
 
-/// A removal in progress (the Remove tool's, or Edit ▸ Fill Selection (Content-Aware)'s): the job
-/// filling the window `rect` (`None` when nothing would change), and the document and layer it
-/// lands in.
-pub struct Removal {
+/// A removal in progress: the job filling the window `rect` (`None` when nothing would change),
+/// and the document and layer it lands in.
+struct Removal {
     job: Job<Outcome>,
     rect: IntRect,
     doc: u64,
@@ -135,17 +133,10 @@ impl Removal {
     /// Upstream's `plan`: the window around the strokes `s`, and on the UI thread only its
     /// selection clip and its pixels (the active layer's, or the image's with `sample_image`).
     /// The hole and the fill run in the job (upstream's `run_remove`). Over the cap the message
-    /// instead (`fill_msg` for Edit ▸ Fill Selection (Content-Aware)); `None` when there is
-    /// nothing to do.
-    fn start(
-        app: &mut AppWorkspace,
-        s: Strokes,
-        sample_image: bool,
-        fill_msg: bool,
-    ) -> Option<Removal> {
+    /// instead; `None` when there is nothing to do.
+    fn start(app: &mut AppWorkspace, s: Strokes, sample_image: bool) -> Option<Removal> {
         if u64::from(s.rect.w) * u64::from(s.rect.h) > MAX_PIXELS {
-            let msg = if fill_msg { FILL_TOO_LARGE } else { TOO_LARGE };
-            app.ui_requests.push(UiRequest::ToolError(msg.into()));
+            app.ui_requests.push(UiRequest::ToolError(TOO_LARGE.into()));
             return None;
         }
         let ws = app.active_ws()?;
@@ -165,10 +156,8 @@ impl Removal {
         let img = layer_or_image(app, sample_image, win);
         let job = Job::spawn(move |ctl| {
             let clip = polys.map(|p| mask::rasterize(&p, quality, rect).data);
-            let hole = match hole(&s, rect, clip) {
-                Hole::Nothing => return Ok(Outcome::Nothing),
-                Hole::Full => return Ok(Outcome::NoSource),
-                Hole::Some(h) => h,
+            let Some(hole) = hole(&s, rect, clip) else {
+                return Ok(Outcome::Nothing);
             };
             // A transparent layer has nothing to remove and nothing to fill from (upstream's
             // no-op).
@@ -215,9 +204,9 @@ impl Removal {
 }
 
 /// Upstream's `hole`: the strokes over the window `rect`, what they enclose and `GROW` more, ∩
-/// the selection's `clip`. `Nothing` when nothing would change, `Full` when nothing is left around
-/// the hole to fill it from.
-fn hole(s: &Strokes, rect: IntRect, clip: Option<Vec<u8>>) -> Hole {
+/// the selection's `clip`. `None` when nothing would change or nothing is left around the hole to
+/// fill it from.
+fn hole(s: &Strokes, rect: IntRect, clip: Option<Vec<u8>>) -> Option<Vec<bool>> {
     let (r, w, h) = (s.rect, rect.w as usize, rect.h as usize);
     let mut hole = vec![false; w * h];
     for (y, src) in s.mask.chunks_exact(r.w as usize).enumerate() {
@@ -231,69 +220,7 @@ fn hole(s: &Strokes, rect: IntRect, clip: Option<Vec<u8>>) -> Hole {
     for (m, c) in hole.iter_mut().zip(clip.into_iter().flatten()) {
         *m &= c > 0;
     }
-    match (hole.contains(&true), hole.contains(&false)) {
-        (true, true) => Hole::Some(hole),
-        (true, false) => Hole::Full,
-        _ => Hole::Nothing,
-    }
-}
-
-enum Hole {
-    Nothing,
-    Full,
-    Some(Vec<bool>),
-}
-
-/// Edit ▸ Fill Selection (Content-Aware)'s entry (Extra names are untranslated).
-const FILL_NAME: &str = "Fill Selection (Content-Aware)";
-/// Fill Selection's own messages (Remove's stay its own).
-const FILL_TOO_LARGE: &str = "The selection is too large to fill.";
-const FILL_NO_SOURCE: &str = "Nothing is left around the selection to fill it from.";
-const FILL_ICON: &str = "assets/icons/menu_edit_fill_selection_content_aware_icon.png";
-
-/// Edit ▸ Fill Selection (Content-Aware): the active layer's selected pixels (mask > 0) filled from
-/// around them by the Remove core, as a background job (`AppWorkspace::content_fill`). Its strokes
-/// are the whole selection bounds, so the window is `window_for(bounds)` and the hole, ∩ the clip,
-/// is the selection.
-pub(crate) fn start_content_fill(app: &mut AppWorkspace) {
-    let Some(ws) = app.active_ws().filter(|ws| !ws.selection.is_empty()) else {
-        return;
-    };
-    let doc = IntRect::new(0, 0, ws.document.width, ws.document.height);
-    let rect = IntRect::bound_of(&ws.selection.get_bounds()).intersect(&doc);
-    if rect.is_empty() {
-        return;
-    }
-    // Ruling R32: the fill writes pixels outside the tool path, so a text layer asks first.
-    if !crate::document::text_layer::ensure_active_raster(app) {
-        return;
-    }
-    let mask = vec![255; rect.w as usize * rect.h as usize];
-    app.content_fill = Removal::start(app, Strokes { rect, mask }, false, true);
-}
-
-/// A finished fill lands commit-first, as any command, as one entry.
-pub(crate) fn poll_content_fill(app: &mut AppWorkspace) {
-    let Some(result) = app.content_fill.as_mut().and_then(|r| r.job.poll()) else {
-        return;
-    };
-    let Some(r) = app.content_fill.take() else {
-        return;
-    };
-    let filled = match result {
-        Ok(Outcome::Filled(f)) => f,
-        Ok(Outcome::NoSource) => {
-            app.ui_requests
-                .push(UiRequest::ToolError(FILL_NO_SOURCE.into()));
-            return;
-        }
-        _ => return,
-    };
-    app.commit_tool_first(|app| {
-        if let Some(ws) = app.active_ws_mut() {
-            r.land(ws, filled, FILL_NAME, FILL_ICON);
-        }
-    });
+    (hole.contains(&true) && hole.contains(&false)).then_some(hole)
 }
 
 #[derive(Default)]
@@ -376,7 +303,7 @@ impl RemoveTool {
         if self.running.is_none() {
             let sample_image = setting(app, "sampleImage").as_bool().unwrap_or(false);
             let strokes = std::mem::take(&mut self.pending);
-            self.running = Removal::start(app, strokes, sample_image, false);
+            self.running = Removal::start(app, strokes, sample_image);
             if self.running.is_some() {
                 // On wasm the job already ran: it lands now.
                 return self.poll(app);
@@ -961,248 +888,5 @@ mod tests {
             "a dot is still there"
         );
         assert_eq!(undo_names(&app).len(), n + 1);
-    }
-
-    const FILL: &str = "menu.edit.fillSelectionContentAware";
-
-    fn select(app: &mut AppWorkspace, r: Rectangle) {
-        let ws = app.active_ws_mut().unwrap();
-        ws.selection.set_continuation(&r, CombineMode::Replace);
-        ws.selection.commit_continuation();
-    }
-
-    /// PC6: Edit ▸ Fill Selection (Content-Aware) fills a selected dot from around it as one
-    /// entry that undo reverts exactly; it is disabled while it runs.
-    #[test]
-    fn content_aware_fill_removes_a_selected_dot() {
-        let mut app = fresh_doc(64, 64, None);
-        let ws = app.active_ws_mut().unwrap();
-        let s = &mut ws.document.layers.get_at_mut(0).unwrap().surface;
-        for y in 29..35 {
-            for x in 29..35 {
-                s.data_mut()[(y * 64 + x) * 4..][..3].fill(0);
-            }
-        }
-        ws.invalidate(None);
-        select(&mut app, Rectangle::new(26.0, 26.0, 12.0, 12.0));
-        let (before, n) = (layer_bytes(&app, None), undo_names(&app).len());
-        crate::action::perform(&mut app, FILL);
-        assert!(app.tool_busy());
-        assert!(!crate::action::is_executable(&app, FILL));
-        finish(&mut app);
-        let px = layer_bytes(&app, None);
-        assert!(
-            px.chunks(4)
-                .all(|p| p[..3].iter().all(|&v| v >= 250) && p[3] == 255),
-            "the dot is still there"
-        );
-        let names = undo_names(&app);
-        assert_eq!(names.len(), n + 1);
-        assert_eq!(
-            names.last().map(String::as_str),
-            Some("Fill Selection (Content-Aware)")
-        );
-        assert!(app.undo());
-        assert_eq!(layer_bytes(&app, None), before);
-    }
-
-    /// PC6: with no selection the command is disabled and does nothing.
-    #[test]
-    fn content_aware_fill_is_disabled_without_selection() {
-        let mut app = fresh_doc(32, 32, Some(2));
-        let (before, n) = (layer_bytes(&app, None), undo_names(&app).len());
-        assert!(!crate::action::is_executable(&app, FILL));
-        crate::action::perform(&mut app, FILL);
-        assert!(!app.tool_busy());
-        finish(&mut app);
-        assert_eq!(layer_bytes(&app, None), before);
-        assert_eq!(undo_names(&app).len(), n);
-        select(&mut app, Rectangle::new(8.0, 8.0, 8.0, 8.0));
-        assert!(crate::action::is_executable(&app, FILL));
-    }
-
-    /// PC6, Review Focus 1: while the fill runs the canvas takes no press, and Esc stops it with
-    /// no entry and the same bytes.
-    #[test]
-    fn content_aware_fill_escape_leaves_no_trace() {
-        let mut app = fresh_doc(128, 128, Some(2));
-        drive_tool(&mut app, ToolType::PaintBrush, &[]);
-        app.update_tool_setting(ToolType::PaintBrush, "width", json!(20));
-        select(&mut app, Rectangle::new(16.0, 16.0, 96.0, 96.0));
-        let (before, n) = (layer_bytes(&app, None), undo_names(&app).len());
-        crate::action::perform(&mut app, FILL);
-        assert!(app.tool_busy());
-        let input = PointerInput {
-            pointer_type: crate::tool::PointerType::Mouse,
-            samples: vec![],
-        };
-        assert!(app.on_mouse_down(64.0, 64.0, Left, &input));
-        app.on_mouse_up(64.0, 64.0, Left, &input);
-        let esc = KeyPress {
-            key: "Escape".into(),
-            shift: false,
-            ctrl: false,
-            alt: false,
-            meta: false,
-        };
-        assert!(app.on_key_press(&esc));
-        assert!(!app.tool_busy());
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            app.on_frame(app.now_ms + 16.0);
-        }
-        assert_eq!(layer_bytes(&app, None), before);
-        assert_eq!(undo_names(&app).len(), n);
-        // The selection survives: Esc stopped the fill, not deselected.
-        assert!(!app.active_ws().unwrap().selection.is_empty());
-    }
-
-    /// PC6f: the fill lands as one entry with another tool (Paintbrush) active.
-    #[test]
-    fn content_aware_fill_lands_under_another_tool() {
-        let mut app = fresh_doc(64, 64, None);
-        let ws = app.active_ws_mut().unwrap();
-        let s = &mut ws.document.layers.get_at_mut(0).unwrap().surface;
-        for y in 29..35 {
-            for x in 29..35 {
-                s.data_mut()[(y * 64 + x) * 4..][..3].fill(0);
-            }
-        }
-        ws.invalidate(None);
-        drive_tool(&mut app, ToolType::PaintBrush, &[]);
-        select(&mut app, Rectangle::new(26.0, 26.0, 12.0, 12.0));
-        let n = undo_names(&app).len();
-        crate::action::perform(&mut app, FILL);
-        finish(&mut app);
-        assert_eq!(
-            app.tool.as_ref().map(|t| t.tool_type()),
-            Some(ToolType::PaintBrush)
-        );
-        assert_eq!(undo_names(&app).len(), n + 1);
-        assert!(
-            layer_bytes(&app, None)
-                .chunks(4)
-                .all(|p| p[..3].iter().all(|&v| v >= 250) && p[3] == 255),
-            "the dot is still there"
-        );
-    }
-
-    /// M3: a document switch cancels a running fill, as a commit-first command does: nothing
-    /// lands in either document, also once frames run after it.
-    #[test]
-    fn content_aware_fill_is_cancelled_by_a_document_switch() {
-        let mut app = fresh_doc(512, 512, Some(2));
-        select(&mut app, Rectangle::new(40.0, 40.0, 432.0, 432.0));
-        let (before, n) = (layer_bytes(&app, None), undo_names(&app).len());
-        crate::action::perform(&mut app, FILL);
-        assert!(
-            app.content_fill
-                .as_ref()
-                .is_some_and(|r| r.job.is_running())
-        );
-        let other = app.create_blank_document_in_new_workspace(32, 32, 96.0, true);
-        assert_eq!(app.active, Some(other));
-        assert!(app.content_fill.is_none());
-        let m = undo_names(&app).len();
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            app.on_frame(app.now_ms + 16.0);
-        }
-        assert_eq!(undo_names(&app).len(), m);
-        app.set_active_document_workspace(Some(0));
-        assert_eq!(layer_bytes(&app, None), before);
-        assert_eq!(undo_names(&app).len(), n);
-    }
-
-    /// PC6f: an undo cancels a running fill: no entry for it and the same bytes.
-    #[test]
-    fn content_aware_fill_is_cancelled_by_undo() {
-        let mut app = fresh_doc(512, 512, Some(2));
-        // Something to undo that changes no pixel; then the selection the fill runs over.
-        app.edit_selection(|ws| ws.execute_function(crate::history::functions::select_all));
-        select(&mut app, Rectangle::new(40.0, 40.0, 432.0, 432.0));
-        let (before, n) = (layer_bytes(&app, None), undo_names(&app).len());
-        crate::action::perform(&mut app, FILL);
-        assert!(
-            app.content_fill
-                .as_ref()
-                .is_some_and(|r| r.job.is_running())
-        );
-        assert!(app.undo());
-        assert!(!app.tool_busy());
-        for _ in 0..20 {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            app.on_frame(app.now_ms + 16.0);
-        }
-        assert_eq!(layer_bytes(&app, None), before);
-        assert_eq!(undo_names(&app).len(), n - 1);
-    }
-
-    /// PC6f: on a noise layer under an elliptical selection, every byte outside the selection's
-    /// clip is unchanged by the fill (and some inside changed).
-    #[test]
-    fn content_aware_fill_writes_only_inside_the_clip() {
-        use crate::util::geom::Point;
-        let mut app = fresh_doc(96, 96, Some(4));
-        let pts: Vec<Point> = (0..64)
-            .map(|i| {
-                let a = i as f64 / 64.0 * std::f64::consts::TAU;
-                Point::new(48.0 + 30.0 * a.cos(), 48.0 + 18.0 * a.sin())
-            })
-            .collect();
-        let quality = SelectionQuality::from_value(&app.tool_settings.rendering_quality);
-        let ws = app.active_ws_mut().unwrap();
-        ws.selection
-            .set_continuation_points(&pts, CombineMode::Replace);
-        ws.selection.commit_continuation();
-        let clip = ws
-            .selection
-            .clipping_mask(quality, IntRect::new(0, 0, 96, 96))
-            .data
-            .clone();
-        let before = layer_bytes(&app, None);
-        crate::action::perform(&mut app, FILL);
-        finish(&mut app);
-        let after = layer_bytes(&app, None);
-        assert_ne!(before, after, "the fill changed nothing");
-        for (i, c) in clip.iter().enumerate() {
-            if *c == 0 {
-                assert_eq!(
-                    before[i * 4..][..4],
-                    after[i * 4..][..4],
-                    "pixel {i} is outside"
-                );
-            }
-        }
-    }
-
-    /// PC6f: Fill Selection has its own messages; Remove's stay its own.
-    #[test]
-    fn content_aware_fill_messages() {
-        // Over the cap.
-        let mut app = fresh_doc(4100, 4100, None);
-        select(&mut app, Rectangle::new(0.0, 0.0, 4100.0, 4100.0));
-        crate::action::perform(&mut app, FILL);
-        assert!(!app.tool_busy());
-        assert!(
-            app.ui_requests
-                .contains(&UiRequest::ToolError(FILL_TOO_LARGE.into()))
-        );
-        assert!(
-            !app.ui_requests
-                .contains(&UiRequest::ToolError(TOO_LARGE.into()))
-        );
-        // The selection covers its whole window.
-        let mut app = fresh_doc(32, 32, Some(2));
-        select(&mut app, Rectangle::new(0.0, 0.0, 32.0, 32.0));
-        let (before, n) = (layer_bytes(&app, None), undo_names(&app).len());
-        crate::action::perform(&mut app, FILL);
-        finish(&mut app);
-        assert!(
-            app.ui_requests
-                .contains(&UiRequest::ToolError(FILL_NO_SOURCE.into()))
-        );
-        assert_eq!(layer_bytes(&app, None), before);
-        assert_eq!(undo_names(&app).len(), n);
     }
 }

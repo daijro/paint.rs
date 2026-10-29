@@ -163,6 +163,16 @@ MagicScaler is third-party code, not Paint.NET code. Its license:
 Some plugins were inspired by BoltBait's Paint.NET plugin pack. The `bb…` effects reproduce its
 behaviour from a written specification; no BoltBait code or artwork is included.
 
+pdn-content-aware-fill (Nicholas Hayes, GNU General Public License version 2 or later) — Content
+Aware Fill, ported from commit `b54eec8b` (https://github.com/0xC0000054/pdn-content-aware-fill)
+in `crates/pdn-core/src/extra/resynthesizer.rs`, `crates/pdn-core/src/effect/forum/content_aware_fill.rs`
+and `crates/paintrs/src/dialogs/content_aware_fill.rs`, and used here under GPL-3.0-or-later as its
+licence allows. Copyright (C) 2018, 2020, 2021, 2022, 2023, 2024, 2025 Nicholas Hayes. Its
+Resynthesizer incorporates The Resynthesizer, a GIMP plug-in for resynthesizing textures (GPL-2.0
+or later): Copyright (C) 2010 Lloyd Konneker, Copyright (C) 2000 2008 Paul Francis Harrison,
+Copyright (C) 2002 Laurent Despeyroux, Copyright (C) 2002 David Rodríguez García. It is
+third-party code, not Paint.NET code.
+
 Playground live editing: `crates/paintrs/src/live/playground_live.rs` is Playground's shared
 live-editing template (github.com/daijro/openplayground, `patches/live/playground_live.rs`),
 reformatted by rustfmt, with one test's time limit raised for slower test machines, and otherwise

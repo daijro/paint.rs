@@ -1183,6 +1183,59 @@ fn document_strip_closes_clean_documents_and_toggles_the_list() {
     assert!(!harness.state().shell.document_strip.list_open);
 }
 
+/// Ctrl+click picks an image in the strip and again unpicks it (the canvas keeps the active
+/// one), Shift+click picks the run from the active one, a plain click activates and clears.
+#[test]
+fn document_strip_picks_images() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = app_harness();
+    for _ in 0..3 {
+        let app = &mut h.state_mut().app;
+        app.create_blank_document_in_new_workspace(80, 60, 96.0, true);
+        h.run();
+    }
+    let at: Vec<egui::Pos2> = h
+        .get_all_by_role(egui::accesskit::Role::Tab)
+        .map(|n| n.rect().center())
+        .collect();
+    assert_eq!(at.len(), 4);
+    let press = |h: &mut Harness<'_, paintrs::PaintApp>, i: usize, m: egui::Modifiers| {
+        h.event(egui::Event::PointerMoved(at[i]));
+        h.run();
+        for pressed in [true, false] {
+            let e = egui::Event::PointerButton {
+                pos: at[i],
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: m,
+            };
+            h.event_modifiers(e, m);
+            h.run();
+        }
+    };
+    let ids: Vec<u64> = h
+        .state()
+        .app
+        .documents
+        .iter()
+        .map(|ws| ws.document.id)
+        .collect();
+    press(&mut h, 0, egui::Modifiers::NONE);
+    press(&mut h, 2, egui::Modifiers::CTRL);
+    assert_eq!(h.state().app.active, Some(0));
+    assert_eq!(h.state().app.picked, [ids[2]]);
+    press(&mut h, 2, egui::Modifiers::CTRL);
+    assert!(
+        h.state().app.picked.is_empty(),
+        "a second Ctrl+click unpicks"
+    );
+    press(&mut h, 3, egui::Modifiers::SHIFT);
+    assert_eq!(h.state().app.picked, ids[1..4]);
+    press(&mut h, 1, egui::Modifiers::NONE);
+    assert_eq!(h.state().app.active, Some(1));
+    assert!(h.state().app.picked.is_empty());
+}
+
 /// A primary-button drag from `from` to `to` in `steps` pointer moves.
 fn drag(
     harness: &mut Harness<'_, paintrs::PaintApp>,
@@ -3207,6 +3260,102 @@ fn enter_applies_an_opened_effect_dialog() {
         assert!(!h.state().shell.dialogs.is_open(), "{id}");
         assert_eq!(undo_len(&h), before + 1, "{id}");
     }
+}
+
+/// Edit ▸ Fill Selection (Content-Aware) opens Content Aware Fill, whose automatic render shows
+/// in the layer: Escape leaves the layer and history as they were; OK applies the fill (a dot on
+/// white becomes white) as one "Content Aware Fill" entry, which undo takes back. With the whole
+/// image selected the dialog shows the plugin's message instead.
+#[test]
+fn content_aware_fill_opens_from_the_edit_menu_and_applies_once() {
+    use pdn_core::action::{ActionOutcome, perform};
+    use pdn_core::selection::CombineMode;
+    use pdn_core::util::geom::Rectangle;
+    const FILL: &str = "menu.edit.fillSelectionContentAware";
+    let mut h = app_harness();
+    h.state_mut()
+        .app
+        .create_blank_document_in_new_workspace(64, 48, 96.0, true);
+    h.run_steps(2);
+    let select = |h: &mut Harness<'_, paintrs::PaintApp>, r: Rectangle| {
+        let ws = h.state_mut().app.active_ws_mut().unwrap();
+        ws.selection.set_continuation(&r, CombineMode::Replace);
+        ws.selection.commit_continuation();
+    };
+    let ws = h.state_mut().app.active_ws_mut().unwrap();
+    let surface = &mut ws.document.layers.get_at_mut(0).unwrap().surface;
+    for y in 20..26 {
+        for x in 28..34 {
+            surface.data_mut()[(y * 64 + x) * 4..][..4].copy_from_slice(&[0, 0, 0, 255]);
+        }
+    }
+    ws.invalidate(None);
+    select(&mut h, Rectangle::new(25.0, 17.0, 12.0, 12.0));
+    let layer = |h: &Harness<'_, paintrs::PaintApp>| {
+        h.state()
+            .app
+            .active_ws()
+            .unwrap()
+            .document
+            .layers
+            .get_at(0)
+            .unwrap()
+            .surface
+            .data()
+            .to_vec()
+    };
+    let white = |px: &[u8]| px.chunks(4).all(|p| p == [255, 255, 255, 255]);
+    let (dot, undo) = (layer(&h), undo_len(&h));
+    // The Edit menu's pick: the action, then its request through the shell.
+    let open = |h: &mut Harness<'_, paintrs::PaintApp>| {
+        let ActionOutcome::Ui(request) = perform(&mut h.state_mut().app, FILL) else {
+            panic!("{FILL} opens nothing");
+        };
+        h.state_mut().app.ui_requests.push(request);
+        h.run_steps(2);
+        assert!(h.state().shell.dialogs.top_title_is("Content Aware Fill"));
+    };
+    let rendered = |h: &mut Harness<'_, paintrs::PaintApp>| {
+        for _ in 0..1000 {
+            if white(&layer(h)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            h.run();
+        }
+        panic!("the render never reached the layer");
+    };
+    open(&mut h);
+    rendered(&mut h);
+    assert_eq!(undo_len(&h), undo, "the preview adds no entry");
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(!h.state().shell.dialogs.is_open());
+    assert_eq!((layer(&h), undo_len(&h)), (dot.clone(), undo));
+    open(&mut h);
+    rendered(&mut h);
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert!(!h.state().shell.dialogs.is_open());
+    assert!(white(&layer(&h)));
+    let ws = h.state().app.active_ws().unwrap();
+    assert_eq!(ws.history.undo.len(), undo + 1);
+    assert_eq!(ws.history.undo.last().unwrap().name, "Content Aware Fill");
+    h.state_mut().app.undo();
+    assert_eq!(layer(&h), dot);
+    // Everything selected: the message, no dialog, no entry.
+    select(&mut h, Rectangle::new(0.0, 0.0, 64.0, 48.0));
+    let ActionOutcome::Ui(request) = perform(&mut h.state_mut().app, FILL) else {
+        panic!("{FILL} opens nothing");
+    };
+    h.state_mut().app.ui_requests.push(request);
+    h.run_steps(3);
+    // The message box, which Enter closes: the effect's dialog never stayed to apply anything.
+    assert!(h.state().shell.dialogs.is_open());
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert!(!h.state().shell.dialogs.is_open());
+    assert_eq!((layer(&h), undo_len(&h)), (dot, undo));
 }
 
 /// BB36 (R143): Chart or Graph through the real app: its registered dialog, the type list and

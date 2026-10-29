@@ -281,6 +281,8 @@ pub struct Shell {
     footer: footer::Footer,
     pub tool_menu: tool_menu::ToolMenu,
     pub document_strip: document_strip::DocumentStrip,
+    /// Where thumbnails are scaled (Batch Export scales its own).
+    thumbnail_mode: crate::kit::thumbnails::ThumbnailMode,
     menus: Menus,
     /// The app changed a setting (`AppSettingsStore.set`): the caller persists it.
     pub settings_changed: bool,
@@ -721,8 +723,28 @@ impl Shell {
         use document_strip::StripAction;
         match action {
             StripAction::Activate(i) => {
+                app.picked.clear();
                 if app.active != Some(i) {
                     app.set_active_document_workspace(Some(i));
+                }
+            }
+            StripAction::Pick { i, range } => {
+                let id = |i: usize| app.documents[i].document.id;
+                match (range, app.active) {
+                    (true, Some(a)) => {
+                        let (lo, hi) = (a.min(i), a.max(i));
+                        app.picked = (lo..=hi).filter(|&k| k != a).map(id).collect();
+                    }
+                    _ if app.active == Some(i) => {}
+                    _ => {
+                        let id = id(i);
+                        match app.picked.iter().position(|&p| p == id) {
+                            Some(k) => {
+                                app.picked.remove(k);
+                            }
+                            None => app.picked.push(id),
+                        }
+                    }
                 }
             }
             StripAction::Close(i) => {
@@ -862,6 +884,15 @@ impl Shell {
             }
             UiRequest::SaveAll => {
                 crate::dialogs::flows::save_all(app, settings, &mut self.settings_changed);
+            }
+            UiRequest::BatchExport => {
+                let ids = self.document_strip.batch_export_targets(app);
+                if !ids.is_empty() {
+                    let mode = self.thumbnail_mode;
+                    let dialog =
+                        crate::dialogs::batch_export::BatchExportDialog::new(app, &ids, mode);
+                    self.dialogs.push(Box::new(dialog));
+                }
             }
             UiRequest::Close => {
                 if let Some(i) = app.active {
@@ -1631,8 +1662,9 @@ impl Shell {
         (over, capture)
     }
 
-    /// Where the document strip and the Layers form scale thumbnails.
+    /// Where the document strip, the Layers form and Batch Export scale thumbnails.
     pub fn set_thumbnail_mode(&mut self, mode: crate::kit::thumbnails::ThumbnailMode) {
+        self.thumbnail_mode = mode;
         self.document_strip.set_thumbnail_mode(mode);
         self.forms.set_thumbnail_mode(mode);
     }

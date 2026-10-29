@@ -799,3 +799,85 @@ fn fix2_new_accepted_palette_survives_actual_denied_write() {
 fn fix2_existing_accepted_palette_survives_actual_denied_write() {
     accepted_palette_survives_denied_write(true);
 }
+/// File ▸ Batch Export: one image's file type changes alone, Apply to All gives it to every
+/// image, and OK writes each under its own name (the untitled one numbered) in the images'
+/// folder; the file that already exists is kept on Skip.
+#[test]
+fn batch_export_writes_every_image_with_its_own_settings() {
+    use egui_kittest::kittest::Queryable;
+    use pdn_core::action::{ActionOutcome, BATCH_EXPORT, perform};
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("two.webp"), b"old").unwrap();
+    Files::system().install();
+    let mut h = harness();
+    let state = h.state_mut();
+    state.app = pdn_core::testing::fresh_doc(24, 16, None);
+    state.app.documents[0].is_initial_workspace = false;
+    for (name, format) in [("one.jpg", "jpeg"), ("two.png", "png")] {
+        let i = state
+            .app
+            .create_blank_document_in_new_workspace(20, 12, 96., false);
+        let path = dir.path().join(name).to_string_lossy().into_owned();
+        let ws = &mut state.app.documents[i];
+        ws.set_file_info(
+            Some(name.into()),
+            Some(path),
+            Some(format.into()),
+            serde_json::Value::Null,
+        );
+    }
+    let ActionOutcome::Ui(request) = perform(&mut state.app, BATCH_EXPORT) else {
+        panic!("Batch Export is enabled with images open");
+    };
+    state.app.ui_requests.push(request);
+    h.run();
+    // The dialog's strip item, not the document strip's tab above it.
+    let image = |h: &Harness<'static, PaintApp>, name: &str| {
+        let lowest = h
+            .get_all_by_label(name)
+            .max_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))
+            .unwrap();
+        lowest.click();
+    };
+    let value = |h: &Harness<'static, PaintApp>, label: &str| h.get_by_label(label).value();
+    image(&h, "one.jpg");
+    h.run();
+    assert_eq!(
+        value(&h, "File type").as_deref(),
+        Some("JPEG (.jpg, .jpeg, .jpe)")
+    );
+    h.get_by_label("File type").click();
+    h.run();
+    h.get_by_label("WebP (.webp)").click();
+    h.run();
+    assert_eq!(value(&h, "File name").as_deref(), Some("one.webp"));
+    image(&h, "two.png");
+    h.run();
+    assert_eq!(value(&h, "File type").as_deref(), Some("PNG (.png)"));
+    image(&h, "one.jpg");
+    h.run();
+    h.get_by_label("Apply to All").click();
+    h.run();
+    image(&h, "two.png");
+    h.run();
+    assert_eq!(value(&h, "File type").as_deref(), Some("WebP (.webp)"));
+    assert_eq!(value(&h, "File name").as_deref(), Some("two.webp"));
+    h.get_by_label("OK").click();
+    h.run();
+    h.get_by_label("Skip").click();
+    for _ in 0..500 {
+        h.run();
+        if !h.state().shell.dialogs.is_open() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!h.state().shell.dialogs.is_open(), "the export finishes");
+    for name in ["untitled_01.webp", "one.webp"] {
+        let bytes = std::fs::read(dir.path().join(name)).unwrap();
+        let format = pdn_core::io::codecs::detect_format(name, None, &bytes);
+        assert_eq!(format, Some("webp"), "{name}");
+    }
+    assert_eq!(std::fs::read(dir.path().join("two.webp")).unwrap(), b"old");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+}

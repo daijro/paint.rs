@@ -1345,12 +1345,13 @@ static EXTRA_ACTIONS: std::sync::LazyLock<Vec<ActionDef>> = std::sync::LazyLock:
     ] {
         v.push(d(id, None, Some(label), None, "General"));
     }
-    // PC6 (S§4.1): an Extra command, English and untranslated like the Extra effects.
+    // PC6 (S§4.1): an Extra command, English and untranslated like the Extra effects; R90: it
+    // opens Content Aware Fill's dialog.
     v.push(
         d(
             "menu.edit.fillSelectionContentAware",
             None,
-            Some("Fill Selection (Content-Aware)"),
+            Some("Fill Selection (Content-Aware)..."),
             None,
             "Edit",
         )
@@ -1371,8 +1372,16 @@ static EXTRA_ACTIONS: std::sync::LazyLock<Vec<ActionDef>> = std::sync::LazyLock:
         )
         .icon("text_tool_icon.png"),
     );
+    // paint.rs's own: File ▸ Batch Export, under Save All's icon.
+    v.push(
+        d(BATCH_EXPORT, None, Some("Batch Export..."), None, "File")
+            .icon("menu_file_save_all_icon.png"),
+    );
     v
 });
+
+/// File ▸ Batch Export: an Extra of paint.rs's own, not PhotoCraft's.
+pub const BATCH_EXPORT: &str = "menu.file.batchExport";
 
 /// A registered action, the built-ins first, then the plugin and Extra actions.
 pub fn get(id: &str) -> Option<&'static ActionDef> {
@@ -1574,6 +1583,8 @@ pub enum UiRequest {
     SaveAs,
     Save,
     SaveAll,
+    /// Extra: File ▸ Batch Export.
+    BatchExport,
     Print,
     Close,
     Exit,
@@ -1665,6 +1676,7 @@ pub fn is_executable(app: &AppWorkspace, id: &str) -> bool {
         "menu.file.new" | "menu.file.open" | "menu.edit.pasteInToNewImage" => true,
         "menu.file.save" | "menu.file.saveAs" | "menu.file.print" | "menu.file.close" => has_ws,
         "menu.file.saveAll" => app.documents.iter().any(|w| w.dirty),
+        BATCH_EXPORT => !app.documents.is_empty(),
         // A live session takes them while it shares the image (`live`).
         "menu.edit.undo" => {
             crate::live::takes_undo(app, false, false)
@@ -1680,9 +1692,8 @@ pub fn is_executable(app: &AppWorkspace, id: &str) -> bool {
         "menu.edit.eraseSelection"
         | "menu.edit.fillSelection"
         | "menu.edit.fillSelectionSecondary"
+        | "menu.edit.fillSelectionContentAware"
         | "menu.edit.cut" => selection && bitmap,
-        // PC6: one fill at a time.
-        "menu.edit.fillSelectionContentAware" => selection && bitmap && app.content_fill.is_none(),
         "menu.edit.invertSelection"
         | "menu.edit.deselect"
         | "menu.edit.copySelection"
@@ -1816,6 +1827,7 @@ fn commits_tool_first(id: &str) -> bool {
             "menu.effects.repeat"
                 | "menu.file.save"
                 | "menu.file.saveAs"
+                | BATCH_EXPORT
                 | "menu.file.print"
                 | "menu.edit.paste"
                 | "menu.edit.pasteInToNewLayer"
@@ -1851,6 +1863,7 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
         "menu.file.save" => Ui(UiRequest::Save),
         "menu.file.saveAs" => Ui(UiRequest::SaveAs),
         "menu.file.saveAll" => Ui(UiRequest::SaveAll),
+        BATCH_EXPORT => Ui(UiRequest::BatchExport),
         "menu.file.close" => Ui(UiRequest::Close),
         "menu.file.print" => Ui(UiRequest::Print),
         "menu.file.exit" => Ui(UiRequest::Exit),
@@ -1930,10 +1943,15 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
             });
             Done
         }
-        // PC6: the Remove core over the selection, as a background job (`tool::remove`).
+        // Content Aware Fill's dialog (`effect::forum::content_aware_fill`), asking first on a
+        // text layer as an effect does.
         "menu.edit.fillSelectionContentAware" => {
-            crate::tool::remove::start_content_fill(app);
-            Done
+            if !text_layer::ensure_active_raster(app) {
+                return Done;
+            }
+            Ui(UiRequest::EffectDialog(
+                crate::effect::forum::content_aware_fill::ID.into(),
+            ))
         }
         // selection-and-move.md §2.11 steps 1 and 6; the UI writes the system clipboard.
         "menu.edit.copy" | "menu.edit.copyMerged" => {
@@ -2046,10 +2064,12 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
             {
                 return Ui(UiRequest::RepeatExternal);
             }
-            // Seam carving and Liquify repeat through the dialog's cancellable final render.
+            // Seam carving, Liquify and Content Aware Fill repeat through the dialog's
+            // cancellable final render.
             if app.last_effect.as_deref().is_some_and(|id| {
                 crate::effect::bb::seam::orientation(id).is_some()
                     || id == crate::effect::extra::liquify::ID
+                    || id == crate::effect::forum::content_aware_fill::ID
             }) {
                 return Ui(UiRequest::RepeatSeam);
             }
@@ -2712,6 +2732,20 @@ mod tests {
         assert_eq!(
             perform(&mut empty, "colorAdd"),
             ActionOutcome::Ui(UiRequest::ToggleColorAdd)
+        );
+    }
+
+    /// File ▸ Batch Export: an Extra, enabled while an image is open.
+    #[test]
+    fn batch_export_needs_an_image() {
+        let mut app = crate::app::AppWorkspace::default();
+        assert!(is_extra(BATCH_EXPORT) && !is_executable(&app, BATCH_EXPORT));
+        assert_eq!(perform(&mut app, BATCH_EXPORT), ActionOutcome::Done);
+        app.create_blank_document_in_new_workspace(10, 10, 96.0, true);
+        assert_eq!(menu_label(&app, BATCH_EXPORT), "Batch Export...");
+        assert_eq!(
+            perform(&mut app, BATCH_EXPORT),
+            ActionOutcome::Ui(UiRequest::BatchExport)
         );
     }
 

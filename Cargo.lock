@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "paintrs"
-version = "0.5.6"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "eframe",
@@ -3296,7 +3296,7 @@ checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pdn-core"
-version = "0.5.6"
+version = "0.6.0"
 dependencies = [
  "bcdec_rs",
  "candle-core",
@@ -4027,7 +4027,7 @@ dependencies = [
 
 [[package]]
 name = "sam-worker"
-version = "0.5.6"
+version = "0.6.0"
 dependencies = [
  "js-sys",
  "pdn-core",

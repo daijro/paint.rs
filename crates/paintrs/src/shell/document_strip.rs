@@ -49,6 +49,9 @@ const NAV_REPEAT_S: (f64, f64) = (0.4, 0.065);
 pub enum StripAction {
     /// `ScrollList.setSelected` → `app.setActiveDocumentWorkspace`.
     Activate(usize),
+    /// Ctrl (Cmd) + press toggles an image in the picked set, Shift + press picks the run from
+    /// the active one (`range`); the canvas keeps the active image.
+    Pick { i: usize, range: bool },
     /// The item's close button (`DocumentIO.closeDocumentWorkspace`).
     Close(usize),
     /// The drag swapped two items (`ScrollList.itemSwapper`).
@@ -144,6 +147,18 @@ enum ItemState {
     Normal,
     Hover,
     Selected,
+    /// Picked besides the active image (`AppWorkspace::picked`): the selection's colours, paler.
+    Picked,
+}
+
+/// A picked image's (border, fill): the selection's border lightened, its fill at half strength.
+fn picked_colors(theme: &Theme) -> (Color32, Color32) {
+    (
+        theme
+            .menu_item_selected_border
+            .lerp_to_gamma(Color32::WHITE, 0.45),
+        theme.menu_item_selected.gamma_multiply(0.5),
+    )
 }
 
 /// The header colour under device row `y` (points): the title bar, its menu-coloured bottom
@@ -178,12 +193,15 @@ fn item_backdrop(
         ItemState::Selected => {
             crate::kit::color::display_over(band(theme, y, ctx), theme.menu_item_selected, mode)
         }
+        ItemState::Picked => {
+            crate::kit::color::display_over(band(theme, y, ctx), picked_colors(theme).1, mode)
+        }
     }
 }
 
 /// `ImageUtil.createDirtyStar(10)` as its data URL decodes (unpremultiplied), drawn by the
 /// Canvas 2D shim.
-fn dirty_star() -> &'static Arc<image::RgbaImage> {
+pub(crate) fn dirty_star() -> &'static Arc<image::RgbaImage> {
     static STAR: LazyLock<Arc<image::RgbaImage>> = LazyLock::new(|| {
         use pdn_core::canvas::{Canvas, FillRule, Style};
         let size = DOCUMENT_DIRTY_SIZE as f64;
@@ -283,6 +301,20 @@ fn css_canvas_size(w: u32, h: u32) -> (f32, f32) {
 pub fn thumb_max_edge(rect: Rect, ppp: f32) -> u32 {
     let item = px::snap_rect(rect, ppp).height() * ppp;
     (item.round() as i32 - 2 * dip_px(DOCUMENT_THUMB_INSET, ppp) - 2).max(1) as u32
+}
+
+impl DocumentStrip {
+    /// File ▸ Batch Export's images (workspace ids), in strip order: the active image and the
+    /// picked ones, or every open image when none is picked.
+    pub fn batch_export_targets(&self, app: &AppWorkspace) -> Vec<u64> {
+        let picked = |i: usize, ws: &DocumentWorkspace| {
+            app.picked.is_empty() || app.active == Some(i) || app.picked.contains(&ws.document.id)
+        };
+        let docs = app.documents.iter().enumerate();
+        docs.filter(|&(i, ws)| picked(i, ws))
+            .map(|(_, ws)| ws.id)
+            .collect()
+    }
 }
 
 impl DocumentStrip {
@@ -606,7 +638,7 @@ impl DocumentStrip {
             ctx.accesskit_node_builder(item.id, |node| {
                 node.set_role(egui::accesskit::Role::Tab);
                 node.set_label(app.documents[i].get_friendly_name());
-                node.set_selected(active == Some(i));
+                node.set_selected(active == Some(i) || app.picked.contains(&id));
             });
             let pad = rects[i].shrink(DOCUMENT_ITEM_BORDER);
             let (header_h, header_pad) = DOCUMENT_HEADER;
@@ -627,6 +659,8 @@ impl DocumentStrip {
             let hovered = item.hovered() || close.hovered();
             let state = if active == Some(i) {
                 ItemState::Selected
+            } else if app.picked.contains(&id) {
+                ItemState::Picked
             } else if hovered || dragging == Some(id) {
                 ItemState::Hover
             } else {
@@ -727,9 +761,12 @@ impl DocumentStrip {
             } else if pressed && item.hovered() {
                 self.list
                     .press(id, pointer.unwrap_or(rects[i].min), rects[i]);
-                if active != Some(i) {
-                    action = action.or(Some(StripAction::Activate(i)));
-                }
+                let m = crate::pdn_modifiers(ui.input(|i| i.modifiers));
+                action = action.or(Some(if m.ctrl || m.shift {
+                    StripAction::Pick { i, range: m.shift }
+                } else {
+                    StripAction::Activate(i)
+                }));
             }
             // The item (or its close button) the right click went up on, at that release.
             if let Some(r) = [&item, &close]
@@ -788,6 +825,7 @@ fn paint_item_frame(
         ItemState::Hover => (theme.menu_item_border, theme.menu_item_hover),
         // Translucent over whatever lies below (the title bar, header and tool strip).
         ItemState::Selected => (theme.menu_item_selected_border, theme.menu_item_selected),
+        ItemState::Picked => picked_colors(theme),
     };
     let bw = px::border_width(DOCUMENT_ITEM_BORDER, ppp);
     let ring = px::border_width(MENU_ITEM_RING, ppp);
@@ -800,7 +838,7 @@ fn paint_item_frame(
         painter.rect_filled(side, 0.0, theme.menu_background);
     }
     let area = inner.shrink(ring);
-    if state == ItemState::Selected {
+    if matches!(state, ItemState::Selected | ItemState::Picked) {
         let height = 1. / ppp;
         for row in 0..(area.height() * ppp).round() as usize {
             let y = area.min.y + row as f32 / ppp;
@@ -1233,6 +1271,21 @@ mod tests {
         assert!(s.thumbs[&7].scaled.is_none() && !s.thumbs.contains_key(&8));
         s.accept(done((5, 60)), 5, 60);
         assert_eq!(s.thumbs[&7].scaled.as_ref().map(|t| t.0), Some((5, 60)));
+    }
+
+    /// Batch Export takes the active and picked images in strip order, or all of them.
+    #[test]
+    fn batch_export_takes_the_picked_images() {
+        let mut app = AppWorkspace::default();
+        for _ in 0..3 {
+            app.create_blank_document_in_new_workspace(8, 8, 96.0, true);
+        }
+        let ws: Vec<u64> = app.documents.iter().map(|ws| ws.id).collect();
+        let strip = DocumentStrip::default();
+        assert_eq!(strip.batch_export_targets(&app), ws);
+        app.set_active_document_workspace(Some(2));
+        app.picked = vec![app.documents[0].document.id];
+        assert_eq!(strip.batch_export_targets(&app), [ws[0], ws[2]]);
     }
 
     /// DocumentItem.renderThumbnail's canvas: fit in 96, rounded, at least 1.

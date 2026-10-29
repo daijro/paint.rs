@@ -1618,8 +1618,8 @@ fn checkpoint(app: &AppWorkspace) -> Checkpoint {
 /// steps are personal, no session edits: Undo after one takes back this person's last shared edit and keeps the
 /// selection.
 fn undo(app: &AppWorkspace, take: Option<bool>) -> bool {
-    // Native Undo's own cases: ignored mid-drag (R81), cancelling Perspective Warp or a running fill (R29), stepping an
-    // open transaction.
+    // Native Undo's own cases: ignored mid-drag (R81), cancelling Perspective Warp or a tool's running job (R29),
+    // stepping an open transaction.
     let Some(ws) = app.active_ws().filter(|_| settled(app)) else {
         return false;
     };
@@ -1647,7 +1647,7 @@ fn undo(app: &AppWorkspace, take: Option<bool>) -> bool {
 }
 
 /// No gesture under way in the images: no canvas button held, no transaction (a stroke, a shape, text or a gradient
-/// being edited, a selection being moved), Move float, parked tool, Perspective Warp, running fill or tool job.
+/// being edited, a selection being moved), Move float, parked tool, Perspective Warp or tool job.
 fn settled(app: &AppWorkspace) -> bool {
     !app.canvas_captured()
         && app.perspective.is_none()

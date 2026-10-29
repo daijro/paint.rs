@@ -178,7 +178,11 @@ fn mode<'a>(h: &'a Harness<'_, PaintApp>) -> &'a perspective_warp::PerspectiveWa
 }
 
 /// Layout: the corners onto the paper.
+/// Layout (the mode starts in Warp), then the plane's corners onto the paper.
 fn place(h: &mut Harness<'_, PaintApp>) {
+    if mode(h).mode == Mode::Warp {
+        option(h, "mode");
+    }
     for k in 0..4 {
         drag(h, IMAGE[k], PAPER[k]);
     }
@@ -190,14 +194,16 @@ fn near(a: [[f64; 2]; 4], b: [[f64; 2]; 4]) -> bool {
         .all(|(p, q)| (p[0] - q[0]).abs() <= 1.0 && (p[1] - q[1]).abs() <= 1.0)
 }
 
-/// Canvas drags move the plane in Layout (the image stays) and warp the image in Warp; the
-/// options row switches the mode and straightens; Enter commits one history item, Esc cancels.
+/// The mode starts in Warp; canvas drags move the plane in Layout (the image stays) and warp the
+/// image in Warp; the options row switches the mode and straightens; Enter commits one history
+/// item, Esc cancels.
 #[test]
 fn canvas_drags_warp_and_the_options_row_drives_the_mode() {
     let mut h = app();
     let before = layer(&h);
-    assert_eq!(mode(&h).mode, Mode::Layout);
+    assert_eq!(mode(&h).mode, Mode::Warp);
     place(&mut h);
+    assert_eq!(mode(&h).mode, Mode::Layout);
     assert!(near(mode(&h).src, PAPER), "{:?}", mode(&h).src);
     assert_eq!(mode(&h).dst, mode(&h).src);
     assert_eq!(layer(&h), before, "Layout leaves the image");
@@ -215,6 +221,7 @@ fn canvas_drags_warp_and_the_options_row_drives_the_mode() {
     assert_eq!(history(&h), ["New Image", "Perspective Warp"]);
 
     let mut h = app();
+    option(&mut h, "mode");
     drag(&mut h, IMAGE[0], PAPER[0]);
     option(&mut h, "mode");
     drag(&mut h, PAPER[0], [200.0, 60.0]);

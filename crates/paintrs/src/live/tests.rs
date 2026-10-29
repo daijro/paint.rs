@@ -1343,26 +1343,9 @@ fn a_session_undo_shows_the_image_it_changed_only_when_that_change_comes_soon() 
 }
 
 #[test]
-fn undo_keeps_native_undo_through_a_running_fill_and_a_move_float() {
+fn undo_keeps_native_undo_through_a_move_float() {
     let mut app = app();
     session(&mut app);
-    drive_tool(
-        &mut app,
-        ToolType::RectangleSelect,
-        &[
-            Ev::Down(120.0, 40.0, MouseButton::Left),
-            Ev::Move(160.0, 80.0),
-            Ev::Wait(60.0),
-            Ev::Up(160.0, 80.0, MouseButton::Left),
-        ],
-    );
-    pdn_core::action::perform(&mut app, "menu.edit.fillSelectionContentAware");
-    assert!(app.content_fill.is_some(), "the fill runs");
-    assert!(
-        !pdn_core::live::takes_undo(&app, false, false),
-        "a running fill"
-    );
-    app.content_fill = None;
     assert!(pdn_core::live::takes_undo(&app, false, false));
     use pdn_core::pixel::{IntRect, mask::Mask};
     use pdn_core::render::float::{Float, FloatSource, next_id};

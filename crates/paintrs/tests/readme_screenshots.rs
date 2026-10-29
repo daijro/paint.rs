@@ -813,8 +813,8 @@ fn photocraft_screenshots() {
         },
     );
 
-    // Edit ▸ Fill Selection (Content-Aware): the carriage on the road selected and filled from
-    // the road and grass around it.
+    // Edit ▸ Fill Selection (Content-Aware) (Content Aware Fill at its defaults): the carriage on
+    // the road selected and filled from the road and grass around it.
     let mut h = source("05-content-aware-landscape.jpg", 0.5);
     hide_forms(&mut h);
     let ws = h.state_mut().app.active_ws_mut().unwrap();
@@ -830,8 +830,7 @@ fn photocraft_screenshots() {
         |_| {},
         |h| {
             let app = &mut h.state_mut().app;
-            pdn_core::action::perform(app, "menu.edit.fillSelectionContentAware");
-            land(app);
+            effect(app, "contentAwareFill", json!({}));
             pdn_core::action::perform(app, "menu.edit.deselect");
         },
     );

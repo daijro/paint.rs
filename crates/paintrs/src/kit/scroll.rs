@@ -470,8 +470,9 @@ impl ScrollList {
     }
 
     /// The `wheel` listener of the list `salt` (its `cover`) over `viewport` (`content` = the
-    /// scroll length): `speed` × the delta, at most every 100 ms, only while it stays in range.
-    /// ponytail: `behavior: smooth` scrolls jump.
+    /// scroll length): `speed` × the delta, at most every 100 ms, clamped to the range (paintdotjs
+    /// dropped a step past an end, so the wheel stopped short of it). ponytail: `behavior: smooth`
+    /// scrolls jump.
     pub fn wheel(&mut self, ui: &Ui, viewport: Rect, content: f32, now: f64, salt: &str) {
         if self.speed == 1.0 {
             return;
@@ -486,10 +487,8 @@ impl ScrollList {
             self.last_wheel = now;
             // `event.deltaY` (else deltaX) is egui's delta negated.
             let delta = -(if wheel.y != 0.0 { wheel.y } else { wheel.x }) * self.speed;
-            let to = self.scroll + delta;
-            if to >= 0.0 && to + page <= content {
-                self.scroll = to;
-            }
+            self.scroll += delta;
+            self.clamp(content, page);
         }
     }
 
@@ -636,6 +635,50 @@ impl ScrollList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wheel step past either end of a list stops at that end instead of being dropped.
+    #[test]
+    fn list_wheel_reaches_both_ends() {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 218.0));
+        let mut list = ScrollList::vertical(0.4);
+        let frame = |list: &mut ScrollList, now: f64, dy: f32| {
+            let events = vec![
+                egui::Event::PointerMoved(Pos2::new(50.0, 100.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, dy),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                },
+            ];
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                list.wheel(ui, rect, 372.0, now, "t");
+                list.cover(ui, rect, "t");
+            });
+            out.textures_delta.clear();
+            list.scroll
+        };
+        frame(&mut list, 0.0, 0.0);
+        assert_eq!(frame(&mut list, 1.0, -300.0), 120.0);
+        assert_eq!(
+            frame(&mut list, 2.0, -300.0),
+            154.0,
+            "short of the end: to the end"
+        );
+        assert_eq!(frame(&mut list, 3.0, 200.0), 74.0);
+        assert_eq!(
+            frame(&mut list, 4.0, 200.0),
+            0.0,
+            "short of the top: to the top"
+        );
+    }
 
     /// The pill's caps against Chromium's 1× raster of a vertical thumb's top cap (the table
     /// measured from `shell-no-forms` before geometry replaced it): within R21 (a) (±1 where the

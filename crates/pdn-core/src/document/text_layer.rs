@@ -407,7 +407,7 @@ mod tests {
     }
 
     /// Ruling R32: Content-Aware Fill writes pixels outside the tool path, so it asks first; OK
-    /// rasterizes, then the fill runs to its own entry.
+    /// rasterizes, then the command opens its dialog.
     #[test]
     fn content_aware_fill_asks_to_rasterize_first() {
         let id = "menu.edit.fillSelectionContentAware";
@@ -420,22 +420,15 @@ mod tests {
         let items = history(&app);
         assert_eq!(perform(&mut app, id), ActionOutcome::Done);
         assert_eq!(app.ui_requests, asked(1, Some(id)));
-        assert!(app.content_fill.is_none());
         assert_eq!(history(&app), items);
         app.ui_requests.clear();
         confirm(&mut app, 1, Some(id));
         assert_eq!(text(&app, 1), None);
-        let start = std::time::Instant::now();
-        while app.tool_busy() {
-            assert!(start.elapsed().as_secs() < 120, "the fill never finished");
-            std::thread::sleep(std::time::Duration::from_millis(2));
-            app.on_frame(app.now_ms + 16.0);
-        }
-        assert!(app.ui_requests.is_empty(), "{:?}", app.ui_requests);
         assert_eq!(
-            history(&app)[items.len()..],
-            [RASTERIZE_NAME, "Fill Selection (Content-Aware)"]
+            app.ui_requests,
+            [UiRequest::EffectDialog("contentAwareFill".into())]
         );
+        assert_eq!(history(&app)[items.len()..], [RASTERIZE_NAME]);
     }
 
     /// PC16: with Editable text on, a Text press on a text layer edits the text, so it never asks;

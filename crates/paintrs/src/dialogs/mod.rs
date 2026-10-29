@@ -15,7 +15,9 @@
 //! dropped files, the forms' Ctrl+Shift+F5…F8 resets included — is withheld while a dialog is
 //! open (`without_input`).
 pub mod about;
+pub mod batch_export;
 pub mod chart;
+pub mod content_aware_fill;
 pub mod curve_editor;
 pub mod effect_config;
 pub mod fade;
@@ -161,8 +163,9 @@ pub fn open(dialog: Box<dyn Dialog>) {
 }
 
 /// Task 42's dialog for an effect session: Liquify's, Vanishing Point's or Puppet Warp's own
-/// large preview (Extras, S§4.4; Perspective Warp runs on the canvas), else the Effect Config
-/// dialog, which `configure` sets up (file source, external acquisition).
+/// large preview (Extras, S§4.4; Perspective Warp runs on the canvas), Content Aware Fill's own
+/// dialog, else the Effect Config dialog, which `configure` sets up (file source, external
+/// acquisition).
 pub fn effect_dialog(
     session: pdn_core::effect::session::EffectSession,
     values: pdn_core::effect::Values,
@@ -175,6 +178,10 @@ pub fn effect_dialog(
         Box::new(vanishing_point::VanishingPointDialog::new(session, values))
     } else if session.def.id == PUPPET {
         Box::new(warp::WarpDialog::new(session, values))
+    } else if session.def.id == pdn_core::effect::forum::content_aware_fill::ID {
+        Box::new(content_aware_fill::ContentAwareFillDialog::new(
+            session, values,
+        ))
     } else {
         let mut dialog = effect_config::EffectConfigDialog::new(session, values);
         configure(&mut dialog);

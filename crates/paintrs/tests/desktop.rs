@@ -132,7 +132,8 @@ fn web_file_exit_reviews_dirty_document_and_cancel_then_discard_work() {
     for answer in ["Cancel", "Don't Save"] {
         click_at(&mut h, Pos2::new(23., 17.));
         h.run();
-        click_at(&mut h, Pos2::new(50., 288.));
+        // File ▸ Exit.
+        click_at(&mut h, Pos2::new(50., 313.));
         h.run_steps(3);
         assert!(h.state().shell.dialogs.is_open());
         h.get_by_label(answer).click();

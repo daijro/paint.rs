@@ -17,6 +17,8 @@ pub mod perspective;
 pub mod poisson;
 pub mod puppet;
 pub mod remove;
+/// Not PhotoCraft's: pdn-content-aware-fill's Resynthesizer (GPL-2.0-or-later), for Content Aware Fill.
+pub mod resynthesizer;
 pub mod rng;
 pub mod sample;
 pub mod segment;

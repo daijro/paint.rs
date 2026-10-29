@@ -155,6 +155,8 @@ pub fn entries(index: usize, app: &AppWorkspace) -> Vec<MenuEntry> {
             A("menu.file.save"),
             A("menu.file.saveAs"),
             A("menu.file.saveAll"),
+            // Extra: Batch Export after Save All, with the plus.
+            A(action::BATCH_EXPORT),
             S,
             A("menu.file.print"),
             S,
@@ -819,6 +821,20 @@ mod tests {
         );
     }
 
+    /// File ▸ Batch Export follows Save All with the plus, without PhotoCraft's credit.
+    #[test]
+    fn batch_export_follows_save_all() {
+        use crate::kit::menu::{Mark, extra_tooltip, mark};
+        let shown = entries(0, &AppWorkspace::default());
+        let at = shown
+            .iter()
+            .position(|e| *e == MenuEntry::Action("menu.file.saveAll"))
+            .unwrap();
+        assert_eq!(shown[at + 1], MenuEntry::Action(action::BATCH_EXPORT));
+        assert_eq!(mark(&shown[at + 1]), Mark::Extra);
+        assert_eq!(extra_tooltip(action::BATCH_EXPORT), None);
+    }
+
     /// README "Menu tree": registered plugins merge into the built-in menus (Extras aside).
     #[test]
     fn registered_plugins_merge_into_the_menus() {
@@ -933,11 +949,11 @@ mod tests {
         assert_eq!(mark(&shown[at + 1]), Mark::Extra);
         assert_eq!(
             action::display_name(&app, ID),
-            "Fill Selection (Content-Aware)"
+            "Fill Selection (Content-Aware)..."
         );
         assert_eq!(
             extra_tooltip(ID).as_deref(),
-            Some("Fill Selection (Content-Aware)\n(from PhotoCraft)")
+            Some("Plugin: Content Aware Fill")
         );
     }
 

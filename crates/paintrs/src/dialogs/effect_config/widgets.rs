@@ -118,7 +118,28 @@ impl RangeSpec {
         if self.role != pdn_core::effect::slider::RangeRole::Slider {
             r
         } else {
-            self.keyboard.value(r as i64, self.min, self.max)
+            self.shown(self.keyboard.value(r as i64, self.min, self.max))
+        }
+    }
+
+    /// `v` at the property's decimals: an exponential slider's coordinates map back off them
+    /// (a drag gave 164.17647…).
+    fn shown(self, v: f64) -> f64 {
+        let p = 10_f64.powi(self.keyboard.decimals as i32);
+        ((v * p).round() / p).clamp(self.min, self.max)
+    }
+
+    /// An arrow or page key's native coordinate step, at the property's decimals unless that
+    /// undoes the step.
+    fn key_step(self, value: f64, increase: bool, page: bool) -> f64 {
+        let stepped = self
+            .keyboard
+            .stepped(value, self.min, self.max, increase, page);
+        let rounded = self.shown(stepped);
+        if self.role == pdn_core::effect::slider::RangeRole::Slider && rounded != value {
+            rounded
+        } else {
+            stepped
         }
     }
 
@@ -727,9 +748,9 @@ pub(in crate::dialogs) fn range_line(
     let (imin, imax, istep) = spec.input();
     let shown = sanitize(spec.input_value(numeric), imin, imax, istep);
     let ratio = ((shown - imin) / (imax - imin)) as f32;
-    let fill = ((numeric - spec.min) / (spec.max - spec.min)) as f32;
+    // The fill ends at the thumb (an exponential slider's value is not linear along it).
     let track = match track {
-        Track::Progress(_) => Track::Progress(fill),
+        Track::Progress(_) => Track::Progress(ratio),
         t => t,
     };
     let response = paint_range(ui, id, range, ratio, track);
@@ -786,10 +807,8 @@ pub(in crate::dialogs) fn range_line(
         });
         let mut value = numeric;
         for key in steps {
-            value = spec.keyboard.stepped(
+            value = spec.key_step(
                 value,
-                spec.min,
-                spec.max,
                 matches!(key, Key::ArrowRight | Key::ArrowUp | Key::PageUp),
                 matches!(key, Key::PageUp | Key::PageDown),
             );
@@ -1011,6 +1030,41 @@ mod tests {
         };
         assert_eq!(zoom.input(), (60.0, 16000.0, 1.0));
         assert_eq!(zoom.input_value(1.0), 3930.0);
-        assert!((zoom.value_of_input(8030.0) - 4.045).abs() < 1e-12);
+        // The exponential inverse (4.045…) lands on the property's 2 decimals.
+        let v = zoom.value_of_input(8030.0);
+        assert!((v - 4.045).abs() <= 0.005 && (v * 100.0 - (v * 100.0).round()).abs() < 1e-9);
+    }
+
+    /// Gaussian Blur's radius (exponential, 1 decimal): a drag and the arrow keys land on tenths
+    /// and keep moving.
+    #[test]
+    fn exponential_sliders_land_on_the_shown_decimals() {
+        let radius = RangeSpec {
+            min: 0.0,
+            max: 300.0,
+            default: 2.0,
+            step: 0.1,
+            role: pdn_core::effect::slider::RangeRole::Slider,
+            keyboard: pdn_core::effect::slider::SliderKeys {
+                decimals: 1,
+                small: 1.0,
+                large: 5.0,
+                exponential: true,
+            },
+        };
+        let tenth = |v: f64| (v * 10.0 - (v * 10.0).round()).abs() < 1e-9;
+        let (lo, hi, _) = radius.input();
+        for k in 0..=100 {
+            let v = radius.value_of_input((lo + (hi - lo) * k as f64 / 100.0).round());
+            assert!(tenth(v) && (0.0..=300.0).contains(&v), "{v}");
+        }
+        let mut v = 0.0;
+        for _ in 0..400 {
+            let next = radius.key_step(v, true, false);
+            assert!(tenth(next) && (next > v || next == 300.0), "{v} -> {next}");
+            v = next;
+        }
+        assert_eq!(v, 300.0);
+        assert!(tenth(radius.key_step(164.2, false, true)));
     }
 }

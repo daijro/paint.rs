@@ -53,20 +53,21 @@ pub struct SaveSelection {
     pub options: SaveOptions,
 }
 type OnClose = Box<dyn FnOnce(Option<SaveSelection>, &mut DialogCx)>;
+/// Batch Export keeps one per image and shows its settings and preview (`body`).
 pub struct SaveImageDialog {
-    document: u64,
-    format: usize,
-    options: Vec<SaveOptions>,
+    pub(super) document: u64,
+    pub(super) format: usize,
+    pub(super) options: Vec<SaveOptions>,
     initial: Value,
     loaded: bool,
-    open_select: Option<OpenSelect>,
+    pub(super) open_select: Option<OpenSelect>,
     slider: SliderState,
     on_close: Option<OnClose>,
-    due: f64,
-    preview: Option<TextureHandle>,
+    pub(super) due: f64,
+    pub(super) preview: Option<TextureHandle>,
     preview_size: Vec2,
     bytes: Option<usize>,
-    status: String,
+    pub(super) status: String,
     zoom: f32,
     auto_fit: bool,
     scroll: Vec2,
@@ -354,7 +355,7 @@ impl SaveImageDialog {
         }
     }
 }
-fn heading(ui: &Ui, at: Pos2, width: f32, label: &str, pdn: bool) {
+pub(super) fn heading(ui: &Ui, at: Pos2, width: f32, label: &str, pdn: bool) {
     let painter = ui.painter();
     let font = FontSpec::new(DIALOG_FONT_SIZE).weight(700);
     let theme = theme::current(ui.ctx());
@@ -387,6 +388,206 @@ fn file_size(bytes: usize) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
+impl SaveImageDialog {
+    /// The remembered options with the document's token over its format's, once.
+    pub(super) fn load(&mut self, settings: &pdn_core::settings::AppSettings) {
+        if self.loaded {
+            return;
+        }
+        for (i, f) in FORMATS.iter().enumerate() {
+            self.options[i] =
+                Self::options_from(f.id, &settings.values["fileTypes"]["saveOptions"][f.id]);
+        }
+        let f = FORMATS[self.format].id;
+        let mut initial = settings.values["fileTypes"]["saveOptions"][f].clone();
+        if let Some(values) = self.initial.as_object() {
+            if !initial.is_object() {
+                initial = serde_json::json!({});
+            }
+            for (k, v) in values {
+                initial[k] = v.clone();
+            }
+        }
+        self.options[self.format] = Self::options_from(f, &initial);
+        self.loaded = true;
+    }
+    /// The frame's clock; the preview renders once its debounce is due.
+    pub(super) fn tick(&mut self, ui: &Ui, cx: &DialogCx) {
+        self.slider.now = cx.app.now_ms;
+        if cx.app.now_ms >= self.due {
+            self.render_preview(ui, cx);
+        } else if self.due.is_finite() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(
+                    (self.due - cx.app.now_ms).max(1.0) as u64,
+                ));
+        }
+    }
+    /// The Settings column and the Preview in the body box `r`, with `extra` points free under
+    /// the Settings heading (Batch Export's file name). Returns where the column's controls end;
+    /// a change renders the preview again 100 ms later.
+    pub(super) fn body(&mut self, ui: &mut Ui, r: Rect, extra: f32) -> f32 {
+        let mut changed = false;
+        let font = FontSpec::new(DIALOG_FONT_SIZE);
+        let theme = theme::current(ui.ctx());
+        let side = side(ui);
+        let at = r.min + Vec2::splat(10.0);
+        let right = at.x + side;
+        heading(ui, at, side, "Settings", false);
+        let y = at.y + 29.0 + extra;
+        text::draw(
+            ui.painter(),
+            Pos2::new(at.x, y),
+            "File type",
+            font.weight(600),
+            theme.menu_item_text,
+        );
+        let format_rect = Rect::from_min_size(
+            Pos2::new(
+                at.x,
+                y + font.resolved_line_height(ui.ctx().pixels_per_point()) + 9.0,
+            ),
+            Vec2::new(side, 31.0),
+        );
+        let labels: Vec<String> = FORMATS
+            .iter()
+            .map(|f| format!("{} ({})", f.name, f.extensions.join(", ")))
+            .collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let id = ui.scope_id().with("file-type");
+
+        if let Some(pick) = select(
+            ui,
+            &mut self.open_select,
+            id,
+            format_rect,
+            "File type",
+            &labels,
+            self.format,
+            SelectLook {
+                native: true,
+                pad_left: 0.0,
+                font,
+            },
+        ) && pick != self.format
+        {
+            self.format = pick;
+            changed = true;
+        }
+        let info = &FORMATS[self.format];
+        let mut y = format_rect.max.y + 10.0;
+        let mut bottom = y;
+        if let Some(default_quality) = info.quality_default {
+            heading(ui, Pos2::new(at.x, y), side, "Quality", false);
+            y += 28.0;
+            let mut values = pdn_core::effect::Values::new();
+            values.insert(
+                "quality".into(),
+                serde_json::json!(self.options[self.format].quality),
+            );
+            let track =
+                Rect::from_min_size(Pos2::new(at.x + 2.0, y + 0.5), Vec2::new(side - 78.0, 28.0));
+            let number = Rect::from_min_size(Pos2::new(right - 68.0, y), Vec2::new(68.0, 29.0));
+            let spec = RangeSpec {
+                min: 0.0,
+                max: 100.0,
+                default: default_quality as f64,
+                step: 1.0,
+                role: pdn_core::effect::slider::RangeRole::Slider,
+                keyboard: pdn_core::effect::slider::SliderKeys::INTEGER,
+            };
+            if range_line(
+                ui,
+                &mut self.slider,
+                "quality",
+                spec,
+                &mut values,
+                track,
+                number,
+                None,
+                Track::Standard,
+                NumberStyle::LAYER_OPACITY,
+            )
+            .is_some()
+            {
+                changed = true;
+            }
+            self.options[self.format].quality =
+                Some(pdn_core::effect::num(&values, "quality") as u8);
+            y += 39.0;
+            if info.id == "jpeg" {
+                heading(ui, Pos2::new(at.x, y), side, "Chroma Subsampling", false);
+                y += 28.0;
+                let current = CHROMA_CHOICES
+                    .iter()
+                    .position(|c| Some(*c) == self.options[self.format].chroma.as_deref())
+                    .unwrap_or(1);
+                if let Some(pick) = select(
+                    ui,
+                    &mut self.open_select,
+                    ui.scope_id().with("chroma"),
+                    Rect::from_min_size(Pos2::new(at.x, y), Vec2::new(side, 31.0)),
+                    "Chroma Subsampling",
+                    &CHROMA_CHOICES,
+                    current,
+                    SelectLook {
+                        native: true,
+                        pad_left: 0.0,
+                        font,
+                    },
+                ) {
+                    self.options[self.format].chroma = Some(CHROMA_CHOICES[pick].into());
+                    changed = true;
+                }
+                y += 40.0;
+            }
+            let response = dialog_button(
+                ui,
+                "defaults",
+                Rect::from_min_size(
+                    Pos2::new(at.x + (side - 105.0) / 2.0, y + 7.0),
+                    Vec2::new(105.0, 21.0),
+                ),
+                "Defaults",
+                false,
+            );
+            if response.clicked_by(egui::PointerButton::Primary) {
+                response.request_focus();
+            }
+            inputs::take_enter(ui, &response);
+            if button_clicked(ui, &response) {
+                self.options[self.format] = Self::default_options(info.id);
+                changed = true;
+            }
+            bottom = y + 38.0;
+        }
+        let preview_x = right + 14.0;
+        let preview_w = r.max.x - 10.0 - preview_x;
+        let title = match self.bytes {
+            Some(n) => format!("Preview, file size: {}", file_size(n)),
+            None => "Preview unavailable".into(),
+        };
+        heading(ui, Pos2::new(preview_x, at.y), preview_w, &title, true);
+        self.preview_ui(
+            ui,
+            Rect::from_min_max(Pos2::new(preview_x, at.y + 28.0), r.max - Vec2::splat(10.0)),
+        );
+        if changed {
+            self.due = self.slider.now + 100.0;
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        bottom
+    }
+}
+/// The Settings column's width.
+pub(super) fn side(ui: &Ui) -> f32 {
+    if ui.ctx().content_rect().width() <= 800.0 {
+        210.0
+    } else {
+        250.0
+    }
+}
 impl Dialog for SaveImageDialog {
     fn title(&self) -> String {
         "Save Configuration".into()
@@ -395,24 +596,7 @@ impl Dialog for SaveImageDialog {
         Some("saveConfiguration")
     }
     fn show(&mut self, ui: &mut Ui, cx: &mut DialogCx) -> DialogState {
-        if !self.loaded {
-            for (i, f) in FORMATS.iter().enumerate() {
-                self.options[i] =
-                    Self::options_from(f.id, &cx.settings.values["fileTypes"]["saveOptions"][f.id]);
-            }
-            let f = FORMATS[self.format].id;
-            let mut initial = cx.settings.values["fileTypes"]["saveOptions"][f].clone();
-            if let Some(values) = self.initial.as_object() {
-                if !initial.is_object() {
-                    initial = serde_json::json!({});
-                }
-                for (k, v) in values {
-                    initial[k] = v.clone();
-                }
-            }
-            self.options[self.format] = Self::options_from(f, &initial);
-            self.loaded = true;
-        }
+        self.load(cx.settings);
         let list_open = self.open_select.is_some();
         let plain = ui.input(|i| !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.mac_cmd);
         if plain && ui.input(|i| i.key_pressed(Key::Escape)) {
@@ -422,175 +606,19 @@ impl Dialog for SaveImageDialog {
                 return self.finish(false, cx);
             }
         }
-        if cx.app.now_ms >= self.due {
-            self.render_preview(ui, cx);
-        } else if self.due.is_finite() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(
-                    (self.due - cx.app.now_ms).max(1.0) as u64,
-                ));
-        }
+        self.tick(ui, cx);
         let screen = ui.ctx().content_rect();
         let width = 1500.0_f32.min(screen.width() - 20.0);
         let total_h = 900.0_f32.min(screen.height() - 20.0);
         let body_h = total_h - DIALOG_TITLE_BAR - 48.0 - 2.0 * DIALOG_BORDER;
-        let mut changed = false;
         let mut submit = false;
         let mut cancel = false;
 
-        self.slider.now = cx.app.now_ms;
         let status = self.status.clone();
         // Like onsubmit in SaveImageDialog.js, OK flushes a pending debounce before saving.
         let ready = self.bytes.is_some();
         let mut body = |ui: &mut Ui, r: Rect| {
-            let font = FontSpec::new(DIALOG_FONT_SIZE);
-            let theme = theme::current(ui.ctx());
-            let side = if screen.width() <= 800.0 {
-                210.0
-            } else {
-                250.0
-            };
-            let at = r.min + Vec2::splat(10.0);
-            let right = at.x + side;
-            heading(ui, at, side, "Settings", false);
-            let y = at.y + 29.0;
-            text::draw(
-                ui.painter(),
-                Pos2::new(at.x, y),
-                "File type",
-                font.weight(600),
-                theme.menu_item_text,
-            );
-            let format_rect = Rect::from_min_size(
-                Pos2::new(
-                    at.x,
-                    y + font.resolved_line_height(ui.ctx().pixels_per_point()) + 9.0,
-                ),
-                Vec2::new(side, 31.0),
-            );
-            let labels: Vec<String> = FORMATS
-                .iter()
-                .map(|f| format!("{} ({})", f.name, f.extensions.join(", ")))
-                .collect();
-            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-            let id = ui.scope_id().with("file-type");
-
-            if let Some(pick) = select(
-                ui,
-                &mut self.open_select,
-                id,
-                format_rect,
-                "File type",
-                &labels,
-                self.format,
-                SelectLook {
-                    native: true,
-                    pad_left: 0.0,
-                    font,
-                },
-            ) && pick != self.format
-            {
-                self.format = pick;
-                changed = true;
-            }
-            let info = &FORMATS[self.format];
-            let mut y = format_rect.max.y + 10.0;
-            if let Some(default_quality) = info.quality_default {
-                heading(ui, Pos2::new(at.x, y), side, "Quality", false);
-                y += 28.0;
-                let mut values = pdn_core::effect::Values::new();
-                values.insert(
-                    "quality".into(),
-                    serde_json::json!(self.options[self.format].quality),
-                );
-                let track = Rect::from_min_size(
-                    Pos2::new(at.x + 2.0, y + 0.5),
-                    Vec2::new(side - 78.0, 28.0),
-                );
-                let number = Rect::from_min_size(Pos2::new(right - 68.0, y), Vec2::new(68.0, 29.0));
-                let spec = RangeSpec {
-                    min: 0.0,
-                    max: 100.0,
-                    default: default_quality as f64,
-                    step: 1.0,
-                    role: pdn_core::effect::slider::RangeRole::Slider,
-                    keyboard: pdn_core::effect::slider::SliderKeys::INTEGER,
-                };
-                if range_line(
-                    ui,
-                    &mut self.slider,
-                    "quality",
-                    spec,
-                    &mut values,
-                    track,
-                    number,
-                    None,
-                    Track::Standard,
-                    NumberStyle::LAYER_OPACITY,
-                )
-                .is_some()
-                {
-                    changed = true;
-                }
-                self.options[self.format].quality =
-                    Some(pdn_core::effect::num(&values, "quality") as u8);
-                y += 39.0;
-                if info.id == "jpeg" {
-                    heading(ui, Pos2::new(at.x, y), side, "Chroma Subsampling", false);
-                    y += 28.0;
-                    let current = CHROMA_CHOICES
-                        .iter()
-                        .position(|c| Some(*c) == self.options[self.format].chroma.as_deref())
-                        .unwrap_or(1);
-                    if let Some(pick) = select(
-                        ui,
-                        &mut self.open_select,
-                        ui.scope_id().with("chroma"),
-                        Rect::from_min_size(Pos2::new(at.x, y), Vec2::new(side, 31.0)),
-                        "Chroma Subsampling",
-                        &CHROMA_CHOICES,
-                        current,
-                        SelectLook {
-                            native: true,
-                            pad_left: 0.0,
-                            font,
-                        },
-                    ) {
-                        self.options[self.format].chroma = Some(CHROMA_CHOICES[pick].into());
-                        changed = true;
-                    }
-                    y += 40.0;
-                }
-                let response = dialog_button(
-                    ui,
-                    "defaults",
-                    Rect::from_min_size(
-                        Pos2::new(at.x + (side - 105.0) / 2.0, y + 7.0),
-                        Vec2::new(105.0, 21.0),
-                    ),
-                    "Defaults",
-                    false,
-                );
-                if response.clicked_by(egui::PointerButton::Primary) {
-                    response.request_focus();
-                }
-                inputs::take_enter(ui, &response);
-                if button_clicked(ui, &response) {
-                    self.options[self.format] = Self::default_options(info.id);
-                    changed = true;
-                }
-            }
-            let preview_x = right + 14.0;
-            let preview_w = r.max.x - 10.0 - preview_x;
-            let title = match self.bytes {
-                Some(n) => format!("Preview, file size: {}", file_size(n)),
-                None => "Preview unavailable".into(),
-            };
-            heading(ui, Pos2::new(preview_x, at.y), preview_w, &title, true);
-            self.preview_ui(
-                ui,
-                Rect::from_min_max(Pos2::new(preview_x, at.y + 28.0), r.max - Vec2::splat(10.0)),
-            );
+            self.body(ui, r, 0.0);
         };
         let mut footer = |ui: &mut Ui, r: Rect| {
             let theme = theme::current(ui.ctx());
@@ -645,11 +673,6 @@ impl Dialog for SaveImageDialog {
         let close = frame.closed && (plain || !ui.input(|i| i.key_pressed(Key::Enter)));
         if cancel || close {
             return self.finish(false, cx);
-        }
-        if changed {
-            self.due = cx.app.now_ms + 100.0;
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
         }
         let enter = plain
             && ui.input(|i| i.key_pressed(Key::Enter))

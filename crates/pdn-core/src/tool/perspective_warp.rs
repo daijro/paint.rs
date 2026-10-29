@@ -1,10 +1,10 @@
 //! Ported from PhotoCraft crates/ui-egui/src/perspective_ui.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: one plane, so no linked planes, corner snapping, plane count or Remove Planes, and drawing a plane in Layout replaces it; the plane starts on the pixels' bounds (`warp_source`: the layer, or the selection's pixels lifted) and its corners stay a convex quad; the layer itself shows the warp, rendered by the effect's own kernel (the OK path) instead of a GPU-textured mesh; Straighten keeps a quad that would stop being convex; the options are paint.rs's tool options row (`tool_options`) with Paint.NET's Commit and Cancel buttons, and Crop to plane (not upstream) flattens the plane into the whole image; no control channel or `describe`.
 //!
 //! Layers ▸ Perspective Warp (an Extra) on the canvas, as a mode over the active tool: the
-//! plane's four corners on the image at the current zoom. **Layout** (where it starts): drag the
-//! corners onto the image's own features (a photographed sheet's corners), or drag elsewhere to
-//! draw a new plane; the image stays. **Warp**: drag the corners and the layer follows; Straighten
-//! levels and/or plumbs the plane's edges. Enter (or Commit) applies the warp as one history item
+//! plane's four corners on the image at the current zoom. **Warp** (where it starts: a drag should
+//! warp, not only move an outline): drag the corners and the layer follows; Straighten levels
+//! and/or plumbs the plane's edges. **Layout**: drag the corners onto the image's own features (a
+//! photographed sheet's corners), or drag elsewhere to draw a new plane; the image stays. Enter (or Commit) applies the warp as one history item
 //! named "Perspective Warp", or with Crop to plane the plane flattened into an upright image as
 //! "Perspective Crop"; Esc (or Cancel) leaves the document as it was. Meanwhile the tool takes no
 //! press and no key; a tool or image switch and every commit-first command commit first, an undo
@@ -143,7 +143,7 @@ pub fn begin(app: &mut AppWorkspace) -> bool {
         session,
         src: q,
         dst: q,
-        mode: Mode::Layout,
+        mode: Mode::Warp,
         crop: false,
         drag: None,
         hover: None,
@@ -325,7 +325,7 @@ pub fn status_text(app: &AppWorkspace) -> Option<&'static str> {
             "Perspective Warp: drag the corners onto the image's corners or edges (or drag elsewhere for a new plane), then pick Warp"
         }
         Mode::Warp => {
-            "Perspective Warp: drag the corners and the image follows; Straighten squares the plane; Enter commits, Esc cancels"
+            "Perspective Warp: drag the corners and the image follows (Layout first pins them to a photo's corners); Straighten squares the plane; Enter commits, Esc cancels"
         }
     })
 }
@@ -490,6 +490,7 @@ mod tests {
 
     /// Layout: the plane's corners onto the paper's (the image stays).
     fn place_on_paper(app: &mut AppWorkspace) {
+        set_mode(app, Mode::Layout);
         let start = mode(app).src;
         for k in 0..4 {
             drag(app, start[k], PAPER[k]);
@@ -505,7 +506,7 @@ mod tests {
             .all(|(a, b)| (i32::from(*a) - i32::from(b)).abs() <= 24)
     }
 
-    /// The menu item starts the mode in Layout on the layer's bounds; Layout drags move the
+    /// The menu item starts the mode in Warp on the layer's bounds; Layout drags move the
     /// plane, not the image, and the tool sees none of them; drawing elsewhere replaces the plane.
     #[test]
     fn layout_drags_move_only_the_plane() {
@@ -514,8 +515,9 @@ mod tests {
         let bounds = [[0.0, 0.0], [120.0, 0.0], [120.0, 90.0], [0.0, 90.0]];
         assert_eq!(
             (mode(&app).mode, mode(&app).src, mode(&app).dst),
-            (Mode::Layout, bounds, bounds)
+            (Mode::Warp, bounds, bounds)
         );
+        set_mode(&mut app, Mode::Layout);
         assert_eq!(
             app.tool_type,
             Some(ToolType::PaintBrush),
@@ -742,9 +744,10 @@ mod tests {
     #[test]
     fn pan_and_zoom_keep_the_mode_and_an_image_switch_commits() {
         let mut app = photo();
+        assert!(status_text(&app).is_some_and(|t| t.contains("Enter commits")));
+        set_mode(&mut app, Mode::Layout);
         assert!(status_text(&app).is_some_and(|t| t.contains("pick Warp")));
         set_mode(&mut app, Mode::Warp);
-        assert!(status_text(&app).is_some_and(|t| t.contains("Enter commits")));
         let at = |app: &AppWorkspace| {
             app.active_ws()
                 .unwrap()

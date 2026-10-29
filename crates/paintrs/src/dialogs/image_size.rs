@@ -124,6 +124,22 @@ impl SizeModel {
         (px(self.w), px(self.h))
     }
 
+    /// The size the same choice gives a `w0 × h0` image (Resize on the strip's picked images):
+    /// the percent; else the width, at the image's own aspect ratio when that is maintained, or
+    /// the very size.
+    pub fn applied_to(&self, w0: f64, h0: f64) -> (u32, u32) {
+        let mut m = SizeModel::new(w0, h0, self.maintain);
+        if self.by_percent {
+            m.set_percent(self.percent);
+        } else {
+            m.set_width(self.w);
+            if !self.maintain {
+                m.set_height(self.h);
+            }
+        }
+        m.pixels()
+    }
+
     /// When OK is enabled: 1 ≤ w, h ≤ 262144 and, by percentage, the percent within its range.
     pub fn valid(&self) -> bool {
         let (w, h) = self.pixels();
@@ -327,6 +343,8 @@ pub struct ImageSizeDialog {
     mode: Mode,
     model: SizeModel,
     dpi: f64,
+    /// The resolution it opened with: left alone, the picked images keep their own.
+    dpi0: f64,
     layers: usize,
     /// The remembered choices, once loaded.
     prefs: Option<ImageSizePrefs>,
@@ -358,6 +376,7 @@ impl ImageSizeDialog {
             mode,
             model: SizeModel::new(w as f64, h as f64, false),
             dpi,
+            dpi0: dpi,
             layers: layers.max(1),
             resolution_unit: 0,
             print_unit: 0,
@@ -431,7 +450,19 @@ impl ImageSizeDialog {
                 } else {
                     Gamma::Companded
                 };
-                ops::resize_image(cx.app, w, h, mode, gamma, self.dpi)
+                let mut result = ops::resize_image(cx.app, w, h, mode, gamma, self.dpi);
+                // The strip's picked images: the same choice at their own sizes.
+                let (model, dpi, dpi0) = (&self.model, self.dpi, self.dpi0);
+                cx.app.for_each_picked(|app| {
+                    let Some(d) = app.active_ws().map(|ws| &ws.document) else {
+                        return;
+                    };
+                    let (pw, ph) = model.applied_to(d.width as f64, d.height as f64);
+                    let dpi = if dpi == dpi0 { d.resolution } else { dpi };
+                    let r = ops::resize_image(app, pw, ph, mode, gamma, dpi);
+                    result = result.and(r);
+                });
+                result
             }
             Mode::Canvas => {
                 prefs.canvas_maintain = self.model.maintain;
@@ -1153,6 +1184,21 @@ pub(super) fn footer_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Resize on the strip's picked images: the percent, the width at each image's own aspect
+    /// ratio when maintained, else the very size.
+    #[test]
+    fn the_choice_applies_to_other_sizes() {
+        let mut m = SizeModel::new(800.0, 600.0, true);
+        m.set_width(400.0);
+        assert_eq!(m.applied_to(1000.0, 1000.0), (400, 400));
+        m.set_percent(50.0);
+        assert_eq!(m.applied_to(300.0, 100.0), (150, 50));
+        let mut m = SizeModel::new(800.0, 600.0, false);
+        m.set_width(640.0);
+        m.set_height(480.0);
+        assert_eq!(m.applied_to(1000.0, 1000.0), (640, 480));
+    }
 
     /// ui-drawn-graphics.md §2.11: doubles under the aspect lock; ⌊·⌉ at the end (1601 on 800×600 → 1201).
     #[test]
