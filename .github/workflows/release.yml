@@ -45,6 +45,7 @@ jobs:
           The macOS and Windows builds are unsigned and not notarized: macOS Gatekeeper and Windows SmartScreen will warn on first launch."
 
   linux:
+    name: linux ${{ matrix.arch }}${{ matrix.suffix }}
     needs: release
     strategy:
       fail-fast: false
@@ -146,6 +147,7 @@ jobs:
         run: gh release upload "$TAG" "$DIST.AppImage" --clobber --repo "$GITHUB_REPOSITORY"
 
   windows:
+    name: windows ${{ matrix.arch }}${{ matrix.suffix }}
     needs: release
     strategy:
       fail-fast: false
@@ -201,6 +203,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   macos:
+    name: macos ${{ matrix.arch }}${{ matrix.suffix }}
     needs: release
     strategy:
       fail-fast: false
@@ -286,6 +289,7 @@ jobs:
   # Alpine and other musl Linux: built in an Alpine container (scripts/ci/alpine-build.sh), linked to musl
   # dynamically.
   alpine:
+    name: alpine ${{ matrix.arch }}
     needs: release
     strategy:
       fail-fast: false
