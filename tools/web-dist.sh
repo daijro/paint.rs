@@ -11,9 +11,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-# Budgets in bytes: provisional, from the first measured build (2026-10-24: wasm 20,126,899 raw and 7,414,217
-# gzipped, JS 24,566 gzipped, first load 7,454,421) with about 10% headroom, until measured releases ratchet them.
-WASM_RAW=22000000 WASM_GZ=8100000 JS_GZ=40000 FIRST_LOAD=8200000
+# Budgets in bytes: the first measured build (2026-10-24: wasm 20,126,899 raw and 7,414,217 gzipped, JS 24,566
+# gzipped, first load 7,454,421) with about 10% headroom, ratcheted at 0.7.1 (2026-10-29), whose plug-in host
+# and store grew the wasm 6.7% over 0.6.1: wasm 22,594,161 raw and 8,212,037 gzipped, first load 8,254,118,
+# with about 5% headroom.
+WASM_RAW=23700000 WASM_GZ=8650000 JS_GZ=40000 FIRST_LOAD=8700000
 FILE_MAX=26214400 # 25 MiB, Cloudflare's limit per file
 # The binaryen release this was measured with; another one works, with a note.
 BINARYEN=version_133

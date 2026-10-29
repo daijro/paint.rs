@@ -1,5 +1,9 @@
 name: ci
-on: [push, pull_request]
+# Branch pushes only: a release tag is the commit its push to main already tests.
+on:
+  push:
+    branches: ['**']
+  pull_request:
 permissions:
   contents: read
 
