@@ -173,6 +173,35 @@ or later): Copyright (C) 2010 Lloyd Konneker, Copyright (C) 2000 2008 Paul Franc
 Copyright (C) 2002 Laurent Despeyroux, Copyright (C) 2002 David Rodríguez García. It is
 third-party code, not Paint.NET code.
 
+Basic Antialias and AA's Assistant (`crates/pdn-core/src/effect/forum/edge_aa.rs`) follow pyjo's
+and dpy's Paint.NET plugins from their published behaviour; none of their code or artwork is
+included. AA's Assistant's tap weights (dpy's published coefficients) and the form of its alpha
+curve come from paint.c's clean-room AA's Assistant (https://github.com/vancevoj/paint.c,
+`plugins/aa_assistant/`, at commit `d35776d9`); the code is written anew, and no paint.c code
+is included. paint.c is third-party code, not Paint.NET code. Its license:
+
+> MIT License
+>
+> Copyright (c) 2026 The paint.c authors
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
 Playground live editing: `crates/paintrs/src/live/playground_live.rs` is Playground's shared
 live-editing template (github.com/daijro/openplayground, `patches/live/playground_live.rs`),
 reformatted by rustfmt, with one test's time limit raised for slower test machines, and otherwise
