@@ -137,13 +137,22 @@ the same gray plus as PhotoCraft's additions.
 
 ---
 
-## Forum Plugins (inspired by dpy and Tanel)
+## Forum Plugins (inspired by dpy, pyjo and Tanel)
 
-Two more plugins follow
-[Tanel's photo and color plugins](https://forums.paint.net/topic/11619-tanels-photo-and-color-plugins-2012-03-05/)
-from the Paint.NET forum. They carry the same gray plus. Sharpen+ takes the place of PhotoCraft's
-Unsharp Mask, and Tanel's Color to Alpha is named Color Range to Alpha beside PhotoCraft's Color to
-Alpha.
+Four more plugins follow plugins from the Paint.NET forum. They carry the same gray plus.
+
+Two follow
+[Tanel's photo and color plugins](https://forums.paint.net/topic/11619-tanels-photo-and-color-plugins-2012-03-05/).
+Sharpen+ takes the place of PhotoCraft's Unsharp Mask, and Tanel's Color to Alpha is named Color
+Range to Alpha beside PhotoCraft's Color to Alpha.
+
+The other two plugins smooth the jagged edge of a cut-out object (anti-aliasing):
+
+- **Basic Antialias**, after [pyjo's plugin](https://forums.paint.net/topic/7644-a/). It has no
+  settings and smooths only hard, stair-stepped edges.
+- **AA's Assistant**, from [dpy's plugin pack](https://forums.paint.net/topic/16643-dpys-plugin-pack-2014-05-04/).
+  It softens the edge and fine-tunes its transparency. Run it after Basic Antialias or Feather
+  Object for the smoothest edge.
 
 The text effects of [dpy's plugin pack](https://forums.paint.net/topic/16643-dpys-plugin-pack-2014-05-04/)
 (Circle, Rotate, Spiral and Wave Text) are built into the Text tool instead. Its toolbar has
@@ -154,6 +163,7 @@ angle.
 | Menu | Additions |
 |---|---|
 | Effects ▸ Color | Color Range to Alpha |
+| Effects ▸ Object | AA's Assistant, Basic Antialias |
 | Effects ▸ Photo | Sharpen+ |
 
 ---
@@ -281,9 +291,11 @@ their own licences, listed in [LICENSE.md](LICENSE.md) and [NOTICE.md](NOTICE.md
   with it.
 - **[BoltBait's Paint.NET Plugin Pack](https://www.boltbait.com/pdn/)**, the inspiration for the plugins. No BoltBait code or
   artwork is included.
-- **dpy's plugin pack** and **Tanel's photo and color plugins** from the Paint.NET forum, the
-  inspiration for the Text tool's shapes and the forum plugins. None of their code or artwork is
-  included.
+- **dpy's plugin pack**, **pyjo's Basic Antialias** and **Tanel's photo and color plugins** from
+  the Paint.NET forum, the inspiration for the Text tool's shapes and the forum plugins. None of
+  their code or artwork is included.
+- **[paint.c](https://github.com/vancevoj/paint.c)**, whose clean-room AA's Assistant gave the tap
+  weights and alpha curve of ours (MIT).
 - **[paint.js](https://github.com/LabyStudio/paintdotjs)** by LabyStudio, a reference during
   development. Some code is adapted from it under its MIT licence. None of its artwork is used.
 - **PhotoCraft** by the ArtCraft Team and contributors (MIT), the source of the additions above.

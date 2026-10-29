@@ -1,11 +1,13 @@
 //! Plugins from the Paint.NET forum beside BoltBait's pack (`effect::bb`): Tanel's photo and
 //! colour effects (`tanel`), from the clean-room functional specs in paintdn-plugin-spec
-//! (color-color-to-alpha.md, photo-sharpen-plus.md), and Nicholas Hayes's Content Aware Fill,
+//! (color-color-to-alpha.md, photo-sharpen-plus.md), pyjo's Basic Antialias and dpy's AA's Assistant
+//! (`edge_aa`), from their published behaviour, and Nicholas Hayes's Content Aware Fill,
 //! ported from its source (`content_aware_fill`). dpy's text effects live on in the Text tool's
 //! Angle and Shape (`tool::text::shape`). They carry the plugins' gray plus and their untranslated
 //! names, as BB's do.
 
 pub mod content_aware_fill;
+pub mod edge_aa;
 pub mod tanel;
 
 use super::Category::Effect as E;
@@ -16,9 +18,11 @@ use super::bb::manifest::PluginItem;
 /// menu, whether it opens a dialog, and icon (`assets/icons-svg/plugins/<stem>.svg`; Content Aware
 /// Fill shares Edit ▸ Fill Selection (Content-Aware)'s).
 #[rustfmt::skip]
-pub const MANIFEST: [PluginItem; 3] = [
+pub const MANIFEST: [PluginItem; 5] = [
     PluginItem { id: "tanelColorToAlpha", name: "Color Range to Alpha", category: E("color"), configurable: true, icon: "tanel_color_to_alpha.png" },
     PluginItem { id: "tanelSharpenPlus", name: "Sharpen+", category: E("photo"), configurable: true, icon: "tanel_sharpen_plus.png" },
+    PluginItem { id: edge_aa::AA_ASSISTANT_ID, name: "AA's Assistant", category: E("object"), configurable: true, icon: "dpy_aa_assistant.png" },
+    PluginItem { id: edge_aa::BASIC_ANTIALIAS_ID, name: "Basic Antialias", category: E("object"), configurable: false, icon: "pyjo_basic_antialias.png" },
     PluginItem { id: content_aware_fill::ID, name: "Content Aware Fill", category: E("selection"), configurable: true, icon: "menu_edit_fill_selection_content_aware_icon.png" },
 ];
 
@@ -30,6 +34,7 @@ pub fn manifest(effect_id: &str) -> Option<&'static PluginItem> {
 /// The effects, in manifest order.
 pub fn effects() -> Vec<EffectDef> {
     let mut effects = tanel::effects();
+    effects.extend(edge_aa::effects());
     effects.push(content_aware_fill::effect());
     effects.sort_by_key(|def| {
         MANIFEST

@@ -29,7 +29,8 @@ GPL grants no rights in that material. This notably includes the interface text 
 Other bundled third-party material keeps its own licence, listed in `NOTICE.md`: the fonts, the
 codecs, the MobileSAM model (Apache-2.0, built into the desktop builds and served with the web
 build; its licence in `assets/models/mobilesam/LICENSE`), and the code adapted from PhotoCraft,
-PhotoSauce.MagicScaler, candle and TinyViT.
+PhotoSauce.MagicScaler, candle, TinyViT and paint.c (MIT; AA's Assistant's tap weights and alpha
+curve).
 
 ---
 
