@@ -16,11 +16,13 @@ env:
   TAG: ${{ inputs.tag || github.ref_name }}
   GH_TOKEN: ${{ github.token }}
   BINARYEN_VERSION: version_133
+  # The Alpine jobs' image, pinned by its multi-arch digest.
+  ALPINE_IMAGE: alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
 
 # Release builds only build and package; ci.yml runs the tests. Desktop builds use the
-# `dist` profile (fat LTO, one codegen unit). Each x86-64 download comes twice: baseline x86-64,
-# which runs on any 64-bit CPU, and `-avx2` (x86-64-v3: Haswell / Excavator or newer). Apple
-# Silicon builds use the default aarch64 target, which has NEON.
+# `dist` profile (fat LTO, one codegen unit). Each glibc Linux, Windows and macOS x86-64 download comes
+# twice: baseline x86-64, which runs on any 64-bit CPU, and `-avx2` (x86-64-v3: Haswell / Excavator or
+# newer). Arm builds (Apple Silicon, Linux and Windows arm64) use the default aarch64 target, which has NEON.
 # checkout v7.0.1, the same pin as ci.yml. Uploads use the gh CLI that every runner ships, not a third-party
 # action. Downloads are pinned by version: binaryen in the web job, the dav1d source in the Linux and macOS
 # jobs (scripts/ci/build-dav1d.sh), and appimagetool and the AppImage runtime in the Linux job. All but binaryen
@@ -34,32 +36,49 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 (.AppImage and .tar.gz), Windows x86_64 (.zip), macOS arm64 and x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS arm64 and x86_64 (.tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
 
           The plain x86-64 downloads run on any x86-64 CPU. The -avx2 ones are faster but need AVX2 (most Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If unsure, take the plain one.
 
-          The Linux .AppImage is the whole app in one file: make it executable (chmod +x) and run it. It needs FUSE, which most desktops have. Without FUSE, run it with --appimage-extract-and-run. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).
+          The Linux .AppImage is the whole app in one file: make it executable (chmod +x) and run it. It needs FUSE, which most desktops have. Without FUSE, run it with --appimage-extract-and-run. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later); on Alpine 3.22 or later and other musl systems take the -musl tarball, which needs libstdc++ (apk add libstdc++). The FreeBSD tarball runs on FreeBSD 14.4 or later with an X11 or Wayland desktop.
 
           The macOS and Windows builds are unsigned and not notarized: macOS Gatekeeper and Windows SmartScreen will warn on first launch."
 
-  linux-x86_64:
+  linux:
     needs: release
     strategy:
       fail-fast: false
       matrix:
+        # appimagetool and the AppImage runtime are each arch's own, checked by their release assets' SHA-256.
         include:
-          - {suffix: '', rustflags: ''}
-          - {suffix: '-avx2', rustflags: -Ctarget-cpu=x86-64-v3}
-    # The oldest runner, so the Linux downloads run on glibc 2.35 or newer (Ubuntu 22.04, Debian 12). Its
+          - arch: x86_64
+            runner: ubuntu-22.04
+            suffix: ''
+            rustflags: ''
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+          - arch: x86_64
+            runner: ubuntu-22.04
+            suffix: '-avx2'
+            rustflags: -Ctarget-cpu=x86-64-v3
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            suffix: ''
+            rustflags: ''
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+    # The oldest runners, so the Linux downloads run on glibc 2.35 or newer (Ubuntu 22.04, Debian 12). Their
     # libdav1d is too old for dav1d-sys (1.3 or newer), so the job builds a pinned dav1d and links it
     # statically: the tarball and the AppImage then need no libdav1d from the system.
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
     env:
-      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-linux-x86_64${{ matrix.suffix }}
+      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-linux-${{ matrix.arch }}${{ matrix.suffix }}
       APPIMAGETOOL_VERSION: 1.9.1
-      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_RUNTIME_VERSION: '20251108'
-      APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+      APPIMAGE_RUNTIME_SHA256: ${{ matrix.runtime_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
@@ -73,23 +92,10 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs
         env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
+      # scripts/linux-install-desktop.sh in it adds the launcher entry and the Wayland taskbar icon. The
+      # notices script needs Python 3.11 (tomllib); the runner's python3 is 3.10.
       - name: Package the tarball
-        run: |
-          set -euo pipefail
-          mkdir -p "$DIST"
-          cp target/dist/paintrs LICENSE LICENSE.md NOTICE.md "$DIST/"
-          # scripts/linux-install-desktop.sh adds the launcher entry and the Wayland taskbar icon.
-          mkdir -p "$DIST/scripts" "$DIST/packaging/linux" "$DIST/assets"
-          cp scripts/linux-install-desktop.sh "$DIST/scripts/"
-          cp packaging/linux/paint-rs.desktop packaging/linux/paint-rs.xml "$DIST/packaging/linux/"
-          cp assets/app-icon.svg assets/app-icon.png "$DIST/assets/"
-          cp -R assets/font assets/fonts "$DIST/assets/"
-          test -f "$DIST/assets/font/carlito/Carlito-Regular.ttf"
-          test -f "$DIST/assets/fonts/noto-color-emoji/NotoColorEmoji.ttf"
-          cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
-          # The notices script needs Python 3.11 (tomllib). The runner's python3 is 3.10.
-          python3.11 scripts/ci/collect_notices.py "$DIST/notices" --kind native --metadata metadata.json --dav1d-license "$RUNNER_TEMP/dav1d-notice"
-          tar -czf "$DIST.tar.gz" "$DIST"
+        run: PYTHON=python3.11 sh scripts/ci/package-tarball.sh "$DIST" target/dist/paintrs "$RUNNER_TEMP/dav1d-notice"
       # Before the AppImage steps, so a failure in its tooling can't cost the tarball.
       - name: Upload the tarball
         run: gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
@@ -122,57 +128,59 @@ jobs:
           # Nothing to bundle: every library paintrs links is one the AppImage excludelist leaves to the
           # system (glibc, libstdc++, libgcc_s). The graphics stack, X11 and Wayland are loaded at run time.
           if ldd AppDir/usr/bin/paintrs | awk '{print $1}' |
-            grep -vxE 'linux-vdso\.so\.1|/lib64/ld-linux-x86-64\.so\.2|lib(c|m|dl|pthread|rt|gcc_s|stdc\+\+)\.so\.[0-9]+'; then
+            grep -vxE 'linux-vdso\.so\.1|/lib(64)?/ld-linux-(x86-64|aarch64)\.so\.[0-9]+|lib(c|m|dl|pthread|rt|gcc_s|stdc\+\+)\.so\.[0-9]+'; then
             echo 'paintrs links a library above that the AppImage would have to bundle' >&2
             exit 1
           fi
       - name: Make the AppImage
         run: |
           set -euo pipefail
-          curl --retry 3 -sSfLo "$RUNNER_TEMP/appimagetool" "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-x86_64.AppImage"
-          curl --retry 3 -sSfLo "$RUNNER_TEMP/runtime" "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_VERSION/runtime-x86_64"
+          curl --retry 3 -sSfLo "$RUNNER_TEMP/appimagetool" "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-${{ matrix.arch }}.AppImage"
+          curl --retry 3 -sSfLo "$RUNNER_TEMP/runtime" "https://github.com/AppImage/type2-runtime/releases/download/$APPIMAGE_RUNTIME_VERSION/runtime-${{ matrix.arch }}"
           printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$RUNNER_TEMP/appimagetool" "$APPIMAGE_RUNTIME_SHA256" "$RUNNER_TEMP/runtime" | sha256sum -c
           chmod +x "$RUNNER_TEMP/appimagetool"
           # VERSION becomes the desktop file's X-AppImage-Version. Extract-and-run needs no FUSE on the runner.
-          ARCH=x86_64 VERSION="${TAG#v}" "$RUNNER_TEMP/appimagetool" --appimage-extract-and-run \
+          ARCH=${{ matrix.arch }} VERSION="${TAG#v}" "$RUNNER_TEMP/appimagetool" --appimage-extract-and-run \
             --runtime-file "$RUNNER_TEMP/runtime" AppDir "$DIST.AppImage"
       - name: Upload the AppImage
         run: gh release upload "$TAG" "$DIST.AppImage" --clobber --repo "$GITHUB_REPOSITORY"
 
-  windows-x86_64:
+  windows:
     needs: release
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {suffix: '', rustflags: ''}
-          - {suffix: '-avx2', rustflags: -Ctarget-cpu=x86-64-v3}
-    runs-on: windows-2022
+          - {arch: x86_64, runner: windows-2022, target: x86_64-pc-windows-msvc, triplet: x64-windows, suffix: '', rustflags: ''}
+          - {arch: x86_64, runner: windows-2022, target: x86_64-pc-windows-msvc, triplet: x64-windows, suffix: '-avx2', rustflags: -Ctarget-cpu=x86-64-v3}
+          # The Arm runner has its own Visual Studio, LLVM (ring needs clang there) and vcpkg.
+          - {arch: arm64, runner: windows-11-arm, target: aarch64-pc-windows-msvc, triplet: arm64-windows, suffix: '', rustflags: ''}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
       - name: Install Rust
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
+        run: rustup toolchain install 1.99.1 --profile minimal --target ${{ matrix.target }}
       - name: Install native dav1d and pkgconf
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:x64-windows pkgconf:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:${{ matrix.triplet }} pkgconf:${{ matrix.triplet }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}"
           "PKG_CONFIG=$prefix/tools/pkgconf/pkgconf.exe" >> $env:GITHUB_ENV
           "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> $env:GITHUB_ENV
           "LIB=$prefix/lib;$env:LIB" >> $env:GITHUB_ENV
           "$prefix/bin" >> $env:GITHUB_PATH
           "$env:ProgramFiles/LLVM/bin" >> $env:GITHUB_PATH
-      - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target x86_64-pc-windows-msvc
+      - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target ${{ matrix.target }}
         env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
       - name: Package and upload
         shell: pwsh
         run: |
-          $dir = "paint.rs-$env:TAG-windows-x86_64${{ matrix.suffix }}"
+          $dir = "paint.rs-$env:TAG-windows-${{ matrix.arch }}${{ matrix.suffix }}"
           New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/dist/paintrs.exe, LICENSE, LICENSE.md, NOTICE.md $dir
-          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*dav1d*.dll" $dir
+          Copy-Item target/${{ matrix.target }}/dist/paintrs.exe, LICENSE, LICENSE.md, NOTICE.md $dir
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin/*dav1d*.dll" $dir
           New-Item -ItemType Directory "$dir/assets" | Out-Null
           Copy-Item -Recurse assets/font, assets/fonts "$dir/assets"
           foreach ($f in 'font/carlito/Carlito-Regular.ttf', 'fonts/noto-color-emoji/NotoColorEmoji.ttf') {
@@ -184,7 +192,7 @@ jobs:
           # project, ISC) too. scripts/ci/dav1d-x86inc-notice.txt is that file's licence header, copied from the
           # x86inc.asm in rav1d 1.1.0 (crates.io, commit 782dab21), dav1d's Rust port.
           $notice = "$env:RUNNER_TEMP/dav1d-notice"
-          $copying = Get-Content "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/dav1d/copyright"
+          $copying = Get-Content "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/share/dav1d/copyright"
           @($copying) + '' + @(Get-Content scripts/ci/dav1d-x86inc-notice.txt) | Set-Content $notice
           python scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license $notice
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -249,6 +257,52 @@ jobs:
           # tar keeps the executable modes inside the bundle.
           tar -czf "$dir.tar.gz" "$dir"
           gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+
+  # GitHub has no FreeBSD runners: scripts/ci/freebsd-cross.sh builds on Linux with clang and lld against a
+  # pinned FreeBSD base system, and dav1d is linked statically as on Linux.
+  freebsd:
+    needs: release
+    runs-on: ubuntu-24.04
+    env:
+      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-freebsd-x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - name: Install the cross toolchain and Rust
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm meson ninja-build nasm pkg-config
+          sh scripts/ci/freebsd-cross.sh "$RUNNER_TEMP"
+          rustup toolchain install 1.99.1 --profile minimal --target x86_64-unknown-freebsd
+      - name: Build dav1d
+        run: sh scripts/ci/build-dav1d.sh "$RUNNER_TEMP" "$RUNNER_TEMP/freebsd-bin/meson-cross.ini"
+      - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target x86_64-unknown-freebsd
+      - name: Package and upload
+        run: |
+          set -euo pipefail
+          sh scripts/ci/package-tarball.sh "$DIST" target/x86_64-unknown-freebsd/dist/paintrs "$RUNNER_TEMP/dav1d-notice"
+          gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Alpine and other musl Linux: built in an Alpine container (scripts/ci/alpine-build.sh), linked to musl
+  # dynamically.
+  alpine:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, runner: ubuntu-24.04}
+          - {arch: aarch64, runner: ubuntu-24.04-arm}
+    runs-on: ${{ matrix.runner }}
+    env:
+      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-linux-${{ matrix.arch }}-musl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - name: Build and package in Alpine
+        run: docker run --rm -v "$PWD:/src" -w /src "$ALPINE_IMAGE" sh scripts/ci/alpine-build.sh "$DIST"
+      - name: Upload
+        run: gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
 
   web:
     needs: release

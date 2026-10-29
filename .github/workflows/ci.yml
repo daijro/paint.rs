@@ -40,38 +40,44 @@ jobs:
       - run: python3 -m unittest discover -s tests/ci -v
 
   build-windows:
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64, runner: windows-2022, target: x86_64-pc-windows-msvc, triplet: x64-windows}
+          - {arch: arm64, runner: windows-11-arm, target: aarch64-pc-windows-msvc, triplet: arm64-windows}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
       - name: Install Rust
-        run: rustup toolchain install 1.99.1 --profile minimal --target x86_64-pc-windows-msvc
+        run: rustup toolchain install 1.99.1 --profile minimal --target ${{ matrix.target }}
       - name: Install native dav1d and pkgconf
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:x64-windows pkgconf:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:${{ matrix.triplet }} pkgconf:${{ matrix.triplet }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}"
           "PKG_CONFIG=$prefix/tools/pkgconf/pkgconf.exe" >> $env:GITHUB_ENV
           "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> $env:GITHUB_ENV
           "LIB=$prefix/lib;$env:LIB" >> $env:GITHUB_ENV
           "$prefix/bin" >> $env:GITHUB_PATH
           "$env:ProgramFiles/LLVM/bin" >> $env:GITHUB_PATH
       # This compiles Task33's SM_CXDRAG/SM_CYDRAG and Task56's Windows IPC cfg paths.
-      - run: cargo +1.99.1 build --locked --release -p paintrs --target x86_64-pc-windows-msvc
+      - run: cargo +1.99.1 build --locked --release -p paintrs --target ${{ matrix.target }}
       - name: Stage developer build and notices
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts/windows | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/paintrs.exe artifacts/windows/
-          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*dav1d*.dll" artifacts/windows/
+          Copy-Item target/${{ matrix.target }}/release/paintrs.exe artifacts/windows/
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin/*dav1d*.dll" artifacts/windows/
           cargo +1.99.1 metadata --locked --format-version 1 > metadata.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/collect_notices.py artifacts/windows/notices --kind native --metadata metadata.json --dav1d-license "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/dav1d/copyright"
+          python scripts/ci/collect_notices.py artifacts/windows/notices --kind native --metadata metadata.json --dav1d-license "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/share/dav1d/copyright"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: windows-x86_64-developer-build
+          name: windows-${{ matrix.arch }}-developer-build
           path: artifacts/windows
           if-no-files-found: error
 
@@ -113,6 +119,41 @@ jobs:
           name: macos-${{ matrix.target }}-developer-build
           path: macos-${{ matrix.target }}-developer-build.tar.gz
           if-no-files-found: error
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install native codecs and Rust
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libdav1d-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+          rustup toolchain install 1.99.1 --profile minimal
+      - run: cargo +1.99.1 build --locked --release -p paintrs
+
+  # The release jobs' scripts: the FreeBSD cross build and the Alpine (musl) build and tarball.
+  build-freebsd:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - name: Install the cross toolchain and Rust
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld llvm meson ninja-build nasm pkg-config
+          sh scripts/ci/freebsd-cross.sh "$RUNNER_TEMP"
+          rustup toolchain install 1.99.1 --profile minimal --target x86_64-unknown-freebsd
+      - run: sh scripts/ci/build-dav1d.sh "$RUNNER_TEMP" "$RUNNER_TEMP/freebsd-bin/meson-cross.ini"
+      - run: cargo +1.99.1 build --locked --release -p paintrs --target x86_64-unknown-freebsd
+
+  build-alpine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      # The release workflow's ALPINE_IMAGE.
+      - run: docker run --rm -v "$PWD:/src" -w /src alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh scripts/ci/alpine-build.sh paint.rs-ci-linux-x86_64-musl
 
   build-web:
     runs-on: ubuntu-24.04

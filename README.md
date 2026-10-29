@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/app-icon.svg" width="160" alt="paint.rs logo"></p>
 <h1 align="center">paint.rs</h1>
-<p align="center">An open source, clean-room reimplementation of Paint.NET for Windows, macOS, Linux, and the web.</p>
+<p align="center">An open source, clean-room reimplementation of Paint.NET for Windows, macOS, Linux, FreeBSD, and the web.</p>
 
 <p align="center"><img src="assets/screenshots/01-main.png" width="100%" alt="paint.rs with a picture made in the app: a sky with a sun flare, a blossoming tree, and the title as an editable text layer"></p>
 
@@ -35,7 +35,7 @@ paintings from The Metropolitan Museum of Art, and a CC0 photograph from Wikimed
 ## What it is
 
 paint.rs is a free and open source photo editor in the style of Paint.NET, for Windows, macOS,
-Linux and the web. It adds features Paint.NET is missing: Linux support, content-aware fill, object
+Linux, FreeBSD and the web. It adds features Paint.NET is missing: Linux support, content-aware fill, object
 selection, healing brushes, many more effects, text that stays editable after you place it, etc.
 
 Lasso Select's **Click points** option places the outline point by point, as Photoshop's Polygonal
@@ -181,8 +181,8 @@ write a plug-in.
 
 ## Download
 
-Builds for Linux, Windows, macOS and the web are on the
-[Releases](https://github.com/daijro/paint.rs/releases) page.
+Builds for Linux (x86-64 and arm64, glibc or musl), Windows (x86-64 and arm64), macOS, FreeBSD and the
+web are on the [Releases](https://github.com/daijro/paint.rs/releases) page.
 
 - The plain x86-64 downloads run on any x86-64 CPU. The `-avx2` ones are faster but need AVX2 (most
   Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If
@@ -191,6 +191,9 @@ Builds for Linux, Windows, macOS and the web are on the
   run it. It needs FUSE, which most desktops have. Without FUSE, run it with
   `--appimage-extract-and-run`. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04,
   Debian 12, Fedora 36 or later).
+- On Alpine (3.22 or newer) and other musl systems, take the `-musl.tar.gz`. It needs libstdc++
+  (`apk add libstdc++`).
+- The FreeBSD `.tar.gz` runs on FreeBSD 14.4 or newer with an X11 or Wayland desktop.
 - For a launcher entry and the taskbar icon, use AppImageLauncher, or run the AppImage once with
   `--appimage-extract` and then
   `sh squashfs-root/usr/share/paint.rs/scripts/linux-install-desktop.sh /path/to/the.AppImage`.
@@ -203,8 +206,8 @@ Builds for Linux, Windows, macOS and the web are on the
   its tablet protocol. Started from a terminal, it prints which it chose and why. If the pen still
   does nothing, start it with `PAINTRS_X11=1` to open through Xwayland anyway.
   `PAINTRS_NATIVE_WAYLAND=1` keeps Wayland, where a pen can't paint.
-- In the Linux `.tar.gz` and the Windows `.zip`, keep `paintrs` beside its `assets` folder. The
-  fonts load from there.
+- In the Linux, Alpine and FreeBSD `.tar.gz` and the Windows `.zip`, keep `paintrs` beside its
+  `assets` folder. The fonts load from there.
 - If the Windows app doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach
   that file when you report the problem. Setting the environment variable
   `PAINTRS_RENDERER=software` makes it draw without the graphics card. If there is no log at all,
