@@ -332,6 +332,8 @@ enum Event {
 }
 pub struct AssetLibrary {
     store: AssetStore,
+    /// The installed plug-ins and looks (Settings ▸ Plugins), stored beside the packs.
+    pub plugins: super::plugins::PluginManager,
     pub packs: Vec<PackRecord>,
     pub shapes: Vec<ShapeRecord>,
     pub errors: Vec<String>,
@@ -346,7 +348,12 @@ pub struct AssetLibrary {
 impl AssetLibrary {
     pub fn new(store: AssetStore) -> Self {
         let load = store.load();
+        let plugins = super::plugins::PluginManager::new(match &store {
+            AssetStore::Memory(_) => super::plugins::PluginStore::memory(),
+            _ => super::plugins::PluginStore::system(),
+        });
         Self {
+            plugins,
             store,
             packs: vec![],
             shapes: vec![],
@@ -581,6 +588,12 @@ impl AssetLibrary {
         }));
     }
     pub fn poll(&mut self, ctx: &egui::Context, app: &mut AppWorkspace, prefs: &mut Prefs) {
+        if self.plugins.poll() {
+            ctx.request_repaint();
+        }
+        if self.plugins.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(10));
+        }
         if let Some(result) = self.pending.as_mut().and_then(Pending::poll) {
             self.pending = None;
             let (result, warnings) = match result {

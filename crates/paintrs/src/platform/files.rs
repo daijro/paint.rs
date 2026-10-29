@@ -699,6 +699,7 @@ pub fn dropped(files: Vec<PickedFile>) -> DropBatch {
                     Some("application/zip" | "application/x-zip-compressed")
                 )
         }),
+        ("plugins", |f| super::plugins::accepted(&f.name)),
         ("fonts", |f| {
             is_font(&f.name)
                 || f.mime

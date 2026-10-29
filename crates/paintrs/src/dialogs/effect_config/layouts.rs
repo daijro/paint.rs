@@ -430,7 +430,7 @@ fn tab_id(ui: &Ui, key: &str, i: usize) -> Id {
 /// AccessKit's) picks a tab; Enter on the focused tab is the dialog's OK (`inputs::toggled`'s
 /// rule). Returns the picked tab.
 #[allow(clippy::too_many_arguments)]
-fn tab_strip(
+pub(in crate::dialogs) fn tab_strip(
     ui: &mut Ui,
     r: Rect,
     x0: f32,
@@ -1766,8 +1766,9 @@ mod tests {
         assert!(rows.iter().any(|k| k == "at"), "{rows:?}");
     }
 
-    /// Camera Raw's dialog (R11): the Basic, Tone, HSL and Detail tabs, HSL and Detail with their
-    /// own strips, and the tallest page fits the dialog without clipping.
+    /// Camera Raw's dialog (R11): the Basic, Tone, Curve, HSL, Grading and Detail tabs, HSL,
+    /// Grading and Detail with their own strips, and the tallest page fits the dialog without
+    /// clipping.
     #[test]
     fn camera_raw_dialog_lists_its_tabs_and_fits() {
         let def = pdn_core::effect::find("pcCameraRaw").unwrap();
@@ -1801,16 +1802,45 @@ mod tests {
             ]
         );
         v.insert("tab".into(), json!(2));
+        assert_eq!(
+            rows(&v),
+            [
+                "[tab:2]",
+                "curveHighlights",
+                "curveLights",
+                "curveDarks",
+                "curveShadows",
+                "curveShadowSplit",
+                "curveMidtoneSplit",
+                "curveHighlightSplit",
+                "pointCurve~"
+            ]
+        );
+        v.insert("tab".into(), json!(3));
         v.insert("hslTab".into(), json!(1));
         let hsl = rows(&v);
         assert_eq!(hsl.len(), 10);
-        assert_eq!(hsl[..3], ["[tab:2]", "[hslTab:1]", "satRed"]);
-        v.insert("tab".into(), json!(3));
+        assert_eq!(hsl[..3], ["[tab:3]", "[hslTab:1]", "satRed"]);
+        v.insert("tab".into(), json!(4));
+        v.insert("gradeTab".into(), json!(2));
+        assert_eq!(
+            rows(&v),
+            [
+                "[tab:4]",
+                "[gradeTab:2]",
+                "gradeHighlightHue",
+                "gradeHighlightSat",
+                "gradeHighlightLum",
+                "gradeBlending",
+                "gradeBalance"
+            ]
+        );
+        v.insert("tab".into(), json!(5));
         v.insert("detailTab".into(), json!(1));
         assert_eq!(
             rows(&v),
             [
-                "[tab:3]",
+                "[tab:5]",
                 "[detailTab:1]",
                 "noiseLuminance",
                 "noiseLuminanceDetail",

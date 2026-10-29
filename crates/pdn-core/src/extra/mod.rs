@@ -14,6 +14,7 @@ pub mod nonlocal;
 pub mod par;
 pub mod patch;
 pub mod perspective;
+pub mod plugins;
 pub mod poisson;
 pub mod puppet;
 pub mod remove;

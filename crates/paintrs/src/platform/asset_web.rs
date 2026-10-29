@@ -7,6 +7,8 @@ extern "C" {
     async fn asset_read(source: &JsValue, max_bytes: f64) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch,js_name=assetLoad)]
     async fn asset_load() -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch,js_name=pluginLoad)]
+    async fn plugin_load_js() -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch,js_name=assetChange)]
     async fn asset_change(
         store: &str,
@@ -37,6 +39,37 @@ pub(super) async fn change(k: Kind, change: Change) -> Result<(), String> {
         Change::Clear => ("clear", String::new(), String::new()),
     };
     asset_change(k.store(), action, &id, &json)
+        .await
+        .map_err(message)?;
+    Ok(())
+}
+
+/// The installed plug-in and look files (`platform::plugins`).
+pub async fn plugin_load() -> Result<Vec<(String, Vec<u8>)>, String> {
+    #[derive(serde::Deserialize)]
+    struct Record {
+        id: String,
+        data: Vec<u8>,
+    }
+    let raw = plugin_load_js()
+        .await
+        .map_err(message)?
+        .as_string()
+        .ok_or("Invalid plug-in records")?;
+    let records: Vec<Record> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    Ok(records.into_iter().map(|r| (r.id, r.data)).collect())
+}
+
+pub async fn plugin_put(file: &str, bytes: &[u8]) -> Result<(), String> {
+    let json = serde_json::json!({"id": file, "data": bytes}).to_string();
+    asset_change("plugins", "put", "", &json)
+        .await
+        .map_err(message)?;
+    Ok(())
+}
+
+pub async fn plugin_remove(file: &str) -> Result<(), String> {
+    asset_change("plugins", "delete", file, "")
         .await
         .map_err(message)?;
     Ok(())

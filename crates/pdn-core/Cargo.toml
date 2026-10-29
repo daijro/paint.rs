@@ -22,6 +22,11 @@ roxmltree = "0.20"
 tiny-skia.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Installed WebAssembly filter plug-ins (`extra::plugins`, PhotoCraft's host): a pure-Rust
+# interpreter, so the web build runs them too. `validate` keeps full module validation on.
+# `portable-dispatch` (a loop, as PhotoCraft has it): wasmi's tail-call dispatch is faster but grows
+# the native stack without optimisation, so a long-running plug-in could abort a debug build.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
 ttf-parser = "0.25"
 # Task35: interpreted text outlines and managed per-unit Unicode categories (already locked).
 skrifa = "0.44"
@@ -84,6 +89,8 @@ getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 
 # `sam`'s test pinning the bundled weights' SHA-256: dev-only, in no shipped build.
 [dev-dependencies]
+# WebAssembly text -> binary for the plug-in host's hostile-module fixtures.
+wat = "1.228"
 sha2 = "0.10"
 
 [[test]]

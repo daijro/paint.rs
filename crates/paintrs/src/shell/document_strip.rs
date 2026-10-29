@@ -308,7 +308,7 @@ impl DocumentStrip {
     /// picked ones, or every open image when none is picked.
     pub fn batch_export_targets(&self, app: &AppWorkspace) -> Vec<u64> {
         let picked = |i: usize, ws: &DocumentWorkspace| {
-            app.picked.is_empty() || app.active == Some(i) || app.picked.contains(&ws.document.id)
+            app.picked.is_empty() || app.active == Some(i) || app.picked.contains(&ws.id)
         };
         let docs = app.documents.iter().enumerate();
         docs.filter(|&(i, ws)| picked(i, ws))
@@ -638,7 +638,7 @@ impl DocumentStrip {
             ctx.accesskit_node_builder(item.id, |node| {
                 node.set_role(egui::accesskit::Role::Tab);
                 node.set_label(app.documents[i].get_friendly_name());
-                node.set_selected(active == Some(i) || app.picked.contains(&id));
+                node.set_selected(active == Some(i) || app.picked.contains(&app.documents[i].id));
             });
             let pad = rects[i].shrink(DOCUMENT_ITEM_BORDER);
             let (header_h, header_pad) = DOCUMENT_HEADER;
@@ -659,7 +659,7 @@ impl DocumentStrip {
             let hovered = item.hovered() || close.hovered();
             let state = if active == Some(i) {
                 ItemState::Selected
-            } else if app.picked.contains(&id) {
+            } else if app.picked.contains(&app.documents[i].id) {
                 ItemState::Picked
             } else if hovered || dragging == Some(id) {
                 ItemState::Hover
@@ -1284,7 +1284,7 @@ mod tests {
         let strip = DocumentStrip::default();
         assert_eq!(strip.batch_export_targets(&app), ws);
         app.set_active_document_workspace(Some(2));
-        app.picked = vec![app.documents[0].document.id];
+        app.picked = vec![app.documents[0].id];
         assert_eq!(strip.batch_export_targets(&app), [ws[0], ws[2]]);
     }
 

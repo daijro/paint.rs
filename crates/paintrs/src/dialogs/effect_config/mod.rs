@@ -17,6 +17,7 @@
 mod color_popup;
 mod external;
 mod layouts;
+pub(in crate::dialogs) use layouts::tab_strip;
 mod preview;
 mod special;
 mod widgets;
@@ -47,7 +48,7 @@ use crate::kit::text::{self, FontSpec};
 use crate::kit::window::{DialogFrameState, Footer, dialog_button, dialog_frame_with};
 use crate::theme::{self, *};
 use color_popup::ColorPopup;
-use external::ExternalInput;
+use external::{ExternalInput, PresetLoad};
 use preview::JobResult;
 #[cfg(target_arch = "wasm32")]
 use preview::SlicedSeam;
@@ -97,6 +98,8 @@ pub struct EffectConfigDialog {
     candidate: Option<PickedFile>,
     /// The open chooser, apart from the load it does not retire.
     chooser: Option<Pending<Result<Vec<PickedFile>, String>>>,
+    /// Load Preset...'s file work (`IndirectUi::preset`).
+    preset_load: Option<PresetLoad>,
     /// The current inline file error, until a later load succeeds or resolves to no image.
     file_error: Option<String>,
     /// Final-only Repeat: a failed load cancels it with a message (Q65).
@@ -245,6 +248,7 @@ impl EffectConfigDialog {
             file_source: FileSource::default(),
             candidate: None,
             chooser: None,
+            preset_load: None,
             file_error: None,
             repeat: false,
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -599,6 +603,7 @@ impl Dialog for EffectConfigDialog {
             .and_then(|s| s.def.indirect)
             .map_or(Help::None, |u| u.help);
         let effect_id = self.session.as_ref().map(|s| s.def.id);
+        let preset = self.preset().is_some();
         let preview_before = self.preview;
         let mut preview = self.preview;
         let primary = cx.app.primary_color;
@@ -618,7 +623,7 @@ impl Dialog for EffectConfigDialog {
             changed = merge(changed, c);
         };
         let mut footer = |ui: &mut Ui, f: Rect| {
-            action = footer_ui(ui, f, layout, &mut preview);
+            action = footer_ui(ui, f, layout, preset, &mut preview);
         };
         let chart = layout == Some(DialogLayout::Chart);
         let mut draw_parent = || {
@@ -727,8 +732,10 @@ impl Dialog for EffectConfigDialog {
                 }
                 changed = merge(changed, Some(false));
             }
+            Some(FooterAction::LoadPreset) => self.choose_preset(),
             _ => {}
         }
+        changed = merge(changed, self.poll_preset());
         // A value event this frame retires the chooser instead (R156).
         if changed.is_none() {
             changed = self.poll_chooser();
@@ -768,13 +775,16 @@ enum FooterAction {
     Cancel,
     Reset,
     Auto,
+    LoadPreset,
 }
 
-/// `createFooter`: Preview (generic dialogs) or the layout's left button, then OK and Cancel.
+/// `createFooter`: Preview (generic dialogs) or the layout's left button, then a plugin's Load
+/// Preset... (`preset`), then OK and Cancel.
 fn footer_ui(
     ui: &mut Ui,
     f: Rect,
     layout: Option<DialogLayout>,
+    preset: bool,
     preview: &mut bool,
 ) -> Option<FooterAction> {
     let theme = theme::current(ui.ctx());
@@ -847,6 +857,16 @@ fn footer_ui(
             spec,
             theme.menu_item_text,
         );
+        x = label_rect.max.x + 2.0 * EFFECT_FOOTER_GAP;
+    }
+    if preset {
+        let label = "Load Preset...";
+        let w = crate::kit::window::dialog_button_width(ui.painter(), label, min_w);
+        let r = Rect::from_min_size(Pos2::new(x, by), Vec2::new(w, bh));
+        let response = dialog_button(ui, "load-preset", r, label, false);
+        if button_clicked(ui, &response) {
+            action = Some(FooterAction::LoadPreset);
+        }
     }
     let ok_w = crate::kit::window::dialog_button_width(ui.painter(), "OK", min_w);
     let cancel_w = crate::kit::window::dialog_button_width(ui.painter(), "Cancel", min_w);

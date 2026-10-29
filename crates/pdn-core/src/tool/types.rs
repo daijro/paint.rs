@@ -219,7 +219,7 @@ impl ToolType {
             Zoom | Pan => json!({"renderingQuality": "high"}),
             Move => json!({
                 "resampling": "highQualityCubic", "gammaCorrected": true, "renderingQuality": "high",
-                "distort": false, "snap": false
+                "distort": false, "snap": false, "transparent": false
             }),
             PaintBucket => json!({
                 "tolerance": 50, "floodMode": "contiguous", "fillStyle": "solid",
@@ -1056,7 +1056,11 @@ pub fn option_definitions_with_fonts(
         d
     };
     // Snap (Extra, `tool::snap`): the move tools' drags lock onto edges and centres.
-    let snap = || extra_checkbox("Snap", "snap");
+    let snap = || {
+        let mut d = extra_checkbox("Snap", "snap");
+        d.icon = Some("snap_icon.png");
+        d
+    };
     let combine = || {
         icon_group(
             "",
@@ -1381,6 +1385,13 @@ pub fn option_definitions_with_fonts(
             quality(),
             section(finish()),
             section(snap()),
+            // Extra: MS Paint's Transparent selection (`MoveRender::key`).
+            section({
+                let mut d = extra_checkbox("Transparent selection", "transparent");
+                d.icon = Some("transparent_selection_icon.png");
+                d.title = "Pixels of the secondary colour stay behind, and the moved pixels lie over\nwhat is under them";
+                d
+            }),
             // R230: the Extra option after Paint.NET's row: what a corner handle does.
             section({
                 let mut d = icon_choice(

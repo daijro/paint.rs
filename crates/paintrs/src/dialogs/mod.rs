@@ -27,6 +27,7 @@ pub mod image_size;
 pub mod layer_properties;
 pub mod liquify;
 pub mod new_file;
+pub mod plugin_store;
 pub mod save_image;
 pub mod settings;
 pub mod task;

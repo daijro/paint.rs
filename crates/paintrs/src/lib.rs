@@ -446,6 +446,7 @@ impl PaintApp {
             }
             let busy = match page {
                 "shapes" | "assets" => self.asset_library.busy(),
+                "plugins" => self.asset_library.plugins.busy(),
                 "fonts" => self.fonts.importing(),
                 _ => unreachable!("classified drop page"),
             };
@@ -458,6 +459,10 @@ impl PaintApp {
         if let Some(step) = batch.imports.front() {
             let ready = match step.page {
                 "shapes" | "assets" => self.asset_library.ready() && !self.asset_library.busy(),
+                "plugins" => {
+                    let plugins = &self.asset_library.plugins;
+                    plugins.ready() && !plugins.busy()
+                }
                 "fonts" => !self.fonts.importing(),
                 _ => unreachable!("classified drop page"),
             };
@@ -476,6 +481,7 @@ impl PaintApp {
             }
             match step.page {
                 "shapes" | "assets" => self.asset_library.import(step.page, step.files),
+                "plugins" => self.asset_library.plugins.import(step.files),
                 "fonts" => self.fonts.import(step.files),
                 _ => unreachable!("classified drop page"),
             }

@@ -472,7 +472,19 @@ impl ImageSizeDialog {
                     Anchor::from_id(ANCHOR_CHOICES[self.anchor].0).unwrap_or(Anchor::TopLeft);
                 let fill = CanvasFill::from_id(FILL_CHOICES[self.fill].0)
                     .unwrap_or(CanvasFill::Transparent);
-                ops::change_canvas_size(cx.app, w, h, anchor, fill, self.dpi)
+                let mut result = ops::change_canvas_size(cx.app, w, h, anchor, fill, self.dpi);
+                // The strip's picked images: the same choice at their own sizes.
+                let (model, dpi, dpi0) = (&self.model, self.dpi, self.dpi0);
+                cx.app.for_each_picked(|app| {
+                    let Some(d) = app.active_ws().map(|ws| &ws.document) else {
+                        return;
+                    };
+                    let (pw, ph) = model.applied_to(d.width as f64, d.height as f64);
+                    let dpi = if dpi == dpi0 { d.resolution } else { dpi };
+                    let r = ops::change_canvas_size(app, pw, ph, anchor, fill, dpi);
+                    result = result.and(r);
+                });
+                result
             }
         };
         prefs.save(cx.prefs);

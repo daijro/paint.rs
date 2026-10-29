@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# The plug-in store browser's catalog and downloads: ureq on native, the browser's fetch on web.
+ehttp = "0.5"
+# LightCraft preset and look bundles (.zip) from the store; the version pdn-core already locks.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 pdn-core = { path = "../pdn-core" }
 egui = { workspace = true, features = ["web_file"] }
 eframe.workspace = true

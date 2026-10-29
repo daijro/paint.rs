@@ -7,6 +7,7 @@ pub mod fonts;
 pub mod icon_packs;
 pub mod info_pages;
 pub mod keyboard;
+pub mod plugins;
 pub mod shapes;
 pub mod tools;
 pub mod ui;
@@ -41,6 +42,7 @@ pub const ENTRIES: &[(&str, &str, &str)] = &[
     ("fonts", "Fonts", "text_tool_icon.png"),
     ("shapes", "Shapes", "shapes_tool_icon.png"),
     ("assets", "Icon Packs", "menu_file_open_icon.png"),
+    ("plugins", "Plugins", "settings_plugins_24.png"),
     (
         "keyboard",
         "Keyboard Shortcuts",
@@ -499,6 +501,7 @@ impl SettingsState {
             "fonts" => fonts::show(&mut entry),
             "shapes" => shapes::show(&mut entry),
             "assets" => icon_packs::show(&mut entry),
+            "plugins" => plugins::show(&mut entry),
             "pen" => info_pages::pen(&mut entry),
             "graphics" => info_pages::graphics(&mut entry),
             "colorManagement" => info_pages::color_management(&mut entry),

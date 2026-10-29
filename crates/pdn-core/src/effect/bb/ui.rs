@@ -50,6 +50,19 @@ pub struct IndirectUi {
     /// failing. Only ever moves forward: the chosen family stays for the session.
     pub font_fallback: fn(&mut Values) -> bool,
     pub help: Help,
+    /// A "Load Preset..." footer button (Camera Raw's `.xmp` develop presets).
+    pub preset: Option<Preset>,
+}
+
+/// A preset file the footer's "Load Preset..." button reads: `extension`, which `filter` names in
+/// the chooser, at most `max_bytes` long; `load` sets the values from its bytes or says why it
+/// cannot.
+#[derive(Clone, Copy, Debug)]
+pub struct Preset {
+    pub filter: &'static str,
+    pub extension: &'static str,
+    pub max_bytes: usize,
+    pub load: fn(&[u8], &mut Values) -> Result<(), String>,
 }
 
 impl IndirectUi {
@@ -66,6 +79,7 @@ impl IndirectUi {
         fonts: |_| vec![],
         font_fallback: |_| false,
         help: Help::Window(HelpWindow::Standard),
+        preset: None,
     };
 
     /// Control `key`'s presentation; `ControlUi::DEFAULT` when it is not listed.

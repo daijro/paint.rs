@@ -1,4 +1,4 @@
-//! Ported from PhotoCraft crates/algo/src/camera_raw.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: only the stages the dialog shows (white balance and exposure, dehaze, tone, presence, Color Mixer, detail): the tone curves, Color Grading, vignette, grain, curve validation and serde dropped with their fields; 8-bit sRGB only (the `float` flag, `encoding_gamma` with `Encoding`, and `pixel_scale` dropped: results always clamp to 0–1, scale is 1); `develop` takes an `Interrupt`, polled between stages and per reference value of the local Laplacian filter, and returns `Err(Cancelled)` when it fires; rows through `extra::par`, and `box_mean`'s column pass and the sharpening mask map over `extra::par::map` as upstream; `luminance_points` and `detail` poll the `Interrupt` too; the sRGB curves are `pixel::gamma::*_f32` (upstream's `photo_util`/`photocraft_color` ones, same formulas); `bilinear` reads one channel; `gauss_box_radii` is `fx::util`'s (upstream's `fxutil` one), and so is `smoothstep` (upstream's own unguarded copy gives the same for the one rising ramp it draws); tests: `defaults_are_identity` and `basic_panel_moves_the_right_way` unchanged, `curves_hsl_grading_detail_effects` keeps its HSL and detail checks as `hsl_and_detail` (its noise from `extra::rng::splitmix64`), the curve, float and validation tests dropped.
+//! Ported from PhotoCraft crates/algo/src/camera_raw.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: only the stages the dialog shows (white balance and exposure, dehaze, tone, presence, tone curve, Color Mixer, Color Grading, detail): vignette, grain, serde and `validate`/`validate_changes` dropped with their fields, and `validate_curve` moved to `xmp`, its one caller; `curve_lut` is private (no curve editor draws it); 8-bit sRGB only (the `float` flag, `encoding_gamma` with `Encoding`, and `pixel_scale` dropped: results always clamp to 0–1, scale is 1); `develop` takes an `Interrupt`, polled between stages and per reference value of the local Laplacian filter, and returns `Err(Cancelled)` when it fires; rows through `extra::par`, and `box_mean`'s column pass and the sharpening mask map over `extra::par::map` as upstream; `luminance_points` and `detail` poll the `Interrupt` too; the sRGB curves are `pixel::gamma::*_f32` (upstream's `photo_util`/`photocraft_color` ones, same formulas); `bilinear` reads one channel; `gauss_box_radii` is `fx::util`'s (upstream's `fxutil` one), and so is `smoothstep` (upstream's own unguarded copy gives the same for the rising ramps it draws); tests: `defaults_are_identity` and `basic_panel_moves_the_right_way` unchanged, `curves_hsl_grading_detail_effects` keeps its curve, HSL, grading and detail checks as `curves_hsl_grading_and_detail` (its noise from `extra::rng::splitmix64`), the float and validation tests dropped; `split_toning_tints_shadows_and_highlights` and `a_curve_point_moves_its_tones` added.
 //!
 //! Camera Raw: a float develop pipeline over RGB pixels.
 //!
@@ -15,9 +15,14 @@
 //!    Photoshop's Camera Raw applies them: image-adaptive global curves measured on Photoshop 25.4
 //!    (see `whites_blacks`).
 //! 4. **Presence**: Vibrance (weighted toward less saturated colours) and Saturation.
-//! 5. **Color Mixer (HSL)**: eight hue bands (red, orange, yellow, green, aqua, blue, purple,
+//! 5. **Tone Curve**: parametric regions (Highlights, Lights, Darks, Shadows with movable splits)
+//!    then point curves (master and per channel), monotone cubic interpolation (F. Fritsch,
+//!    R. Carlson, *Monotone Piecewise Cubic Interpolation*, SIAM J. Numer. Anal. 1980).
+//! 6. **Color Mixer (HSL)**: eight hue bands (red, orange, yellow, green, aqua, blue, purple,
 //!    magenta) with hat-function weights on the hue circle.
-//! 6. **Detail**: sharpening on luminance (unsharp mask with Detail as halo control and Masking as
+//! 7. **Color Grading**: shadows / midtones / highlights / global wheels (hue, saturation,
+//!    luminance) with Blending and Balance.
+//! 8. **Detail**: sharpening on luminance (unsharp mask with Detail as halo control and Masking as
 //!    an edge mask) and noise reduction (luminance by guided filter, colour by chroma blur).
 
 #![allow(clippy::needless_range_loop)] // index loops mirror the maths (pixels × channels)
@@ -31,6 +36,24 @@ use crate::pixel::gamma::{
 
 mod local_tone;
 mod whites_blacks;
+pub mod xmp;
+
+/// One colour grading wheel.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Wheel {
+    /// Degrees 0..360.
+    pub hue: f32,
+    /// 0..=100.
+    pub sat: f32,
+    /// −100..=100.
+    pub lum: f32,
+}
+
+impl Wheel {
+    fn neutral(&self) -> bool {
+        self.sat == 0.0 && self.lum == 0.0
+    }
+}
 
 /// Camera Raw settings in Adobe Camera Raw's slider units.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,10 +72,29 @@ pub struct CameraRaw {
     pub dehaze: f32,
     pub vibrance: f32,
     pub saturation: f32,
+    // Tone curve
+    pub curve_highlights: f32,
+    pub curve_lights: f32,
+    pub curve_darks: f32,
+    pub curve_shadows: f32,
+    /// Region splits (percent).
+    pub curve_splits: [f32; 3],
+    /// Point curves as `[input, output]` in 0..=255 (empty = linear).
+    pub point_curve: Vec<[f32; 2]>,
+    pub point_curve_red: Vec<[f32; 2]>,
+    pub point_curve_green: Vec<[f32; 2]>,
+    pub point_curve_blue: Vec<[f32; 2]>,
     // Color mixer: red, orange, yellow, green, aqua, blue, purple, magenta.
     pub hsl_hue: [f32; 8],
     pub hsl_sat: [f32; 8],
     pub hsl_lum: [f32; 8],
+    // Color grading
+    pub grade_shadows: Wheel,
+    pub grade_midtones: Wheel,
+    pub grade_highlights: Wheel,
+    pub grade_global: Wheel,
+    pub grade_blending: f32,
+    pub grade_balance: f32,
     // Detail
     pub sharpen_amount: f32,
     pub sharpen_radius: f32,
@@ -80,9 +122,24 @@ impl Default for CameraRaw {
             dehaze: 0.0,
             vibrance: 0.0,
             saturation: 0.0,
+            curve_highlights: 0.0,
+            curve_lights: 0.0,
+            curve_darks: 0.0,
+            curve_shadows: 0.0,
+            curve_splits: [25.0, 50.0, 75.0],
+            point_curve: Vec::new(),
+            point_curve_red: Vec::new(),
+            point_curve_green: Vec::new(),
+            point_curve_blue: Vec::new(),
             hsl_hue: [0.0; 8],
             hsl_sat: [0.0; 8],
             hsl_lum: [0.0; 8],
+            grade_shadows: Wheel::default(),
+            grade_midtones: Wheel::default(),
+            grade_highlights: Wheel::default(),
+            grade_global: Wheel::default(),
+            grade_blending: 50.0,
+            grade_balance: 0.0,
             sharpen_amount: 0.0,
             sharpen_radius: 1.0,
             sharpen_detail: 25.0,
@@ -254,6 +311,122 @@ fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f
     (0..w * h).map(|k| ma[k] * i[k] + mb[k]).collect()
 }
 
+/// Monotone cubic (Fritsch–Carlson) through `pts` (x ascending, 0..=1), evaluated into a LUT.
+fn curve_lut(pts: &[[f32; 2]], n: usize) -> Vec<f32> {
+    let mut p: Vec<[f32; 2]> = pts.iter().map(|q| [q[0] / 255.0, q[1] / 255.0]).collect();
+    p.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    p.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6);
+    if p.len() < 2 {
+        return (0..n).map(|k| k as f32 / (n - 1) as f32).collect();
+    }
+    let m = p.len();
+    let d: Vec<f32> = (0..m - 1)
+        .map(|k| (p[k + 1][1] - p[k][1]) / (p[k + 1][0] - p[k][0]).max(1e-6))
+        .collect();
+    let mut t = vec![0.0f32; m];
+    t[0] = d[0];
+    t[m - 1] = d[m - 2];
+    for k in 1..m - 1 {
+        t[k] = if d[k - 1] * d[k] <= 0.0 {
+            0.0
+        } else {
+            (d[k - 1] + d[k]) / 2.0
+        };
+    }
+    for k in 0..m - 1 {
+        if d[k] == 0.0 {
+            t[k] = 0.0;
+            t[k + 1] = 0.0;
+            continue;
+        }
+        let (a, b) = (t[k] / d[k], t[k + 1] / d[k]);
+        let s = a * a + b * b;
+        if s > 9.0 {
+            let tau = 3.0 / s.sqrt();
+            t[k] = tau * a * d[k];
+            t[k + 1] = tau * b * d[k];
+        }
+    }
+    (0..n)
+        .map(|i| {
+            let x = i as f32 / (n - 1) as f32;
+            if x <= p[0][0] {
+                return p[0][1];
+            }
+            if x >= p[m - 1][0] {
+                return p[m - 1][1];
+            }
+            let k = p.windows(2).position(|wv| x <= wv[1][0]).unwrap_or(m - 2);
+            let hh = p[k + 1][0] - p[k][0];
+            let s = (x - p[k][0]) / hh;
+            let (h00, h10, h01, h11) = (
+                2.0 * s * s * s - 3.0 * s * s + 1.0,
+                s * s * s - 2.0 * s * s + s,
+                -2.0 * s * s * s + 3.0 * s * s,
+                s * s * s - s * s,
+            );
+            (h00 * p[k][1] + h10 * hh * t[k] + h01 * p[k + 1][1] + h11 * hh * t[k + 1])
+                .clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
+fn lut_eval(lut: &[f32], v: f32) -> f32 {
+    if !(0.0..=1.0).contains(&v) {
+        // Extend linearly outside.
+        return if v < 0.0 {
+            v + lut[0]
+        } else {
+            lut[lut.len() - 1] + (v - 1.0)
+        };
+    }
+    let x = v * (lut.len() - 1) as f32;
+    let i = (x as usize).min(lut.len() - 2);
+    let t = x - i as f32;
+    lut[i] + (lut[i + 1] - lut[i]) * t
+}
+
+/// Parametric tone curve as a LUT (regions split at `splits`, each slider ±100 moves its region
+/// by up to a quarter of the range, smoothly).
+fn parametric_lut(p: &CameraRaw, n: usize) -> Vec<f32> {
+    let s = p.curve_splits.map(|v| v.clamp(5.0, 95.0) / 100.0);
+    let centres = [
+        s[0] / 2.0,
+        (s[0] + s[1]) / 2.0,
+        (s[1] + s[2]) / 2.0,
+        (s[2] + 1.0) / 2.0,
+    ];
+    let amounts = [
+        p.curve_shadows,
+        p.curve_darks,
+        p.curve_lights,
+        p.curve_highlights,
+    ];
+    let widths = [
+        s[0].max(0.1),
+        (s[1] - s[0]).max(0.1),
+        (s[2] - s[1]).max(0.1),
+        (1.0 - s[2]).max(0.1),
+    ];
+    let mut lut: Vec<f32> = (0..n)
+        .map(|i| {
+            let x = i as f32 / (n - 1) as f32;
+            let mut y = x;
+            for k in 0..4 {
+                let d = (x - centres[k]) / (widths[k] * 1.2);
+                let bump = (-d * d * 2.0).exp() * x * (1.0 - x) * 4.0;
+                y += amounts[k] / 100.0 * 0.25 * bump;
+            }
+            y.clamp(0.0, 1.0)
+        })
+        .collect();
+    // Keep it monotone.
+    for i in 1..n {
+        lut[i] = lut[i].max(lut[i - 1]);
+    }
+    lut
+}
+
 fn rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
     let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));
     let d = mx - mn;
@@ -327,6 +500,33 @@ impl CameraRaw {
             .chain(&self.hsl_lum)
             .all(|v| *v == 0.0)
     }
+    fn grade_neutral(&self) -> bool {
+        self.grade_shadows.neutral()
+            && self.grade_midtones.neutral()
+            && self.grade_highlights.neutral()
+            && self.grade_global.neutral()
+    }
+    fn parametric_neutral(&self) -> bool {
+        [
+            self.curve_highlights,
+            self.curve_lights,
+            self.curve_darks,
+            self.curve_shadows,
+        ]
+        .iter()
+        .all(|v| *v == 0.0)
+    }
+    fn curves_neutral(&self) -> bool {
+        self.parametric_neutral()
+            && [
+                &self.point_curve,
+                &self.point_curve_red,
+                &self.point_curve_green,
+                &self.point_curve_blue,
+            ]
+            .iter()
+            .all(|c| is_linear(c))
+    }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
         self.wb_neutral()
@@ -334,11 +534,17 @@ impl CameraRaw {
             && self.dehaze == 0.0
             && self.vibrance == 0.0
             && self.saturation == 0.0
+            && self.curves_neutral()
             && self.hsl_neutral()
+            && self.grade_neutral()
             && self.sharpen_amount == 0.0
             && self.noise_luminance == 0.0
             && self.noise_color == 0.0
     }
+}
+
+fn is_linear(c: &[[f32; 2]]) -> bool {
+    c.len() < 2 || c.iter().all(|p| (p[0] - p[1]).abs() < 1e-3)
 }
 
 /// Camera Raw's white-balance channel gains for Temperature / Tint (−100…100), relative to the
@@ -439,10 +645,43 @@ pub fn develop(
         );
         whites_blacks::apply(px, w, xw, xb);
     }
-    // 4–5: per-pixel colour stages.
-    if p.vibrance != 0.0 || p.saturation != 0.0 || !p.hsl_neutral() {
+    // 4–7: per-pixel colour stages.
+    let need_color = p.vibrance != 0.0
+        || p.saturation != 0.0
+        || !p.curves_neutral()
+        || !p.hsl_neutral()
+        || !p.grade_neutral();
+    if need_color {
         stop.check()?;
+        let par = (!p.parametric_neutral()).then(|| parametric_lut(p, 1024));
+        let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, 1024));
+        let (master, cr, cg, cb) = (
+            pts(&p.point_curve),
+            pts(&p.point_curve_red),
+            pts(&p.point_curve_green),
+            pts(&p.point_curve_blue),
+        );
         let hsl = !p.hsl_neutral();
+        let grade = !p.grade_neutral();
+        let wheel_tint = |wh: &Wheel| -> [f32; 3] {
+            let c = hsv_to_rgb(wh.hue, 1.0, 1.0);
+            let l = luma(c);
+            [c[0] - l, c[1] - l, c[2] - l].map(|v| v * wh.sat / 100.0 * 0.3)
+        };
+        let tints = [
+            wheel_tint(&p.grade_shadows),
+            wheel_tint(&p.grade_midtones),
+            wheel_tint(&p.grade_highlights),
+            wheel_tint(&p.grade_global),
+        ];
+        let lums = [
+            p.grade_shadows.lum,
+            p.grade_midtones.lum,
+            p.grade_highlights.lum,
+            p.grade_global.lum,
+        ];
+        let blend = 0.15 + p.grade_blending.clamp(0.0, 100.0) / 100.0 * 0.35;
+        let bal = p.grade_balance.clamp(-100.0, 100.0) / 100.0 * 0.25;
         pixel_rows(px, w, |_, row| {
             for q in row.iter_mut() {
                 let mut c = [q[0], q[1], q[2]];
@@ -457,6 +696,17 @@ pub fn develop(
                         + p.saturation / 100.0
                         + p.vibrance / 100.0 * (1.0 - sat) * (1.0 - skin);
                     c = c.map(|v| l + (v - l) * k.max(0.0));
+                }
+                if let Some(lut) = &par {
+                    c = c.map(|v| lut_eval(lut, v));
+                }
+                if let Some(lut) = &master {
+                    c = c.map(|v| lut_eval(lut, v));
+                }
+                for (ch, lut) in [&cr, &cg, &cb].iter().enumerate() {
+                    if let Some(lut) = lut {
+                        c[ch] = lut_eval(lut, c[ch]);
+                    }
                 }
                 if hsl {
                     let [hh, s, v] = rgb_to_hsv(c.map(|x| x.max(0.0)));
@@ -480,13 +730,29 @@ pub fn develop(
                         c = out.map(|x| x * k);
                     }
                 }
+                if grade {
+                    let l = luma(c).clamp(0.0, 1.0);
+                    let sh = 1.0 - smoothstep(0.0, 0.5 + bal + blend, l);
+                    let hi = smoothstep(0.5 + bal - blend, 1.0, l);
+                    let mid = (1.0 - sh - hi).max(0.0);
+                    let masks = [sh, mid, hi, 1.0];
+                    for k in 0..4 {
+                        for ch in 0..3 {
+                            c[ch] += masks[k] * tints[k][ch];
+                        }
+                        if lums[k] != 0.0 {
+                            let f = 2f32.powf(masks[k] * lums[k] / 100.0 * 0.6);
+                            c = c.map(|x| x * f);
+                        }
+                    }
+                }
                 q[0] = c[0];
                 q[1] = c[1];
                 q[2] = c[2];
             }
         });
     }
-    // 6. Detail.
+    // 8. Detail.
     if p.noise_luminance > 0.0 || p.noise_color > 0.0 || p.sharpen_amount > 0.0 {
         stop.check()?;
         detail(px, w, h, p, stop)?;
@@ -869,7 +1135,14 @@ mod tests {
     }
 
     #[test]
-    fn hsl_and_detail() {
+    fn curves_hsl_grading_and_detail() {
+        // Monotone cubic LUT through the points.
+        let lut = curve_lut(
+            &[[0.0, 0.0], [64.0, 40.0], [192.0, 220.0], [255.0, 255.0]],
+            256,
+        );
+        assert!((lut[64] - 40.0 / 255.0).abs() < 0.01 && (lut[192] - 220.0 / 255.0).abs() < 0.01);
+        assert!(lut.windows(2).all(|p| p[1] >= p[0]));
         // Band weights sum to one everywhere.
         for hh in (0..360).step_by(7) {
             let s: f32 = band_weights(hh as f32).iter().sum();
@@ -902,6 +1175,38 @@ mod tests {
             },
         );
         assert!((b[0][2] - 0.8).abs() < 1e-4, "blues untouched");
+        // Grading: blue shadows tint dark pixels, leave bright ones nearly alone.
+        let mut g: Vec<[f32; 4]> = vec![[0.1, 0.1, 0.1, 1.0], [0.95, 0.95, 0.95, 1.0]];
+        develop(
+            &mut g,
+            2,
+            1,
+            &CameraRaw {
+                grade_shadows: Wheel {
+                    hue: 220.0,
+                    sat: 80.0,
+                    lum: 0.0,
+                },
+                ..Default::default()
+            },
+        );
+        assert!(
+            g[0][2] > g[0][0] + 0.05 && (g[1][2] - g[1][0]).abs() < 0.02,
+            "{g:?}"
+        );
+        // Point curve + parametric.
+        let mut c = img(w, h);
+        develop(
+            &mut c,
+            w,
+            h,
+            &CameraRaw {
+                point_curve: vec![[0.0, 30.0], [255.0, 255.0]],
+                curve_shadows: 50.0,
+                ..Default::default()
+            },
+        );
+        assert!(c.iter().all(|q| q[1] >= 30.0 / 255.0 - 1e-4));
         // Noise reduction reduces variance; sharpening increases it.
         let noisy: Vec<[f32; 4]> = (0..w * h)
             .map(|i| {
@@ -937,6 +1242,75 @@ mod tests {
             },
         );
         assert!(var(&sh) > var(&noisy));
+    }
+
+    /// Split toning as LightCraft's example preset sets it (blue shadows at 215°, gold highlights
+    /// at 45°): a dark grey turns blue, a light grey gold, and each wheel leaves the other end
+    /// nearly alone.
+    #[test]
+    fn split_toning_tints_shadows_and_highlights() {
+        let greys = |p: &CameraRaw| {
+            let mut g = vec![[0.1f32, 0.1, 0.1, 1.0], [0.9, 0.9, 0.9, 1.0]];
+            develop(&mut g, 2, 1, p);
+            g
+        };
+        let wheel = |hue, sat| Wheel { hue, sat, lum: 0.0 };
+        let shadows = greys(&CameraRaw {
+            grade_shadows: wheel(215.0, 60.0),
+            ..Default::default()
+        });
+        assert!(shadows[0][2] > shadows[0][0] + 0.05, "{shadows:?}");
+        assert!((shadows[1][2] - shadows[1][0]).abs() < 0.02, "{shadows:?}");
+        let highlights = greys(&CameraRaw {
+            grade_highlights: wheel(45.0, 60.0),
+            ..Default::default()
+        });
+        assert!(highlights[1][0] > highlights[1][2] + 0.05, "{highlights:?}");
+        assert!(
+            (highlights[0][0] - highlights[0][2]).abs() < 0.02,
+            "{highlights:?}"
+        );
+        // A hue without saturation is neutral: the image is untouched.
+        let still = greys(&CameraRaw {
+            grade_shadows: wheel(215.0, 0.0),
+            grade_balance: 40.0,
+            ..Default::default()
+        });
+        assert_eq!(still, vec![[0.1, 0.1, 0.1, 1.0], [0.9, 0.9, 0.9, 1.0]]);
+    }
+
+    /// A point curve that lifts its middle point brightens the midtones and keeps its ends; a red
+    /// channel curve moves red only; the parametric Shadows slider lifts the darks.
+    #[test]
+    fn a_curve_point_moves_its_tones() {
+        let ramp: Vec<[f32; 4]> = (0..=16)
+            .map(|i| {
+                let v = i as f32 / 16.0;
+                [v, v, v, 1.0]
+            })
+            .collect();
+        let run = |p: CameraRaw| {
+            let mut a = ramp.clone();
+            develop(&mut a, 17, 1, &p);
+            a
+        };
+        let lifted = run(CameraRaw {
+            point_curve: vec![[0.0, 0.0], [128.0, 170.0], [255.0, 255.0]],
+            ..Default::default()
+        });
+        assert!(lifted[8][1] > ramp[8][1] + 0.1, "{:?}", lifted[8]);
+        assert!(lifted[0][1] < 1e-4 && lifted[16][1] > 1.0 - 1e-4);
+        let red = run(CameraRaw {
+            point_curve_red: vec![[0.0, 0.0], [128.0, 170.0], [255.0, 255.0]],
+            ..Default::default()
+        });
+        assert!(red[8][0] > ramp[8][0] + 0.1 && red[8][1] == ramp[8][1] && red[8][2] == ramp[8][2]);
+        let shadows = run(CameraRaw {
+            curve_shadows: 100.0,
+            ..Default::default()
+        });
+        assert!(shadows[2][1] > ramp[2][1] + 0.02, "{:?}", shadows[2]);
+        assert!((shadows[16][1] - 1.0).abs() < 1e-4);
     }
 
     /// Each stage stops at its next poll once cancelled.

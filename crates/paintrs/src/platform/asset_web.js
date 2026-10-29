@@ -1,6 +1,6 @@
 // AssetPackManager.js / ShapeManager.js IndexedDB wire records, paintdotjs b4e6fc5.
 // Resolve mutations on transaction commit, never on the individual request's success.
-const names = {packs: "paintdotjs-asset-packs", shapes: "paintdotjs-shapes"};
+const names = {packs: "paintdotjs-asset-packs", shapes: "paintdotjs-shapes", plugins: "paintrs-plugins"};
 function open(store) {
     return new Promise((resolve,reject) => {
         if (!names[store]) {reject(new Error("Unknown asset store")); return;}
@@ -54,12 +54,19 @@ export async function assetChange(store,action,id,json) {
         const tx=db.transaction(store,"readwrite");
         tx.oncomplete=()=>resolve();tx.onabort=()=>reject(tx.error||new Error("Asset transaction aborted"));tx.onerror=()=>reject(tx.error||new Error("Asset transaction failed"));
         try {const object=tx.objectStore(store);
-            if(action==="put"){const value=JSON.parse(json);if(store==="packs")for(const file of value.files)file.data=new Uint8Array(file.data).buffer;object.put(value);}
+            if(action==="put"){const value=JSON.parse(json);if(store==="packs")for(const file of value.files)file.data=new Uint8Array(file.data).buffer;if(store==="plugins")value.data=new Uint8Array(value.data).buffer;object.put(value);}
             else if(action==="delete")object.delete(id);
             else if(action==="clear")object.clear();
             else throw new Error("Unknown asset operation");
         }catch(error){tx.abort();reject(error);}
     });}finally{db.close();}
+}
+
+// Installed plug-ins and looks: [{id: file name, data: bytes}] as JSON.
+export async function pluginLoad() {
+    const db=await open("plugins");
+    try {return JSON.stringify((await records(db,"plugins")).map(r=>({id:r.id,data:Array.from(new Uint8Array(r.data))})));}
+    finally{db.close();}
 }
 
 // Called after the chooser returns retained sources, before allocating their bytes.

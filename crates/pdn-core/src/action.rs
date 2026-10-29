@@ -1309,6 +1309,7 @@ static PLUGIN_ACTIONS: std::sync::LazyLock<Vec<ActionDef>> = std::sync::LazyLock
         .collect();
     for (id, label) in [
         ("effects.fill.submenu", "Fill"),
+        ("effects.plugins.submenu", "Plugins"),
         ("effects.selection.submenu", "Selection"),
         ("effects.textFormations.submenu", "Text Formations"),
     ] {
@@ -1390,6 +1391,7 @@ pub fn get(id: &str) -> Option<&'static ActionDef> {
         .chain(PLUGIN_ACTIONS.iter())
         .chain(EXTRA_ACTIONS.iter())
         .find(|a| a.id == id)
+        .or_else(|| crate::effect::wasm::action(id))
 }
 
 /// The manifest row behind an Extra menu action; `None` for every other action.
@@ -1413,6 +1415,23 @@ pub fn plugin_item(action_id: &str) -> Option<&'static crate::effect::bb::manife
         .strip_prefix("adjustment.")
         .or(action_id.strip_prefix("menu.effects."))?;
     crate::effect::plugin_manifest(id)
+}
+
+/// Undo (`forward` false) or Redo on each image picked in the strip besides the active one, in
+/// its own history: a batch effect or command left one entry in each, and they go back together.
+fn step_picked(app: &mut AppWorkspace, forward: bool) {
+    let active = app.active_ws().map(|ws| ws.id);
+    let picked = app.picked.clone();
+    let mine = |ws: &&mut crate::document::workspace::DocumentWorkspace| {
+        picked.contains(&ws.id) && Some(ws.id) != active
+    };
+    for ws in app.documents.iter_mut().filter(mine) {
+        if forward {
+            ws.redo();
+        } else {
+            ws.undo();
+        }
+    }
 }
 
 /// `getDisplayName()`: a `CallbackAction`'s label or name callback, a translated name, else the
@@ -1896,12 +1915,14 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
         "menu.edit.undo" => {
             if !crate::live::takes_undo(app, false, true) {
                 app.undo();
+                step_picked(app, false);
             }
             Done
         }
         "menu.edit.redo" => {
             if !crate::live::takes_undo(app, true, true) {
                 app.redo();
+                step_picked(app, true);
             }
             Done
         }
@@ -2014,8 +2035,17 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
             ops::crop_to_selection(app);
             Done
         }
+        // The images picked in the strip get the same command (`AppWorkspace::for_each_picked`).
         "menu.image.flatten" => {
             ops::flatten_document(app);
+            app.for_each_picked(|app| {
+                if app
+                    .active_ws()
+                    .is_some_and(|ws| ws.document.layers.size() > 1)
+                {
+                    ops::flatten_document(app);
+                }
+            });
             Done
         }
         "menu.image.flipHorizontal"
@@ -2026,12 +2056,16 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
             if let Some(t) = ops::Transform::from_key(&id["menu.image.".len()..]) {
                 // An allocation failure leaves the document unchanged.
                 let _ = ops::transform_document(app, t);
+                app.for_each_picked(|app| {
+                    let _ = ops::transform_document(app, t);
+                });
             }
             Done
         }
         "menu.layers.flipHorizontal" | "menu.layers.flipVertical" | "menu.layers.rotate180" => {
             if let Some(t) = ops::Transform::from_key(&id["menu.layers.".len()..]) {
                 ops::transform_active_layer(app, t);
+                app.for_each_picked(|app| ops::transform_active_layer(app, t));
             }
             Done
         }
@@ -2736,6 +2770,33 @@ mod tests {
     }
 
     /// File ▸ Batch Export: an Extra, enabled while an image is open.
+    /// Image ▸ Rotate runs on the images picked in the strip too, an unpicked one stays; Undo and
+    /// Redo step them together.
+    #[test]
+    fn image_commands_run_on_the_picked_images() {
+        let mut app = AppWorkspace::default();
+        for _ in 0..3 {
+            app.create_blank_document_in_new_workspace(8, 6, 96.0, true);
+        }
+        app.set_active_document_workspace(Some(0));
+        app.picked = vec![app.documents[2].id];
+        let size = |app: &AppWorkspace, i: usize| {
+            let d = &app.documents[i].document;
+            (d.width, d.height)
+        };
+        perform(&mut app, "menu.image.rotate90CW");
+        assert_eq!(
+            (size(&app, 0), size(&app, 1), size(&app, 2)),
+            ((6, 8), (8, 6), (6, 8))
+        );
+        assert_eq!(app.active, Some(0));
+        // Undo and Redo step the picked images together.
+        perform(&mut app, "menu.edit.undo");
+        assert_eq!((size(&app, 0), size(&app, 2)), ((8, 6), (8, 6)));
+        perform(&mut app, "menu.edit.redo");
+        assert_eq!((size(&app, 0), size(&app, 2)), ((6, 8), (6, 8)));
+    }
+
     #[test]
     fn batch_export_needs_an_image() {
         let mut app = crate::app::AppWorkspace::default();

@@ -11,8 +11,10 @@
 //! point; Alt+click draws a straight segment and Alt+drag a freehand one (its release closes the
 //! border, as every drag's does). Backspace or Delete removes the last fastening point. A click on
 //! the start, a double-click or Enter closes the border along the edges (Alt: with a straight
-//! segment); Esc cancels. With the Extra Click points option (`clickPoints`) a later drag's release
-//! fastens a point instead of closing, as Lasso Select's Click points does (`click_lasso`). `[` and `]` change the detection width by 1. While it is drawn the
+//! segment); Esc cancels. With the Extra Click points option (`clickPoints`) points fasten only on
+//! clicks, the border from the last one runs along the edges near the straight line to the pointer
+//! (wherever the pointer went) and a later drag's release fastens a point instead of closing, as
+//! Lasso Select's Click points does (`click_lasso`). `[` and `]` change the detection width by 1. While it is drawn the
 //! border shows as Lasso Select's selection does: tinted, with marching ants.
 
 use std::collections::VecDeque;
@@ -267,9 +269,23 @@ impl MagneticLassoTool {
         }));
     }
 
+    /// Click points (after the opening press): the border runs from the last fastening point along
+    /// the edges near the straight line to the pointer, wherever the pointer went, and only clicks
+    /// fasten points.
+    fn straight_guide(&self, app: &AppWorkspace) -> bool {
+        click_points(app, ToolType::MagneticLasso) && !self.opening && !self.freehand
+    }
+
     /// Takes the pointer's waiting steps, tracing up to `budget` of them.
     fn catch_up(&mut self, app: &AppWorkspace, mut budget: usize) {
         let s = settings(app);
+        if self.straight_guide(app) {
+            // Only the pointer's last position matters: one trace.
+            if let Some(q) = std::mem::take(&mut self.pending).pop_back() {
+                self.follow(app, q, s, false);
+            }
+            return;
+        }
         while budget > 0
             && let Some(q) = self.pending.pop_front()
         {
@@ -302,6 +318,17 @@ impl MagneticLassoTool {
         // Off the image the tracer reads the trail clamped onto its edge; a trail left outside
         // no longer matched the border, so each fastening traced back along the edge again.
         let q = inside(app, q);
+        if self.straight_guide(app) {
+            // ponytail: the whole segment retraces once a frame, ~5 ms per 256 px of a
+            // diagonal; fastening behind the pointer or `extra::job`'s thread if long ones lag.
+            let Some(&from) = self.path.last() else {
+                return;
+            };
+            self.trail = vec![from, q];
+            let target = self.snap(app, q, s);
+            self.live = self.trace(app, from, target, &[from, q], s);
+            return;
+        }
         self.extend_trail(q, s);
         let target = self.snap(app, q, s);
         let every = spacing(app);
@@ -703,6 +730,32 @@ mod tests {
         assert!(undo_names(&app).is_empty(), "the border is still open");
         drive_tool(&mut app, ToolType::MagneticLasso, &[Ev::Key("Enter")]);
         assert_eq!(undo_names(&app), ["Magnetic Lasso"]);
+    }
+
+    /// Click points: after a click the border runs along the edge near the straight line to the
+    /// pointer, not along the pointer's detour, and nothing fastens until the next click.
+    #[test]
+    fn click_points_trace_along_the_straight_line() {
+        let mut app = square_doc();
+        app.tool_settings
+            .set(ToolType::MagneticLasso, "clickPoints", true.into());
+        let events = [
+            Ev::Down(52.0, 37.0, Left),
+            Ev::Up(52.0, 37.0, Left),
+            // Down the left edge, across the bottom and up to the top-right corner.
+            Ev::Move(47.0, 75.0),
+            Ev::Move(47.0, 113.0),
+            Ev::Move(133.0, 113.0),
+            Ev::Move(128.0, 37.0),
+        ];
+        drive_tool(&mut app, ToolType::MagneticLasso, &events);
+        let mut live = vec![];
+        with_tool::<MagneticLassoTool>(&mut app, |t, _| live = t.live.clone());
+        let (anchors, _) = border(&mut app);
+        assert_eq!(anchors, [0]);
+        assert!(magnetic::length(&live) > 60.0, "{live:?}");
+        let top = SQUARE.1;
+        assert!(live.iter().all(|q| (q[1] - top).abs() < 2.0), "{live:?}");
     }
 
     /// (fastening points, border points) of the border being drawn.

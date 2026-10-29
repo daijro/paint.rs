@@ -14,7 +14,7 @@
 //! owner (`shell::tool_menu`) opens the popup, which paints last over everything.
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Ui, Vec2};
 use pdn_core::pixel::content::ContentBlendMode;
-use pdn_core::tool::types::OptionDef;
+use pdn_core::tool::types::{OptionDef, OptionKind};
 
 use super::aa;
 use super::glyph::{self, ArrowDir};
@@ -1278,7 +1278,15 @@ pub fn font_style_toggle(
 /// 58 for "Finish".
 pub fn finish_width(def: &OptionDef) -> f32 {
     let t = text::gdi_width(def.label.unwrap_or_default()) + TOOL_TEXT_EXTRA;
-    (2.0 * TOOL_FACE_PAD + TOOL_BUTTON_ICON + t).max(TOOL_BUTTON)
+    (2.0 * TOOL_FACE_PAD + TOOL_BUTTON_ICON + checkbox_icon(def) + t).max(TOOL_BUTTON)
+}
+
+/// The room a checkbox's own icon (`def.icon`, after the box) takes.
+fn checkbox_icon(def: &OptionDef) -> f32 {
+    match (def.kind, def.icon) {
+        (OptionKind::Checkbox, Some(_)) => TOOL_BUTTON_ICON + 2.0,
+        _ => 0.0,
+    }
 }
 
 /// `createActionControl` (Finish): an image button with a label (§8.2: the image at 2, the
@@ -1296,7 +1304,8 @@ pub fn finish_button(
 }
 
 /// An on/off option (`OptionKind::Checkbox`): the Finish button with the app's checkbox in the
-/// image slot and the option's name after it. A click anywhere on it flips the value (true).
+/// image slot, then the option's icon if it has one, and its name. A click anywhere on it flips
+/// the value (true).
 pub fn checkbox_button(
     ui: &mut Ui,
     rect: Rect,
@@ -1305,7 +1314,8 @@ pub fn checkbox_button(
     backdrop: Color32,
     enabled: bool,
 ) -> bool {
-    let response = labelled_button(ui, rect, def, backdrop, enabled, Lead::Checkbox(checked));
+    let lead = Lead::Checkbox(checked, def.icon);
+    let response = labelled_button(ui, rect, def, backdrop, enabled, lead);
     ui.ctx().accesskit_node_builder(response.id, |n| {
         n.set_role(egui::accesskit::Role::CheckBox);
         n.set_label(def.label.unwrap_or_default());
@@ -1320,7 +1330,7 @@ pub fn checkbox_button(
 /// What a labelled toolbar button shows before its text.
 enum Lead<'a> {
     Icon(&'a str),
-    Checkbox(bool),
+    Checkbox(bool, Option<&'a str>),
 }
 
 /// [`finish_button`] and [`checkbox_button`]: hover frame, `lead`, then `def.label`.
@@ -1376,21 +1386,25 @@ fn labelled_button(
         Vec2::splat(icon),
     );
     let clip = painter.with_clip_rect(snapped.shrink(b).intersect(painter.clip_rect()));
+    let filter = if enabled {
+        Filter::None
+    } else {
+        Filter::Grayscale
+    };
+    let mut text_x = icon_rect.max.x;
     match lead {
-        Lead::Icon(name) => {
-            let filter = if enabled {
-                Filter::None
-            } else {
-                Filter::Grayscale
-            };
-            img::paint_icon(&clip, name, snap(&clip, icon_rect), fill, filter);
-        }
-        Lead::Checkbox(on) => {
+        Lead::Icon(name) => img::paint_icon(&clip, name, snap(&clip, icon_rect), fill, filter),
+        Lead::Checkbox(on, own) => {
             let boxed = Rect::from_center_size(icon_rect.center(), Vec2::splat(CHECKBOX_SIZE));
             super::inputs::paint_checkbox(&clip, boxed, on, fill);
+            if let Some(name) = own {
+                let at = icon_rect.translate(Vec2::new(icon + 2.0, 0.0));
+                img::paint_icon(&clip, name, snap(&clip, at), fill, filter);
+                text_x = at.max.x;
+            }
         }
     }
-    let text_box = Rect::from_min_max(Pos2::new(icon_rect.max.x, content.min.y), content.max);
+    let text_box = Rect::from_min_max(Pos2::new(text_x, content.min.y), content.max);
     let top = centered_text_top(content.min.y, content.height(), font, ppp);
     let x = text_box.min.x + (text_box.width() - text::css_width(label, font.size)) / 2.0;
     text::draw(

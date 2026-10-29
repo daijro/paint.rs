@@ -729,7 +729,7 @@ impl Shell {
                 }
             }
             StripAction::Pick { i, range } => {
-                let id = |i: usize| app.documents[i].document.id;
+                let id = |i: usize| app.documents[i].id;
                 match (range, app.active) {
                     (true, Some(a)) => {
                         let (lo, hi) = (a.min(i), a.max(i));

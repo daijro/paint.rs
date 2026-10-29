@@ -13,7 +13,8 @@ use crate::document::surface::Surface;
 use crate::extra::perspective::Homography;
 use crate::pixel::gamma::quantize;
 use crate::pixel::mask::{Mask, SelectionQuality, rasterize};
-use crate::pixel::{IntRect, Px, ops::move_pixel};
+use crate::pixel::ops::{move_pixel, move_pixel_over};
+use crate::pixel::{IntRect, Px};
 use crate::render::display::{SPAN_GAP, SpanMask, for_bands, to_srgb8};
 use crate::resample::magic::CATMULL_ROM;
 use crate::resample::{Gamma, PremulImage, pdn::box_average, widen};
@@ -154,6 +155,28 @@ pub struct MoveRender<'a> {
     pub quality: SelectionQuality,
     pub final_mask: &'a Mask,
     pub base_mask: Option<&'a Mask>,
+    /// Extra (the Transparent option): pixels of this colour stay where they are, neither carried
+    /// nor vacated, and the carried pixels lie over what is under them (MS Paint's Transparent
+    /// selection).
+    pub key: Option<Px>,
+}
+
+impl MoveRender<'_> {
+    /// The base hole at (x, y): none under a pixel of the Transparent colour.
+    fn hole(&self, x: i32, y: i32) -> u8 {
+        match self.base_mask {
+            Some(m) if self.key != Some(self.layer.pixel(x as u32, y as u32)) => m.get(x, y),
+            _ => 0,
+        }
+    }
+
+    /// The moved pixel: [`move_pixel`], or laid over with the Transparent option.
+    fn place(&self, l: Px, x: Px, tc: u8, bm: u8) -> Px {
+        match self.key {
+            Some(_) => move_pixel_over(l, x, tc, bm),
+            None => move_pixel(l, x, tc, bm),
+        }
+    }
 }
 
 /// The source the D2D-path samplers read: Q in premultiplied f32, pre-scaled by 8 per axis while
@@ -181,7 +204,7 @@ fn mode(p: &MoveRender) -> MoveInterpolation {
 
 /// What `Sampled` is made from: the source's content stamp (`Surface::revision`: equal stamps,
 /// equal pixels), Q, the gamma and the pre-scale's box sizes in order.
-type SampledKey = (u64, IntRect, Gamma, Vec<(u32, u32)>);
+type SampledKey = (u64, IntRect, Gamma, Vec<(u32, u32)>, Option<Px>);
 
 /// What `render_moved_into` keeps between renders: the samplers' source, made again only when
 /// its `SampledKey` changes (not each frame of a drag).
@@ -244,7 +267,14 @@ impl Sampled {
     }
 
     fn new(p: &MoveRender, q: IntRect, steps: &[(u32, u32)]) -> Sampled {
-        let crop = p.source.get_image_data(q.x, q.y, q.w, q.h);
+        let mut crop = p.source.get_image_data(q.x, q.y, q.w, q.h);
+        if let Some(key) = p.key {
+            for px in crop.data.as_chunks_mut::<4>().0 {
+                if *px == key {
+                    *px = [0; 4];
+                }
+            }
+        }
         let mut img = PremulImage::from_rgba8(&crop.data, q.w, q.h, p.gamma);
         let mut k = [1.0, 1.0];
         for &(dw, dh) in steps {
@@ -331,7 +361,7 @@ fn sampled_key(p: &MoveRender, q: IntRect) -> Option<SampledKey> {
     let invertible =
         p.h.map_or(p.m.invert().is_some(), |h| h.inverse().is_some());
     (mode(p) != MoveInterpolation::NearestNeighbor && !q.is_empty() && invertible)
-        .then(|| (p.source.revision(), q, p.gamma, Sampled::steps(p, q)))
+        .then(|| (p.source.revision(), q, p.gamma, Sampled::steps(p, q), p.key))
 }
 
 impl<'s> Placement<'s> {
@@ -413,10 +443,10 @@ impl<'s> Placement<'s> {
             };
             let inside = (q.x as i64..q.right() as i64).contains(&sx)
                 && (q.y as i64..q.bottom() as i64).contains(&sy);
-            return if inside {
-                (p.source.pixel(sx as u32, sy as u32), fm)
-            } else {
-                ([0; 4], 0)
+            let px = inside.then(|| p.source.pixel(sx as u32, sy as u32));
+            return match px {
+                Some(px) if Some(px) != p.key => (px, fm),
+                _ => ([0; 4], 0),
             };
         }
         let (Some(src), Some(cov)) = (self.sampled, &self.coverage) else {
@@ -516,12 +546,9 @@ pub fn bake_stamps(
                     if tc > 0 {
                         let (l, bm) = match *px {
                             Some(l) => (l, 0),
-                            None => (
-                                p.layer.pixel(x as u32, y as u32),
-                                p.base_mask.map_or(0, |m| m.get(x, y)),
-                            ),
+                            None => (p.layer.pixel(x as u32, y as u32), p.hole(x, y)),
                         };
-                        *px = Some(move_pixel(l, sample, tc, bm));
+                        *px = Some(p.place(l, sample, tc, bm));
                     }
                 }
             }
@@ -559,10 +586,7 @@ pub fn render_moved_into(
     let w = p.layer.width() as usize;
     let under = |x: i32, y: i32| match under.and_then(|c| c[y as usize * w + x as usize]) {
         Some(l) => (l, 0),
-        None => (
-            p.layer.pixel(x as u32, y as u32),
-            p.base_mask.map_or(0, |m| m.get(x, y)),
-        ),
+        None => (p.layer.pixel(x as u32, y as u32), p.hole(x, y)),
     };
     let (row, cols) = (area.w as usize * 4, (rect.x - area.x) as usize * 4..);
     let rows = (rect.y - area.y) as usize..(rect.bottom() - area.y) as usize;
@@ -585,7 +609,7 @@ pub fn render_moved_into(
                     Some(live) => live.sample(p, q, x, y, p.final_mask.get(x, y)),
                     None => ([0; 4], 0),
                 };
-                *px = move_pixel(l, sample, tc, b);
+                *px = p.place(l, sample, tc, b);
             }
             let words = mask.row_mut(y);
             for (w, (a, b)) in words.iter_mut().zip(was.chunks(64).zip(line.chunks(64))) {
@@ -630,6 +654,7 @@ mod tests {
             quality: SelectionQuality::HighQuality,
             final_mask: &opaque,
             base_mask: None,
+            key: None,
         };
         let out = render_moved(&p, all);
         // Pixel x samples ⌊x + ½ − ½⌋ = x.
@@ -731,6 +756,7 @@ mod tests {
                 quality: SelectionQuality::HighQuality,
                 final_mask: &opaque,
                 base_mask: None,
+                key: None,
             };
             let out = render_moved(&p, all);
             let c = (3 * 6 + 3) * 4;
@@ -760,6 +786,7 @@ mod tests {
             quality: SelectionQuality::HighQuality,
             final_mask: &Mask::opaque(IntRect::new(0, 0, 32, 1)),
             base_mask: None,
+            key: None,
         };
         let s = Sampled::new(&p, p.q, &Sampled::steps(&p, p.q));
         assert_eq!((s.img.w, s.k), (4, [8.0, 1.0]));

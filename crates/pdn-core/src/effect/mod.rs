@@ -23,6 +23,7 @@ pub mod session;
 pub mod slider;
 pub mod stylize;
 pub mod surface;
+pub mod wasm;
 
 use crate::canvas::ImageData;
 use crate::i18n;
@@ -162,6 +163,8 @@ pub enum EffectKind {
         render: CpuFn,
         clip_to_selection: bool,
     },
+    /// An installed WebAssembly plug-in, run by its id (`wasm::render`).
+    Plugin,
 }
 
 /// The menu an effect lives in: Adjustments, an Effects submenu key, or Layers (Rotate/Zoom).
@@ -238,15 +241,19 @@ pub enum Provenance {
     Extra,
 }
 
-/// The manifest row of a plugin effect id: BB's pack or the other forum plugins (`forum`).
+/// The manifest row of a plugin effect id: BB's pack, the other forum plugins (`forum`) or an
+/// installed WebAssembly plug-in (`wasm`).
 pub fn plugin_manifest(effect_id: &str) -> Option<&'static bb::manifest::PluginItem> {
-    bb::manifest::manifest(effect_id).or_else(|| forum::manifest(effect_id))
+    bb::manifest::manifest(effect_id)
+        .or_else(|| forum::manifest(effect_id))
+        .or_else(|| wasm::manifest(effect_id))
 }
 
-/// Every plugin effect: BB's pack, then the other forum plugins.
+/// Every plugin effect: BB's pack, the other forum plugins, then the installed plug-ins.
 pub fn plugin_effects() -> Vec<EffectDef> {
     let mut effects = bb::effects();
     effects.extend(forum::effects());
+    effects.extend(wasm::effects());
     effects
 }
 
@@ -641,6 +648,10 @@ pub fn is_configurable_action(action: &str) -> bool {
             .collect()
     });
     IDS.iter().any(|a| a == action)
+        || action
+            .strip_prefix("menu.effects.")
+            .and_then(wasm::manifest)
+            .is_some_and(|m| m.configurable)
 }
 
 pub fn defaults(def: &EffectDef) -> Values {
@@ -703,6 +714,7 @@ pub fn apply(source: &ImageData, def: &EffectDef, values: &Values, env: &EffectE
             render,
             clip_to_selection,
         } => (render(source, values, &render_env), clip_to_selection),
+        EffectKind::Plugin => (wasm::render(def.id, source, values, &render_env), true),
     };
     if clip && let Some(mask) = env.mask {
         underwrite(source, &mut out, mask);

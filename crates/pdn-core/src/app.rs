@@ -253,8 +253,9 @@ pub struct AppWorkspace {
     /// canvas presses (the middle-button pan still pans) and Enter / Esc, the tool takes none; a
     /// tool or image switch and every commit-first command commit it, an undo cancels it.
     pub perspective: Option<crate::tool::perspective_warp::PerspectiveWarp>,
-    /// The documents picked in the image strip besides the active one (ids): an effect, an
-    /// adjustment or Image ▸ Resize on the active document runs on them too (`for_each_picked`).
+    /// The images picked in the strip besides the active one, by workspace id (a document's own id
+    /// changes when Resize or Rotate replaces it): an effect, an adjustment or an Image command on
+    /// the active image runs on them too (`for_each_picked`).
     pub picked: Vec<u64>,
     /// Move Selected Pixels shows a pointer drag's pixels through the canvas's display-resolution
     /// float (`render::float`) instead of re-rendering the layer each frame; the drag's end
@@ -549,7 +550,7 @@ impl AppWorkspace {
         // a commit hook against the active image. Its workspace and scratch go away together.
         let parked = self.documents[i].parked_tool.take();
         self.drop_tool(parked);
-        let id = self.documents[i].document.id;
+        let id = self.documents[i].id;
         self.picked.retain(|&p| p != id);
         self.documents.remove(i);
         // Indices after `i` shifted down.
@@ -582,7 +583,7 @@ impl AppWorkspace {
     pub fn for_each_picked(&mut self, mut f: impl FnMut(&mut Self)) {
         let back = self.active;
         for id in self.picked.clone() {
-            let Some(i) = self.documents.iter().position(|ws| ws.document.id == id) else {
+            let Some(i) = self.documents.iter().position(|ws| ws.id == id) else {
                 continue;
             };
             self.active = Some(i);

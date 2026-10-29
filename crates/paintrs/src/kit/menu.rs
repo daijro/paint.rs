@@ -227,12 +227,13 @@ fn icon_of(app: &AppWorkspace, id: &str) -> String {
 }
 
 /// What an entry's plugin slot marks (S§4.1): a plugin or an Extra (the same gray plus, their
-/// tooltips differ), or nothing.
+/// tooltips differ), an installed third-party plug-in or look (a puzzle piece), or nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
     None,
     Plugin,
     Extra,
+    ThirdParty,
 }
 
 /// An entry's mark; submenu parents never carry one.
@@ -242,7 +243,10 @@ pub(crate) fn mark(entry: &MenuEntry) -> Mark {
         | MenuEntry::ActionNoIcon(id)
         | MenuEntry::Checked(id, _)
         | MenuEntry::Command { id, .. } => {
-            if action::plugin_item(id).is_some() {
+            let installed = id.strip_prefix("menu.effects.");
+            if installed.is_some_and(pdn_core::effect::wasm::is_plugin) {
+                Mark::ThirdParty
+            } else if action::plugin_item(id).is_some() {
                 Mark::Plugin
             } else if action::is_extra(id) {
                 Mark::Extra
@@ -642,7 +646,7 @@ fn show_popup(
             tooltip::item(&response, Path::Pdn, v.enabled, || {
                 tooltip::tool_text(tool, true)
             });
-        } else if v.mark == Mark::Plugin {
+        } else if matches!(v.mark, Mark::Plugin | Mark::ThirdParty) {
             tooltip::item(&response, Path::Pdn, v.enabled, || {
                 plugin_tooltip(v.id).unwrap_or_default()
             });
@@ -797,7 +801,8 @@ fn entry(
         );
     }
     // Paint.NET's installed-plugin slot (plan BB6): one gray plus for a plugin and for an Extra
-    // (user, 2026-10-24). It is already gray, so a disabled row fades it into the row instead.
+    // (user, 2026-10-24), a puzzle piece for third-party code (user, 2026-10-29). A disabled row
+    // fades it into the row.
     if v.mark != Mark::None {
         let filter = if v.enabled {
             Filter::None
@@ -809,7 +814,12 @@ fn entry(
         };
         let rect = px::snap_rect(plugin_indicator_rect(rect), ppp);
         let layer = px::snap_rect(p.rect, ppp).min;
-        img::paint_icon_in_layer(&painter, "plugin_indicator.png", rect, fill, filter, layer);
+        let icon = if v.mark == Mark::ThirdParty {
+            "third_party_plugin_indicator.png"
+        } else {
+            "plugin_indicator.png"
+        };
+        img::paint_icon_in_layer(&painter, icon, rect, fill, filter, layer);
     }
     response
 }

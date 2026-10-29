@@ -146,6 +146,21 @@ pub fn move_pixel(l: Px, x: Px, tc: u8, bm: u8) -> Px {
     }
 }
 
+/// Extra (Move Selected Pixels' Transparent option): [`move_pixel`] with `x` at coverage `tc`
+/// laid over the layer pixel after the base hole, so where `x` is transparent (the Transparent
+/// colour knocked out) the pixel under it shows.
+pub fn move_pixel_over(l: Px, x: Px, tc: u8, bm: u8) -> Px {
+    let under = move_pixel(l, x, 0, bm);
+    let xa = x[3] as u32 * tc as u32;
+    let ua = under[3] as u32 * (255 * 255 - xa) / 255;
+    let total = xa + ua;
+    if total == 0 {
+        return [0; 4];
+    }
+    let ch = |k: usize| ((xa * x[k] as u32 + ua * under[k] as u32) / total) as u8;
+    [ch(0), ch(1), ch(2), (total / 255) as u8]
+}
+
 /// Merge Down (§2.5): `compose_row` of `src` into `dst` over `rect ∩` both bounds.
 pub fn compose_surface(
     mode: BlendMode,

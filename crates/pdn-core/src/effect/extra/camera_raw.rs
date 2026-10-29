@@ -1,16 +1,21 @@
 //! Photocraft phase spec: S§4.2, the Tier 3 dialogs; research R§B (root · Camera Raw Filter)
 //!
 //! Camera Raw: the develop pipeline (`extra::fx::camera_raw`) on the current layer's pixels, in
-//! the Effect Config dialog with Basic, Tone, HSL and Detail tabs (an `IndirectUi`, Ruling R11);
-//! the canvas is its live preview. Raw-file decoding is not part of it.
+//! the Effect Config dialog with Basic, Tone, Curve, HSL, Grading and Detail tabs (an
+//! `IndirectUi`, Ruling R11); the canvas is its live preview. Load Preset... sets the controls from
+//! a Camera Raw `.xmp` develop preset (Lightroom's, LightCraft's). Raw-file decoding is not part of
+//! it.
 
 use super::manifest::manifest;
 use crate::canvas::ImageData;
-use crate::effect::bb::ui::{ControlUi, IndirectUi, Tab, TabStrip};
-use crate::effect::{Category, Control, EffectDef, EffectEnv, EffectKind, Values, num, range};
-use crate::extra::fx::camera_raw::{self, CameraRaw};
+use crate::effect::bb::ui::{ControlUi, IndirectUi, Preset, TRACK_HUE, Tab, TabStrip};
+use crate::effect::{
+    Category, Control, EffectDef, EffectEnv, EffectKind, Values, flag, num, range,
+};
+use crate::extra::fx::camera_raw::{self, CameraRaw, xmp};
 use crate::extra::interrupt::Interrupt;
 use crate::extra::shim;
+use serde_json::{Value, json};
 
 /// ACR's Basic order, with upstream's "Light" group (Exposure … Blacks) kept together.
 const BASIC: [&str; 8] = [
@@ -25,6 +30,30 @@ const BASIC: [&str; 8] = [
 ];
 /// Upstream's Presence group (Dehaze with it, as ACR's Basic panel has it).
 const TONE: [&str; 5] = ["texture", "clarity", "dehaze", "vibrance", "saturation"];
+/// Upstream's Curve section: the parametric regions, then ACR's region splits; the point curves
+/// (`pointCurves`, master, red, green, blue) come from presets, the check box turns them off.
+const CURVE: [&str; 9] = [
+    "curveHighlights",
+    "curveLights",
+    "curveDarks",
+    "curveShadows",
+    "curveShadowSplit",
+    "curveMidtoneSplit",
+    "curveHighlightSplit",
+    "pointCurve",
+    "pointCurves",
+];
+/// The Color Grading wheels' hue, saturation and luminance (shadows, midtones, highlights, global).
+const GRADE: [[&str; 3]; 4] = [
+    ["gradeShadowHue", "gradeShadowSat", "gradeShadowLum"],
+    ["gradeMidtoneHue", "gradeMidtoneSat", "gradeMidtoneLum"],
+    [
+        "gradeHighlightHue",
+        "gradeHighlightSat",
+        "gradeHighlightLum",
+    ],
+    ["gradeGlobalHue", "gradeGlobalSat", "gradeGlobalLum"],
+];
 /// The Color Mixer's hue, saturation and luminance per band (red … magenta).
 const HSL: [[&str; 8]; 3] = [
     [
@@ -96,8 +125,13 @@ static BAND_STOPS: [[u32; 2]; 8] = {
     }
     s
 };
-static CONTROL_UI: [(&str, ControlUi); 26] = {
-    let mut c = [("", ControlUi::DEFAULT); 26];
+/// A wheel's hue slider: the hue circle from red, wrapping (upstream's `hue_stops`).
+const HUE: ControlUi = ControlUi {
+    wrap: true,
+    ..track(&TRACK_HUE)
+};
+static CONTROL_UI: [(&str, ControlUi); 30] = {
+    let mut c = [("", ControlUi::DEFAULT); 30];
     c[0] = ("temperature", track(&[0x4678E6, 0xC8C8C8, 0xEBC83C]));
     c[1] = ("tint", track(&[0x46BE50, 0xC8C8C8, 0xD250C8]));
     let mut g = 0;
@@ -108,6 +142,11 @@ static CONTROL_UI: [(&str, ControlUi); 26] = {
             b += 1;
         }
         g += 1;
+    }
+    let mut w = 0;
+    while w < 4 {
+        c[26 + w] = (GRADE[w][0], HUE);
+        w += 1;
     }
     c
 };
@@ -126,8 +165,16 @@ static CAMERA_RAW_UI: IndirectUi = IndirectUi {
                     keys: &TONE,
                 },
                 Tab {
+                    caption: "Curve",
+                    keys: &CURVE,
+                },
+                Tab {
                     caption: "HSL",
                     keys: &["hslTab"],
+                },
+                Tab {
+                    caption: "Grading",
+                    keys: &["gradeTab", "gradeBlending", "gradeBalance"],
                 },
                 Tab {
                     caption: "Detail",
@@ -153,6 +200,27 @@ static CAMERA_RAW_UI: IndirectUi = IndirectUi {
             ],
         },
         TabStrip {
+            key: "gradeTab",
+            tabs: &[
+                Tab {
+                    caption: "Shadows",
+                    keys: &GRADE[0],
+                },
+                Tab {
+                    caption: "Midtones",
+                    keys: &GRADE[1],
+                },
+                Tab {
+                    caption: "Highlights",
+                    keys: &GRADE[2],
+                },
+                Tab {
+                    caption: "Global",
+                    keys: &GRADE[3],
+                },
+            ],
+        },
+        TabStrip {
             key: "detailTab",
             tabs: &[
                 Tab {
@@ -166,8 +234,18 @@ static CAMERA_RAW_UI: IndirectUi = IndirectUi {
             ],
         },
     ],
-    transient_keys: &["tab", "hslTab", "detailTab"],
+    // ×1.1: room for Load Preset... in the footer.
+    width: 1.1,
+    transient_keys: &["tab", "hslTab", "gradeTab", "detailTab"],
     controls: &CONTROL_UI,
+    // The point curves' check box only when there is a curve to turn off.
+    enabled: |v, k| k != "pointCurve" || point_curves(v).iter().any(|c| !c.is_empty()),
+    preset: Some(Preset {
+        filter: "Camera Raw Presets (*.xmp)",
+        extension: "xmp",
+        max_bytes: xmp::MAX_XMP_BYTES,
+        load: load_preset,
+    }),
     ..IndirectUi::DEFAULT
 };
 
@@ -188,6 +266,7 @@ pub fn effects() -> Vec<EffectDef> {
     let mut controls = vec![
         tab("tab"),
         tab("hslTab"),
+        tab("gradeTab"),
         tab("detailTab"),
         signed("temperature", "Temperature"),
         signed("tint", "Tint"),
@@ -204,11 +283,60 @@ pub fn effects() -> Vec<EffectDef> {
         signed("dehaze", "Dehaze"),
         signed("vibrance", "Vibrance"),
         signed("saturation", "Saturation"),
+        signed("curveHighlights", "Highlights"),
+        signed("curveLights", "Lights"),
+        signed("curveDarks", "Darks"),
+        signed("curveShadows", "Shadows"),
+        range(
+            "curveShadowSplit",
+            "Shadow Split",
+            0.0,
+            100.0,
+            f64::from(d.curve_splits[0]),
+        ),
+        range(
+            "curveMidtoneSplit",
+            "Midtone Split",
+            0.0,
+            100.0,
+            f64::from(d.curve_splits[1]),
+        ),
+        range(
+            "curveHighlightSplit",
+            "Highlight Split",
+            0.0,
+            100.0,
+            f64::from(d.curve_splits[2]),
+        ),
+        Control::Checkbox {
+            key: "pointCurve",
+            label: "Point Curve",
+            default: false,
+        },
+        Control::Value {
+            key: "pointCurves",
+            default: || json!([[], [], [], []]),
+        },
     ];
     for keys in &HSL {
         controls.extend(keys.iter().zip(BANDS).map(|(k, l)| signed(k, l)));
     }
+    for [hue, sat, lum] in GRADE {
+        controls.extend([
+            range(hue, "Hue", 0.0, 360.0, 0.0),
+            range(sat, "Saturation", 0.0, 100.0, 0.0),
+            signed(lum, "Luminance"),
+        ]);
+    }
     controls.extend([
+        range(
+            "gradeBlending",
+            "Blending",
+            0.0,
+            100.0,
+            f64::from(d.grade_blending),
+        ),
+        signed("gradeBalance", "Balance"),
         range("sharpenAmount", "Amount", 0.0, 150.0, 0.0),
         range(
             "sharpenRadius",
@@ -260,38 +388,130 @@ pub fn effects() -> Vec<EffectDef> {
     }]
 }
 
+/// Every slider's key with its develop setting.
+fn sliders(p: &mut CameraRaw) -> Vec<(&'static str, &mut f32)> {
+    let mut s = vec![
+        ("temperature", &mut p.temperature),
+        ("tint", &mut p.tint),
+        ("exposure", &mut p.exposure),
+        ("contrast", &mut p.contrast),
+        ("highlights", &mut p.highlights),
+        ("shadows", &mut p.shadows),
+        ("whites", &mut p.whites),
+        ("blacks", &mut p.blacks),
+        ("texture", &mut p.texture),
+        ("clarity", &mut p.clarity),
+        ("dehaze", &mut p.dehaze),
+        ("vibrance", &mut p.vibrance),
+        ("saturation", &mut p.saturation),
+        ("curveHighlights", &mut p.curve_highlights),
+        ("curveLights", &mut p.curve_lights),
+        ("curveDarks", &mut p.curve_darks),
+        ("curveShadows", &mut p.curve_shadows),
+        ("gradeBlending", &mut p.grade_blending),
+        ("gradeBalance", &mut p.grade_balance),
+        ("sharpenAmount", &mut p.sharpen_amount),
+        ("sharpenRadius", &mut p.sharpen_radius),
+        ("sharpenDetail", &mut p.sharpen_detail),
+        ("sharpenMasking", &mut p.sharpen_masking),
+        ("noiseLuminance", &mut p.noise_luminance),
+        ("noiseLuminanceDetail", &mut p.noise_luminance_detail),
+        ("noiseColor", &mut p.noise_color),
+        ("noiseColorDetail", &mut p.noise_color_detail),
+    ];
+    s.extend(CURVE[4..7].iter().copied().zip(&mut p.curve_splits));
+    for (keys, bands) in HSL
+        .iter()
+        .zip([&mut p.hsl_hue, &mut p.hsl_sat, &mut p.hsl_lum])
+    {
+        s.extend(keys.iter().copied().zip(bands));
+    }
+    let wheels = [
+        &mut p.grade_shadows,
+        &mut p.grade_midtones,
+        &mut p.grade_highlights,
+        &mut p.grade_global,
+    ];
+    for (keys, w) in GRADE.iter().zip(wheels) {
+        s.extend(
+            keys.iter()
+                .copied()
+                .zip([&mut w.hue, &mut w.sat, &mut w.lum]),
+        );
+    }
+    s
+}
+
+/// The point curves (master, red, green, blue) as `pointCurves` holds them: `[input, output]`
+/// pairs in 0..=255, empty for a linear curve or a malformed value.
+fn point_curves(v: &Values) -> [Vec<[f32; 2]>; 4] {
+    std::array::from_fn(|i| {
+        let pair = |p: &Value| Some([p.get(0)?.as_f64()? as f32, p.get(1)?.as_f64()? as f32]);
+        let points = v.get("pointCurves").and_then(|c| c.get(i)?.as_array());
+        points.into_iter().flatten().filter_map(pair).collect()
+    })
+}
+
 /// The dialog's values as develop settings. Exposure and the noise amounts are clamped to their
 /// slider ranges, as upstream's command does: they become `2^exposure`, a filter radius and a
-/// blur sigma, so a stored out-of-range value would overflow or mean unbounded work.
+/// blur sigma, so a stored out-of-range value would overflow or mean unbounded work. The point
+/// curves apply while their check box is on.
 fn settings(v: &Values) -> CameraRaw {
-    let f = |k: &str| num(v, k) as f32;
-    let bands = |i: usize| std::array::from_fn(|b| f(HSL[i][b]));
-    CameraRaw {
-        temperature: f("temperature"),
-        tint: f("tint"),
-        exposure: f("exposure").clamp(-5.0, 5.0),
-        contrast: f("contrast"),
-        highlights: f("highlights"),
-        shadows: f("shadows"),
-        whites: f("whites"),
-        blacks: f("blacks"),
-        texture: f("texture"),
-        clarity: f("clarity"),
-        dehaze: f("dehaze"),
-        vibrance: f("vibrance"),
-        saturation: f("saturation"),
-        hsl_hue: bands(0),
-        hsl_sat: bands(1),
-        hsl_lum: bands(2),
-        sharpen_amount: f("sharpenAmount"),
-        sharpen_radius: f("sharpenRadius"),
-        sharpen_detail: f("sharpenDetail"),
-        sharpen_masking: f("sharpenMasking"),
-        noise_luminance: f("noiseLuminance").clamp(0.0, 100.0),
-        noise_luminance_detail: f("noiseLuminanceDetail").clamp(0.0, 100.0),
-        noise_color: f("noiseColor").clamp(0.0, 100.0),
-        noise_color_detail: f("noiseColorDetail").clamp(0.0, 100.0),
+    let mut p = CameraRaw::default();
+    for (k, f) in sliders(&mut p) {
+        *f = num(v, k) as f32;
     }
+    p.exposure = p.exposure.clamp(-5.0, 5.0);
+    for n in [
+        &mut p.noise_luminance,
+        &mut p.noise_luminance_detail,
+        &mut p.noise_color,
+        &mut p.noise_color_detail,
+    ] {
+        *n = n.clamp(0.0, 100.0);
+    }
+    if flag(v, "pointCurve") {
+        [
+            p.point_curve,
+            p.point_curve_red,
+            p.point_curve_green,
+            p.point_curve_blue,
+        ] = point_curves(v);
+    }
+    p
+}
+
+/// Load Preset...: a Camera Raw `.xmp` develop preset's settings over the dialog's values (the
+/// ones Camera Raw has no control for are ignored). A preset that changes the point curves turns
+/// their check box on, or off when it makes them all linear.
+fn load_preset(bytes: &[u8], v: &mut Values) -> Result<(), String> {
+    let mut p = settings(v);
+    let before = point_curves(v);
+    [
+        p.point_curve,
+        p.point_curve_red,
+        p.point_curve_green,
+        p.point_curve_blue,
+    ] = before.clone();
+    xmp::load(&mut p, bytes)?;
+    let after = [
+        std::mem::take(&mut p.point_curve),
+        std::mem::take(&mut p.point_curve_red),
+        std::mem::take(&mut p.point_curve_green),
+        std::mem::take(&mut p.point_curve_blue),
+    ];
+    for (k, f) in sliders(&mut p) {
+        // The f32's shortest decimal: +0.35 stays 0.35, not 0.3499999940395355.
+        v.insert(k.into(), json!(f.to_string().parse::<f64>().unwrap_or(0.0)));
+    }
+    if after != before {
+        v.insert(
+            "pointCurve".into(),
+            json!(after.iter().any(|c| !c.is_empty())),
+        );
+        v.insert("pointCurves".into(), json!(after));
+    }
+    Ok(())
 }
 
 fn render(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
@@ -328,6 +548,9 @@ mod tests {
         let inert = json!({
             "sharpenRadius": 2.5, "sharpenDetail": 90, "sharpenMasking": 50,
             "noiseLuminanceDetail": 10, "noiseColorDetail": 90,
+            "curveShadowSplit": 10, "curveMidtoneSplit": 70, "curveHighlightSplit": 90,
+            "gradeShadowHue": 200, "gradeBlending": 80, "gradeBalance": -40,
+            "pointCurves": [[[0, 40], [255, 255]], [], [], []],
         });
         assert_eq!(run("pcCameraRaw", inert, &src).data, src.data);
         let busy = from_fn(16, 16, |x, y| {
@@ -342,6 +565,9 @@ mod tests {
             ("vibrance", 50.0),
             ("saturation", 50.0),
             ("hueRed", 50.0),
+            ("curveShadows", 60.0),
+            ("gradeShadowSat", 60.0),
+            ("gradeGlobalLum", 40.0),
             ("sharpenAmount", 100.0),
             ("noiseLuminance", 60.0),
             ("noiseColor", 60.0),
@@ -349,6 +575,8 @@ mod tests {
             let out = run("pcCameraRaw", json!({ k: val }), &busy);
             assert_ne!(out.data, busy.data, "{k} did nothing");
         }
+        let curve = json!({"pointCurve": true, "pointCurves": [[], [], [], [[0, 60], [255, 255]]]});
+        assert_ne!(run("pcCameraRaw", curve, &busy).data, busy.data);
     }
 
     /// Exposure +1 is one stop: twice the linear light, alpha kept (±1 level of 8-bit rounding).
@@ -392,13 +620,66 @@ mod tests {
             assert!(keys.contains(k), "{k} names no control");
         }
         let captions: Vec<_> = ui.tabs[0].tabs.iter().map(|t| t.caption).collect();
-        assert_eq!(captions, ["Basic", "Tone", "HSL", "Detail"]);
+        assert_eq!(
+            captions,
+            ["Basic", "Tone", "Curve", "HSL", "Grading", "Detail"]
+        );
         let mut v = crate::effect::defaults(&def);
         assert_eq!(settings(&v), CameraRaw::default());
         v.insert("satAqua".into(), json!(-40));
         v.insert("exposure".into(), json!(300));
         let p = settings(&v);
         assert_eq!((p.hsl_sat[4], p.exposure), (-40.0, 5.0));
+    }
+
+    /// Load Preset... sets the controls a preset holds and keeps the rest; a point curve in it
+    /// turns the curves on, a linear one off; a file that is not a Camera Raw preset is refused
+    /// with a message and changes nothing.
+    #[test]
+    fn camera_raw_loads_a_develop_preset() {
+        let def = crate::effect::find("pcCameraRaw").unwrap();
+        let load = def.indirect.unwrap().preset.unwrap().load;
+        let mut v = crate::effect::defaults(&def);
+        v.insert("sharpenAmount".into(), json!(40));
+        let xmp = |attrs: &str, body: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="{}" {attrs}>{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+                xmp::CRS_NS
+            )
+        };
+        let preset = xmp(
+            r#"crs:Exposure2012="+0.35" crs:Clarity="+8" crs:ParametricLights="+12" crs:SaturationAdjustmentOrange="+8" crs:SplitToningShadowHue="215" crs:SplitToningShadowSaturation="18" crs:LensProfileEnable="1""#,
+            "<crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 20</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012>",
+        );
+        load(preset.as_bytes(), &mut v).unwrap();
+        let f = |k: &str| num(&v, k) as f32;
+        assert_eq!(v["exposure"], json!(0.35));
+        assert_eq!(
+            [f("clarity"), f("curveLights"), f("satOrange")],
+            [8.0, 12.0, 8.0]
+        );
+        assert_eq!([f("gradeShadowHue"), f("gradeShadowSat")], [215.0, 18.0]);
+        assert_eq!(f("sharpenAmount"), 40.0, "a setting the file lacks is kept");
+        assert!(flag(&v, "pointCurve"));
+        assert_eq!(settings(&v).point_curve, vec![[0.0, 20.0], [255.0, 255.0]]);
+        // The check box is enabled while there is a curve to turn off.
+        let enabled = def.indirect.unwrap().enabled;
+        assert!(enabled(&v, "pointCurve"));
+        let linear = xmp(
+            "",
+            "<crs:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></crs:ToneCurvePV2012>",
+        );
+        load(linear.as_bytes(), &mut v).unwrap();
+        assert!(!flag(&v, "pointCurve") && !enabled(&v, "pointCurve"));
+        assert_eq!(num(&v, "exposure") as f32, 0.35);
+        let kept = v.clone();
+        for bad in [
+            &b"\x89PNG\r\n"[..],
+            b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>",
+        ] {
+            assert!(load(bad, &mut v).is_err());
+            assert_eq!(v, kept);
+        }
     }
 
     /// Every stage at once on degenerate layers: no panic, alpha kept.

@@ -368,7 +368,7 @@ mod tests {
         for _ in 0..2 {
             app.create_blank_document_in_new_workspace(8, 6, 96.0, true);
         }
-        let ids: Vec<u64> = app.documents.iter().map(|ws| ws.document.id).collect();
+        let ids: Vec<u64> = app.documents.iter().map(|ws| ws.id).collect();
         app.set_active_document_workspace(Some(0));
         app.picked = vec![ids[2]];
         let bytes = |app: &AppWorkspace, i: usize| {

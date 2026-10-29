@@ -1213,13 +1213,7 @@ fn document_strip_picks_images() {
             h.run();
         }
     };
-    let ids: Vec<u64> = h
-        .state()
-        .app
-        .documents
-        .iter()
-        .map(|ws| ws.document.id)
-        .collect();
+    let ids: Vec<u64> = h.state().app.documents.iter().map(|ws| ws.id).collect();
     press(&mut h, 0, egui::Modifiers::NONE);
     press(&mut h, 2, egui::Modifiers::CTRL);
     assert_eq!(h.state().app.active, Some(0));

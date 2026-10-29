@@ -467,8 +467,9 @@ pub struct MoveToolContext {
     /// Leave a copy behind (Move Selected Pixels): set by a pointer edit that began with Ctrl
     /// (ruling R69, never by a nudge) and kept by every later edit of the transaction.
     pub copy: bool,
-    /// The tracked toolbar values: `resampling`, `gammaCorrected` (null for Move Selection).
-    settings: [Value; 2],
+    /// The tracked toolbar values: `resampling`, `gammaCorrected` and, with the Extra Transparent
+    /// option on, the secondary colour then as `[r, g, b, a]` (null for Move Selection).
+    settings: [Value; 3],
     /// A paste's bitmap: the source instead of the layer, at the selection's untransformed
     /// coordinates (§2.11 step 3), with no vacated area (b = 0, compositing.md §2.8).
     pub paste: Option<Arc<Surface>>,
@@ -613,6 +614,16 @@ impl MoveToolContext {
             Gamma::Linear
         }
     }
+
+    /// The Transparent option's colour: its pixels stay behind (`MoveRender::key`).
+    fn key(&self) -> Option<Px> {
+        let c = self.settings[2].as_array()?;
+        let c: Vec<u8> = c
+            .iter()
+            .filter_map(|v| v.as_u64()?.try_into().ok())
+            .collect();
+        c.try_into().ok()
+    }
 }
 
 /// A pointer drag in progress.
@@ -675,7 +686,14 @@ pub struct MoveToolBase<const PIXELS: bool> {
 }
 
 /// What a lift's pixels and hole depend on (a pointer drag changes none of it).
-type LiftKey = (IntRect, bool, Matrix, SelectionQuality, Option<usize>);
+type LiftKey = (
+    IntRect,
+    bool,
+    Matrix,
+    SelectionQuality,
+    Option<usize>,
+    Option<Px>,
+);
 
 /// S§4.6 (Extra): the Shift trail baked into the untouched layer (`bake_stamps`) and what it was
 /// baked for, under the transaction's Base (kept and dropped with bm).
@@ -684,7 +702,7 @@ type LiftKey = (IntRect, bool, Matrix, SelectionQuality, Option<usize>);
 struct TrailBake {
     quality: SelectionQuality,
     copy: bool,
-    settings: [Value; 2],
+    settings: [Value; 3],
     trail: Vec<Stamp>,
     /// The selection under Base over Q: the stamps' final masks.
     mask: Mask,
@@ -782,12 +800,14 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         t(&format!("{}.historyMemento.{key}", Self::PREFIX))
     }
 
-    fn toolbar(app: &AppWorkspace) -> [Value; 2] {
-        if PIXELS {
-            ["resampling", "gammaCorrected"].map(|k| app.tool_settings.get(ToolType::Move, k))
-        } else {
-            [Value::Null, Value::Null]
+    fn toolbar(app: &AppWorkspace) -> [Value; 3] {
+        if !PIXELS {
+            return [Value::Null, Value::Null, Value::Null];
         }
+        let get = |k| app.tool_settings.get(ToolType::Move, k);
+        let c = app.secondary_color;
+        let key = (get("transparent") == true).then(|| vec![c.red, c.green, c.blue, c.alpha]);
+        [get("resampling"), get("gammaCorrected"), key.into()]
     }
 
     /// F and the base bounds: the record's, or the selection's while Idle; `None` without a
@@ -1215,6 +1235,7 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
             r.base,
             quality,
             r.paste.as_ref().map(|p| Arc::as_ptr(p) as usize),
+            r.key(),
         );
         let place = |src: &Arc<FloatSource>, layer: usize| Float {
             src: src.clone(),
@@ -1291,6 +1312,7 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
                 quality,
                 final_mask: &fm,
                 base_mask: bm.as_deref(),
+                key: r.key(),
             };
             if let Some(b) = bake.as_mut() {
                 work += bake_stamps(&p, &new, &b.mask, cache, &mut b.px);
@@ -1299,7 +1321,14 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
             }
             if lift {
                 let mask = under_base(r).clipping_mask_in(quality, q, q);
-                lifted = Some(Arc::new(FloatSource::new(p.source, q, &mask)));
+                let mut src = FloatSource::new(p.source, q, &mask);
+                // Transparent: the colour's pixels are not lifted (the layer keeps them).
+                for (m, px) in src.mask.iter_mut().zip(&src.px) {
+                    if Some(*px) == p.key {
+                        *m = 0;
+                    }
+                }
+                lifted = Some(Arc::new(src));
             }
             let under = bake.as_ref().map(|b| &b.px[..]);
             Some(render_moved_into(
@@ -1336,15 +1365,20 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         }
     }
 
+    /// The rotate zone outside the bounds shows the rotate cursor, while hovered and while its
+    /// drag runs (user, 2026-10-29: the hand did not say what a press there does).
     fn update_cursor(&mut self, app: &AppWorkspace, p: Point) {
         let closed = CursorRequest::Image("hand_closed_cursor");
+        let rotate = CursorRequest::Image("rotate_cursor");
         self.cursor = Some(match &self.live {
             Some(Live::Pointer(d)) => match d.gesture {
                 Gesture::Translate => CursorRequest::Css("move"),
+                Gesture::Rotate => rotate,
                 _ => closed,
             },
             _ => match self.hit(app, p) {
                 MoveHit::Background | MoveHit::None => CursorRequest::Css("move"),
+                MoveHit::Rotate => rotate,
                 _ => CursorRequest::Image("hand_open_cursor"),
             },
         });
@@ -1384,6 +1418,7 @@ impl<const PIXELS: bool> Transacted for MoveToolBase<PIXELS> {
                 .then(|| t("transactedTool.changed.moveToolInterpolationMode.historyMementoName")),
             (a.settings[1] != b.settings[1])
                 .then(|| t("transactedTool.changed.gammaMode.historyMementoName")),
+            (a.settings[2] != b.settings[2]).then(|| "Transparent Selection".to_string()),
         ]
         .into_iter()
         .flatten()
@@ -1395,6 +1430,7 @@ impl<const PIXELS: bool> Transacted for MoveToolBase<PIXELS> {
             vec![
                 ("resampling", r.settings[0].clone()),
                 ("gammaCorrected", r.settings[1].clone()),
+                ("transparent", (!r.settings[2].is_null()).into()),
             ]
         } else {
             vec![]
@@ -1660,7 +1696,7 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
     /// Sampling and Gamma Mode are tracked (a settings edit while Dirty); the shared selection
     /// quality just re-renders.
     fn on_setting_changed(&mut self, app: &mut AppWorkspace, key: &str) {
-        if PIXELS && matches!(key, "resampling" | "gammaCorrected") {
+        if PIXELS && matches!(key, "resampling" | "gammaCorrected" | "transparent") {
             transacted::setting_changed(self, app);
         } else if key == "renderingQuality" && self.tx.is_open() {
             self.show(app);
@@ -2053,6 +2089,40 @@ mod tests {
             .iter()
             .map(|l| (l.vertical, l.pos, l.before))
             .collect()
+    }
+
+    /// Transparent (Extra, MS Paint's Transparent selection): the secondary colour's pixels stay
+    /// where they were and the carried pixels lie over what is under them, with the canvas float
+    /// or without.
+    #[test]
+    fn transparent_leaves_the_secondary_colour_behind() {
+        const WHITE: crate::pixel::Px = [255; 4];
+        const BLUE: crate::pixel::Px = [0, 0, 255, 255];
+        for float in [false, true] {
+            let mut app = red_square(ToolType::Move);
+            app.float_moves = float;
+            let ws = app.active_ws_mut().unwrap();
+            let surface = &mut ws.document.layers.get_at_mut(0).unwrap().surface;
+            surface.fill_rect(IntRect::new(0, 0, 100, 60), WHITE);
+            surface.fill_rect(IntRect::new(10, 10, 4, 4), RED);
+            surface.fill_rect(IntRect::new(28, 8, 8, 8), BLUE);
+            ws.selection
+                .set_continuation(&Rectangle::new(8.0, 8.0, 8.0, 8.0), CombineMode::Replace);
+            ws.selection.commit_continuation();
+            app.update_tool_setting(ToolType::Move, "transparent", serde_json::json!(true));
+            // Pressed away from the small selection's handles.
+            drag(&mut app, MouseButton::Left, &[(60.5, 45.5), (80.5, 45.5)]);
+            let (top, middle) = (row(&app, 9), row(&app, 11));
+            // Behind: the white stays, the red's place empties.
+            assert_eq!(top[8..16], [WHITE; 8], "float {float}");
+            let clear = [0; 4];
+            let behind = [WHITE, WHITE, clear, clear, clear, clear, WHITE, WHITE];
+            assert_eq!(middle[8..16], behind, "float {float}");
+            // Over the blue: only the red lands.
+            assert_eq!(top[28..36], [BLUE; 8], "float {float}");
+            let landed = [BLUE, BLUE, RED, RED, RED, RED, BLUE, BLUE];
+            assert_eq!(middle[28..36], landed, "float {float}");
+        }
     }
 
     /// Snap (Extra): with Snap on, a translate's nearest edge or centre lands on the canvas centre

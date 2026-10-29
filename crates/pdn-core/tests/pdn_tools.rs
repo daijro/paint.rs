@@ -2939,6 +2939,7 @@ fn integer_translation_copies_exactly() {
         quality: SelectionQuality::HighQuality,
         final_mask: &fm,
         base_mask: Some(&bm),
+        key: None,
     };
     let out = render_moved(&p, all);
     let px =

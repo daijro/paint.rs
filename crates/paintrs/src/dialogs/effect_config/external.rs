@@ -1,8 +1,11 @@
 use super::EffectConfigDialog;
 use crate::dialogs::DialogCx;
-use crate::platform::{Clipboard, ImageRead, ImageReadRequest, Pending, PickedFile};
+use crate::platform::{Clipboard, DataFile, ImageRead, ImageReadRequest, Pending, PickedFile};
 use pdn_core::canvas::ImageData;
-use pdn_core::effect::bb::{self, ui::External};
+use pdn_core::effect::bb::{
+    self,
+    ui::{External, Preset},
+};
 use pdn_core::extra::fx::lut;
 use pdn_core::io::pdn::PdnDocument;
 use serde_json::json;
@@ -33,6 +36,12 @@ pub(super) enum ExternalInput {
 pub(super) enum FileStage {
     Read(Pending<Result<Option<PickedFile>, String>>),
     Decode(Pending<Result<PdnDocument, String>>),
+}
+
+/// Load Preset...'s chooser, then the chosen file's read.
+pub(super) enum PresetLoad {
+    Choose(Pending<Result<Vec<PickedFile>, String>>),
+    Read(Pending<Result<PickedFile, String>>),
 }
 
 /// R156: the last successful From File pick (not a native path, whose text is reread), shared by
@@ -350,9 +359,64 @@ impl EffectConfigDialog {
         }
     }
 
+    /// The plugin's preset file (`IndirectUi::preset`), if it has one.
+    pub(super) fn preset(&self) -> Option<Preset> {
+        self.session.as_ref()?.def.indirect?.preset
+    }
+
+    /// Load Preset...: one file through the preset's chooser.
+    pub(super) fn choose_preset(&mut self) {
+        if let Some(p) = self.preset() {
+            let request = DataFile {
+                title: "Load Preset",
+                filter: p.filter,
+                extension: p.extension,
+            };
+            self.preset_load = Some(PresetLoad::Choose(self.files.choose_data(request)));
+        }
+    }
+
+    /// Load Preset...'s answer: the chosen file, read within the preset's limit, sets the values
+    /// (`Some(true)`: an immediate notification); a refused one says why in a message, a cancel
+    /// changes nothing.
+    pub(super) fn poll_preset(&mut self) -> Option<bool> {
+        let preset = self.preset()?;
+        // A chooser answer and an already-read file finish in one frame (Chart's Load Data).
+        for _ in 0..2 {
+            let result = match self.preset_load.as_mut()? {
+                PresetLoad::Choose(op) => match op.poll()? {
+                    Ok(files) => {
+                        let read = |f: PickedFile| f.reread_within(preset.max_bytes as u64);
+                        self.preset_load = files.into_iter().next().map(read).map(PresetLoad::Read);
+                        continue;
+                    }
+                    Err(e) => Err(e),
+                },
+                PresetLoad::Read(op) => op.poll()?.and_then(|f| {
+                    (preset.load)(&f.bytes, &mut self.values)
+                        .map_err(|e| format!("{}: {e}", f.name))
+                }),
+            };
+            self.preset_load = None;
+            match result {
+                Ok(()) => {
+                    self.on_change();
+                    return Some(true);
+                }
+                Err(e) if e == "Canceled" => {}
+                Err(e) => crate::platform::files::message(&self.title, e),
+            }
+            break;
+        }
+        None
+    }
+
     /// Pending file work does not wake the UI: poll it at the file service's interval.
     pub(super) fn repaint_file_work(&self, ctx: &egui::Context) {
-        if self.chooser.is_some() || matches!(self.input, ExternalInput::Loading { .. }) {
+        if self.chooser.is_some()
+            || self.preset_load.is_some()
+            || matches!(self.input, ExternalInput::Loading { .. })
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }
     }
@@ -2694,5 +2758,56 @@ mod file_tests {
         assert_eq!(f.d.acquisitions, n + 1);
         assert_eq!(f.log(), ["choose", "read"], "the pick was never decoded");
         assert_eq!(f.image(), None);
+    }
+
+    /// Camera Raw's Load Preset... button: the `.xmp` develop preset its chooser picks sets the
+    /// dialog's controls and previews at once; a cancel changes nothing, and a file that is not a
+    /// preset changes nothing and says why in a message.
+    #[test]
+    fn camera_raw_load_preset_sets_the_controls() {
+        let mut f = Fx::open("pcCameraRaw", |_| {});
+        let (_, rect) = f.frame_at(vec![], true);
+        // The button after the footer's Preview check box.
+        let at = Pos2::new(rect.min.x + 140., rect.max.y - 20.);
+        let click = |f: &mut Fx| {
+            f.frame(vec![egui::Event::PointerMoved(at)], false);
+            for pressed in [true, false] {
+                let button = egui::Event::PointerButton {
+                    pos: at,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                f.frame(vec![button], false);
+            }
+        };
+        let pending = || crate::dialogs::PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()));
+        let before = f.d.values.clone();
+        f.files.queue_pick(Ok(vec![]));
+        click(&mut f);
+        assert_eq!(f.log(), ["choose"]);
+        assert_eq!((&f.d.values, pending().len()), (&before, 0));
+        let preset = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+0.35"
+            crs:Clarity="+8" crs:SplitToningShadowHue="215" crs:SplitToningShadowSaturation="18"/></rdf:RDF></x:xmpmeta>"#;
+        let file = PickedFile::snapshot("look.xmp".into(), preset.to_vec());
+        f.files.queue_pick(Ok(vec![file]));
+        let generation = f.d.generation;
+        click(&mut f);
+        assert_eq!(f.log(), ["choose", "choose"]);
+        let v = |f: &Fx, k: &str| f.d.values[k].as_f64().unwrap() as f32;
+        assert_eq!(
+            [v(&f, "exposure"), v(&f, "clarity"), v(&f, "gradeShadowHue")],
+            [0.35, 8.0, 215.0]
+        );
+        assert_eq!(v(&f, "gradeShadowSat"), 18.0);
+        assert!(f.d.generation > generation, "the preset previews");
+        assert_eq!(pending().len(), 0);
+        let loaded = f.d.values.clone();
+        let file = PickedFile::snapshot("photo.xmp".into(), b"\x89PNG\r\n\x1a\n".to_vec());
+        f.files.queue_pick(Ok(vec![file]));
+        click(&mut f);
+        assert_eq!(f.d.values, loaded);
+        assert_eq!(pending().len(), 1, "the refusal is a message");
     }
 }

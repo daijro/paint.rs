@@ -235,6 +235,11 @@ impl Theme {
                 t.curve_background = rgb(0xFFFFFF);
                 t.curve_grid = rgb(0x888888);
                 t.curve_line = rgb(0x202020);
+                // History's redo band: a grey a step darker than the panel, not the dark one.
+                t.item_redo_background = rgb(0xC8C8C8);
+                t.item_redo_text = rgb(0x111111);
+                t.item_redo_hover_background = rgb(0xB4CDE4);
+                t.item_redo_hover_text = rgb(0x111111);
             }
         }
         // Derived custom properties (resolved at use time in CSS).
@@ -1520,6 +1525,19 @@ pub const CHART_PICKER_CANCEL: [f32; 4] = [324.0, 244.0, 75.0, 23.0];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The light theme's History redo band is light, with dark text (it kept the dark grey).
+    #[test]
+    fn light_redo_band_is_light() {
+        let luma = |c: Color32| 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+        let t = Theme::for_scheme(Scheme::Light);
+        for (bg, text) in [
+            (t.item_redo_background, t.item_redo_text),
+            (t.item_redo_hover_background, t.item_redo_hover_text),
+        ] {
+            assert!(luma(bg) > 160.0 && luma(text) < 60.0, "{bg:?} / {text:?}");
+        }
+    }
 
     /// `Id::unique` is a fixed-seed hash (egui-0.37 src/id.rs:92, `RandomState::with_seeds(1,2,3,4)`),
     /// so set_current/current meet on the same id.

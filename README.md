@@ -168,6 +168,17 @@ angle.
 
 ---
 
+## Installable plug-ins
+
+paint.rs runs [PhotoCraft](https://github.com/storytold/photocraft)'s sandboxed WebAssembly filter
+plug-ins and installs LightCraft looks (`.cube`, `.3dl`) and Camera Raw develop presets (`.xmp`).
+**Settings ▸ Plugins** installs files or browses the
+[ArtCraft Store](https://akkk09.github.io/artcraft-store/); installed items appear under
+**Effects ▸ Plugins** with a puzzle piece. [PLUGINS.md](PLUGINS.md) covers the sandbox and how to
+write a plug-in.
+
+---
+
 ## Download
 
 Builds for Linux, Windows, macOS and the web are on the
