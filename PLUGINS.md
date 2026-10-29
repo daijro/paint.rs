@@ -26,7 +26,7 @@ A plug-in is a WebAssembly module run by paint.rs's built-in interpreter
 ([wasmi](https://github.com/wasmi-labs/wasmi)), so the same file runs on the desktop and in the
 browser. It gets **no host imports**: no files, network, clock or randomness, and a module that
 imports anything is refused. Each run has an instruction budget, a 5-minute time limit (desktop)
-and a 1 GiB memory cap, and runs in a fresh instance. The image is handed over in one call when it
+and a 1 GiB memory cap (a `memory.grow` past it traps), and runs in a fresh instance. The image is handed over in one call when it
 fits (up to about 4K), else in tiles. A plug-in that traps, loops or returns garbage leaves the
 image as it was and reports why; Cancel stops a long one.
 

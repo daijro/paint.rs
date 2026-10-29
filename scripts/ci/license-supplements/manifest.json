@@ -1816,6 +1816,129 @@
           "role": "license-terms"
         }
       ]
+    },
+    {
+      "repository": "https://github.com/emilk/ehttp",
+      "package_commit": "02be4816c8fdbe6501a125d9c0243a084cfb5c68",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "ehttp",
+          "version": "0.5.0",
+          "license": "MIT OR Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10850,
+          "git_blob_sha1": "11069edd79019f7dafbe3138841cf289209270dd",
+          "url": "https://raw.githubusercontent.com/emilk/ehttp/02be4816c8fdbe6501a125d9c0243a084cfb5c68/LICENSE-APACHE",
+          "file": "blobs/11069edd79019f7dafbe3138841cf289209270dd.txt",
+          "sha256": "8173d5c29b4f956d532781d2b86e4e30f83e6b7878dce18c919451d6ba707c90",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1092,
+          "git_blob_sha1": "673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9",
+          "url": "https://raw.githubusercontent.com/emilk/ehttp/02be4816c8fdbe6501a125d9c0243a084cfb5c68/LICENSE-MIT",
+          "file": "blobs/673ea5f0505d6fa65c6a2b6a753c93b8e19d11b9.txt",
+          "sha256": "95ca92f5f8ea5231f1580b3a2a799e8260af3114b900e1def5355a7f44bcf60c",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/wasmi-labs/wasmi",
+      "package_commit": "2970aa871cc1001b57b267ccecdcd1e42306199e",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "wasmi",
+          "version": "2.0.0",
+          "license": "MIT/Apache-2.0"
+        },
+        {
+          "name": "wasmi_collections",
+          "version": "2.0.0",
+          "license": "MIT/Apache-2.0"
+        },
+        {
+          "name": "wasmi_core",
+          "version": "2.0.0",
+          "license": "MIT/Apache-2.0"
+        },
+        {
+          "name": "wasmi_ir",
+          "version": "2.0.0",
+          "license": "MIT/Apache-2.0"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10842,
+          "git_blob_sha1": "b35f96d23531d1d9108fdbfe418eba812d3f3fb7",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/2970aa871cc1001b57b267ccecdcd1e42306199e/LICENSE-APACHE",
+          "file": "blobs/b35f96d23531d1d9108fdbfe418eba812d3f3fb7.txt",
+          "sha256": "f031c1608e4a19e8cbcc3394cdba838067e79189610227459e8ffcd669e6f52d",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1062,
+          "git_blob_sha1": "1399b075915d94e530b1aa7de1938139d713ab31",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/2970aa871cc1001b57b267ccecdcd1e42306199e/LICENSE-MIT",
+          "file": "blobs/1399b075915d94e530b1aa7de1938139d713ab31.txt",
+          "sha256": "172bc1497507c1c363496bc23b0f16de8fa8e94befa85db6c8d9fa790e0a8657",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
+    },
+    {
+      "repository": "https://github.com/bytecodealliance/wasm-tools",
+      "package_commit": "e66235859a6ec0502bf6f9dcc358953eda4cafcc",
+      "basis": "Original notice blobs identified in this exact published package revision",
+      "packages": [
+        {
+          "name": "wasmparser",
+          "version": "0.228.0",
+          "license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE-APACHE",
+          "bytes": 10847,
+          "git_blob_sha1": "16fe87b06e802f094b3fbb0894b137bca2b16ef1",
+          "url": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/e66235859a6ec0502bf6f9dcc358953eda4cafcc/LICENSE-APACHE",
+          "file": "blobs/16fe87b06e802f094b3fbb0894b137bca2b16ef1.txt",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "bytes": 12243,
+          "git_blob_sha1": "f9d81955f4bcb8f96a025e2ecc46f39ec536d465",
+          "url": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/e66235859a6ec0502bf6f9dcc358953eda4cafcc/LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "file": "blobs/f9d81955f4bcb8f96a025e2ecc46f39ec536d465.txt",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "role": "license-terms"
+        },
+        {
+          "path": "LICENSE-MIT",
+          "bytes": 1023,
+          "git_blob_sha1": "31aa79387f27e730e33d871925e152e35e428031",
+          "url": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/e66235859a6ec0502bf6f9dcc358953eda4cafcc/LICENSE-MIT",
+          "file": "blobs/31aa79387f27e730e33d871925e152e35e428031.txt",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "role": "license-terms"
+        }
+      ],
+      "category": "exact-original"
     }
   ]
 }

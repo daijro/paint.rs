@@ -1,4 +1,4 @@
-//! Ported from PhotoCraft crates/plugins/src/runtime.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: the deadline also stops on the effect's cancel flag (`Deadline::new` takes it), as paint.rs cancels a superseded preview; `filter_buffer` first reserves the module's initial memory with `pc_alloc` (for the ArtCraft Store's plug-ins); `max_memory_bytes` defaults to 1 GiB, `band_bytes` to 256 MiB, `fuel_per_sample` to 20 000 and `wall_time_ms` to 5 minutes (see `Limits::default`); paths into the crate are this module's.
+//! Ported from PhotoCraft crates/plugins/src/runtime.rs @ e6d6fb45 (MIT OR Apache-2.0, used under MIT). Changes: the deadline also stops on the effect's cancel flag (`Deadline::new` takes it), as paint.rs cancels a superseded preview; `filter_buffer` first reserves the module's initial memory with `pc_alloc` (for the ArtCraft Store's plug-ins); a refused `memory.grow` traps (`instantiate`); `max_memory_bytes` defaults to 1 GiB, `band_bytes` to 256 MiB, `fuel_per_sample` to 20 000 and `wall_time_ms` to 5 minutes (see `Limits::default`); paths into the crate are this module's.
 //!
 //! The wasmi host: loading, instantiating and calling a plug-in under resource limits.
 
@@ -243,6 +243,9 @@ impl Plugin {
             .tables(4)
             .table_elements(100_000)
             .instances(1)
+            // A refused `memory.grow` traps instead of returning -1: a refusal costs little fuel
+            // but much time, so a module retrying it ran ~20 s on its budget (a debug build).
+            .trap_on_grow_failure(true)
             .build();
         let mut store = Store::new(&self.engine, limits);
         store.limiter(|l| l);
