@@ -6652,9 +6652,17 @@ fn gradient_handles_repeat_and_reverse_history() {
     drive_tool(
         &mut app,
         ToolType::Gradient,
+        &[Ev::Down(10.0, 10.0, Left), Ev::Move(90.0, 10.0)],
+    );
+    // The handles show while the gradient is still being drawn.
+    assert_eq!(
+        wand_handles(&app),
+        [[10.0, 10.0], [90.0, 10.0], [50.0, 10.0]]
+    );
+    drive_tool(
+        &mut app,
+        ToolType::Gradient,
         &[
-            Ev::Down(10.0, 10.0, Left),
-            Ev::Move(90.0, 10.0),
             Ev::Up(90.0, 10.0, Left),
             Ev::Down(90.0, 10.0, Left),
             Ev::Up(90.0, 10.0, Left),

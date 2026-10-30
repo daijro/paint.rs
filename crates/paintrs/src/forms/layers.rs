@@ -27,8 +27,6 @@ use crate::kit::thumbnails::{self, Scaler, ThumbnailMode};
 use crate::shell::canvas_view::DisplayPrefs;
 use crate::theme::{self, *};
 
-/// LayerForm `setScrollSpeed(0.4)`.
-const WHEEL_SPEED: f32 = 0.4;
 /// The layer strip (LayerForm.buildContent), in order.
 const STRIP: [&str; 7] = [
     "menu.layers.add.new.layer",
@@ -69,6 +67,7 @@ struct RowThumb {
     framed: Option<Framed>,
 }
 
+#[derive(Default)]
 pub struct LayerForm {
     list: ScrollList,
     scaler: Scaler,
@@ -80,20 +79,6 @@ pub struct LayerForm {
     pub shown: Vec<(usize, Rect)>,
     pub shown_layer: Option<egui::LayerId>,
     pub shown_pass: u64,
-}
-
-impl Default for LayerForm {
-    fn default() -> Self {
-        Self {
-            list: ScrollList::vertical(WHEEL_SPEED),
-            scaler: Scaler::default(),
-            scaled: HashMap::new(),
-            rows: HashMap::new(),
-            shown: Vec::new(),
-            shown_layer: None,
-            shown_pass: 0,
-        }
-    }
 }
 
 impl LayerForm {
@@ -257,7 +242,9 @@ impl LayerForm {
         let extent = dip_pt(LAYER_ROW, ppp);
         let content = n as f32 * extent;
         let area = list_area(ui, &mut self.list, list_rect, content, "layer-list");
-        self.list.wheel(ui, area, content, now, "layer-list");
+        // A row a notch (`VerticalImageStrip.OnPointerWheelChanged`).
+        self.list
+            .wheel_notches(ui, area, content, extent, "layer-list");
         let keys = app
             .active_ws()
             .map_or_else(Vec::new, |ws| row_keys(&ws.document.layers));

@@ -417,10 +417,8 @@ impl GradientTool {
             .map(|k| (k, app.tool_settings.get(ToolType::Gradient, k)))
             .collect()
     }
+    /// The end and move handles. User (2026-10-30): they show while the gradient is drawn too.
     fn handle_list(&self) -> Vec<Handle> {
-        if self.tx.state() == State::Drawing {
-            return vec![];
-        }
         let Some(r) = self.tx.record() else {
             return vec![];
         };

@@ -19,22 +19,14 @@ use crate::kit::text::{self, FontSpec};
 use crate::kit::tooltip::{self, Path};
 use crate::theme::{self, *};
 
-/// HistoryForm `setScrollSpeed(0.4)`.
-const WHEEL_SPEED: f32 = 0.4;
+/// Rows a wheel notch scrolls (`HistoryControl`: Windows' default `MouseWheelScrollLines`).
+const WHEEL_ROWS: f32 = 3.0;
 
+#[derive(Default)]
 pub struct HistoryForm {
     list: ScrollList,
     /// The (document, selected memento) last scrolled to (`postInitialize` → `scrollToSelected`).
     shown: Option<(u64, u64)>,
-}
-
-impl Default for HistoryForm {
-    fn default() -> Self {
-        Self {
-            list: ScrollList::vertical(WHEEL_SPEED),
-            shown: None,
-        }
-    }
 }
 
 /// A row: memento id, name, icon file, redo.
@@ -172,7 +164,8 @@ impl HistoryForm {
                 self.list.clamp(content, area.height());
             }
         }
-        self.list.wheel(ui, area, content, now, "history-list");
+        self.list
+            .wheel_notches(ui, area, content, WHEEL_ROWS * row, "history-list");
         let keys: Vec<u64> = rows.iter().map(|r| r.id).collect();
         let slots = self.list.layout(ui, area, &keys, row, now);
         let painter = ui.painter().with_clip_rect(area.intersect(ui.clip_rect()));

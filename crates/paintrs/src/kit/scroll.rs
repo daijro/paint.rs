@@ -427,13 +427,6 @@ pub struct ScrollList {
 }
 
 impl ScrollList {
-    pub fn vertical(speed: f32) -> Self {
-        Self {
-            speed,
-            ..Default::default()
-        }
-    }
-
     pub fn horizontal(speed: f32) -> Self {
         Self {
             horizontal: true,
@@ -479,10 +472,7 @@ impl ScrollList {
         }
         let page = self.len_of(viewport);
         let wheel = ui.input(|i| wheel_delta(i, page));
-        let hovered = ui
-            .ctx()
-            .read_response(Self::cover_id(ui, salt))
-            .is_some_and(|r| r.hovered());
+        let hovered = Self::hovered(ui, salt);
         if hovered && wheel != Vec2::ZERO && now - self.last_wheel >= WHEEL_THROTTLE_S {
             self.last_wheel = now;
             // `event.deltaY` (else deltaX) is egui's delta negated.
@@ -490,6 +480,42 @@ impl ScrollList {
             self.scroll += delta;
             self.clamp(content, page);
         }
+    }
+
+    /// Paint.NET's list wheel (`HistoryControl`, `VerticalImageStrip.OnPointerWheelChanged`) over
+    /// the list `salt` (its `cover`): `step` points a notch, every event, clamped to the range. A
+    /// notch is a wheel line, or 100 px of a pixel delta (as Ctrl+wheel zoom counts them), so a
+    /// touchpad scrolls in proportion. User (2026-10-30): paintdotjs's 0.4 × the delta at most
+    /// every 100 ms (`wheel`) scrolled the History and Layers lists too little.
+    pub fn wheel_notches(&mut self, ui: &Ui, viewport: Rect, content: f32, step: f32, salt: &str) {
+        let notches = ui.input(|i| {
+            i.raw.events.iter().fold(Vec2::ZERO, |sum, e| match e {
+                egui::Event::MouseWheel { unit, delta, .. } => {
+                    sum + match unit {
+                        egui::MouseWheelUnit::Point => *delta / 100.0,
+                        egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => *delta,
+                    }
+                }
+                _ => sum,
+            })
+        });
+        if Self::hovered(ui, salt) && notches != Vec2::ZERO {
+            // egui's delta is up-positive; y, else x (a horizontal wheel).
+            let n = if notches.y != 0.0 {
+                notches.y
+            } else {
+                notches.x
+            };
+            self.scroll -= n * step;
+            self.clamp(content, self.len_of(viewport));
+        }
+    }
+
+    /// Whether the list `salt`'s `cover` is under the pointer with nothing over it.
+    fn hovered(ui: &Ui, salt: &str) -> bool {
+        ui.ctx()
+            .read_response(Self::cover_id(ui, salt))
+            .is_some_and(|r| r.hovered())
     }
 
     /// Clamps the scroll position to `[0, content - view]`.
@@ -636,17 +662,19 @@ impl ScrollList {
 mod tests {
     use super::*;
 
-    /// A wheel step past either end of a list stops at that end instead of being dropped.
+    /// A notch scrolls a step, a pixel delta in proportion, every event; a step past either end
+    /// of a list stops at that end instead of being dropped.
     #[test]
-    fn list_wheel_reaches_both_ends() {
+    fn list_wheel_steps_by_notch_and_reaches_both_ends() {
+        use egui::MouseWheelUnit::{Line, Point};
         let ctx = egui::Context::default();
         let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 218.0));
-        let mut list = ScrollList::vertical(0.4);
-        let frame = |list: &mut ScrollList, now: f64, dy: f32| {
+        let mut list = ScrollList::default();
+        let frame = |list: &mut ScrollList, unit, dy: f32| {
             let events = vec![
                 egui::Event::PointerMoved(Pos2::new(50.0, 100.0)),
                 egui::Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Point,
+                    unit,
                     delta: Vec2::new(0.0, dy),
                     modifiers: egui::Modifiers::NONE,
                     phase: egui::TouchPhase::Move,
@@ -659,22 +687,23 @@ mod tests {
                 ..Default::default()
             };
             let mut out = ctx.run_ui(raw, |ui| {
-                list.wheel(ui, rect, 372.0, now, "t");
+                list.wheel_notches(ui, rect, 372.0, 60.0, "t");
                 list.cover(ui, rect, "t");
             });
             out.textures_delta.clear();
             list.scroll
         };
-        frame(&mut list, 0.0, 0.0);
-        assert_eq!(frame(&mut list, 1.0, -300.0), 120.0);
+        frame(&mut list, Point, 0.0);
+        assert_eq!(frame(&mut list, Point, -50.0), 30.0, "half a notch");
+        assert_eq!(frame(&mut list, Line, -1.0), 90.0);
         assert_eq!(
-            frame(&mut list, 2.0, -300.0),
+            frame(&mut list, Line, -2.0),
             154.0,
             "short of the end: to the end"
         );
-        assert_eq!(frame(&mut list, 3.0, 200.0), 74.0);
+        assert_eq!(frame(&mut list, Line, 1.0), 94.0);
         assert_eq!(
-            frame(&mut list, 4.0, 200.0),
+            frame(&mut list, Point, 200.0),
             0.0,
             "short of the top: to the top"
         );
