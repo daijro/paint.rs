@@ -28,11 +28,9 @@ fn main() -> std::process::ExitCode {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let mut options = options.clone();
-            renderer.apply(&mut options, log);
             eframe::run_native(
                 "paint.rs",
-                options,
+                run_options(renderer, log),
                 Box::new(move |cc| {
                     started.set(true);
                     startup::log_adapter(log, cc);
@@ -67,6 +65,23 @@ fn main() -> std::process::ExitCode {
     }
 }
 
+/// The options one renderer runs with, built afresh: `NativeOptions::clone` drops
+/// `event_loop_builder`, and with it the Xwayland choice a pen needs.
+#[cfg(not(any(target_arch = "wasm32", target_os = "macos")))]
+fn run_options(
+    renderer: paintrs::platform::startup::Renderer,
+    log: &paintrs::platform::startup::Log,
+) -> eframe::NativeOptions {
+    let mut options = native_options();
+    renderer.apply(&mut options, log);
+    options
+}
+
+/// Whether the window opens through Xwayland (platform/tablet.rs). Decided once: every renderer
+/// builds its options again.
+#[cfg(target_os = "linux")]
+static XWAYLAND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 #[cfg(not(target_arch = "wasm32"))]
 fn native_options() -> eframe::NativeOptions {
     // js/platform/desktop/main.js: default1080×720, minimum640×480; OS owns DPI.
@@ -97,17 +112,13 @@ fn native_options() -> eframe::NativeOptions {
         persistence_path: eframe::storage_dir("paint.rs").map(|dir| dir.join("app.ron")),
         ..Default::default()
     };
-    // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; a pen needs Xwayland there
-    // (platform/tablet.rs). Decided once: the renderer fallbacks call this again.
+    // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; a pen needs Xwayland there.
     #[cfg(target_os = "linux")]
-    {
-        static XWAYLAND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *XWAYLAND.get_or_init(paintrs::platform::tablet::use_xwayland) {
-            use winit::platform::x11::EventLoopBuilderExtX11 as _;
-            options.event_loop_builder = Some(Box::new(|builder| {
-                builder.with_x11();
-            }));
-        }
+    if *XWAYLAND.get_or_init(paintrs::platform::tablet::use_xwayland) {
+        use winit::platform::x11::EventLoopBuilderExtX11 as _;
+        options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_x11();
+        }));
     }
     // eframe's default surface (`SurfaceConfig::LOW_LATENCY`) already queues one frame ahead of
     // the display, vsync'd. `PAINTRS_FRAME_LATENCY` (1-3) overrides it: 2 or 3 trade a refresh of
@@ -165,4 +176,19 @@ fn main() {
             eprintln!("live editing: {e:?}");
         }
     });
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use paintrs::platform::startup::{Log, Renderer};
+
+    /// Every renderer opens the window through Xwayland once that is decided (a pen on Wayland).
+    #[test]
+    fn each_renderer_keeps_the_xwayland_choice() {
+        assert!(*super::XWAYLAND.get_or_init(|| true));
+        for renderer in [Renderer::Default, Renderer::Software, Renderer::Gl] {
+            let options = super::run_options(renderer, &Log::start(None));
+            assert!(options.event_loop_builder.is_some(), "{renderer:?}");
+        }
+    }
 }

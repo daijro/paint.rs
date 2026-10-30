@@ -181,8 +181,8 @@ write a plug-in.
 
 ## Download
 
-Builds for Linux (x86-64 and arm64, glibc or musl), Windows (x86-64 and arm64), macOS, FreeBSD and the
-web are on the [Releases](https://github.com/daijro/paint.rs/releases) page.
+Builds for Linux (x86-64 and arm64, glibc or musl), Windows (x86-64 and arm64), macOS (Apple
+Silicon), FreeBSD and the web are on the [Releases](https://github.com/daijro/paint.rs/releases) page.
 
 - The plain x86-64 downloads run on any x86-64 CPU. The `-avx2` ones are faster but need AVX2 (most
   Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If
@@ -200,7 +200,7 @@ web are on the [Releases](https://github.com/daijro/paint.rs/releases) page.
   You can delete `squashfs-root` after that.
   From the `.tar.gz`, run `sh scripts/linux-install-desktop.sh ./paintrs` once.
 - The macOS and Windows builds are unsigned, so the system warns the first time you open them.
-  The macOS download needs macOS 11 or newer.
+  The macOS download is for Apple Silicon Macs and needs macOS 11 or newer.
 - Pen tablets paint with pressure on every platform. On a Wayland desktop with a pen plugged in,
   the app opens its window through Xwayland, because Wayland gives a pen only to apps that speak
   its tablet protocol. Started from a terminal, it prints which it chose and why. If the pen still

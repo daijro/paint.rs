@@ -20,7 +20,7 @@ env:
   ALPINE_IMAGE: alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
 
 # Release builds only build and package; ci.yml runs the tests. Desktop builds use the
-# `dist` profile (fat LTO, one codegen unit). Each glibc Linux, Windows and macOS x86-64 download comes
+# `dist` profile (fat LTO, one codegen unit). Each glibc Linux and Windows x86-64 download comes
 # twice: baseline x86-64, which runs on any 64-bit CPU, and `-avx2` (x86-64-v3: Haswell / Excavator or
 # newer). Arm builds (Apple Silicon, Linux and Windows arm64) use the default aarch64 target, which has NEON.
 # checkout v7.0.1, the same pin as ci.yml. Uploads use the gh CLI that every runner ships, not a third-party
@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS arm64 and x86_64 (.tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS on Apple Silicon (arm64 .tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
 
           The plain x86-64 downloads run on any x86-64 CPU. The -avx2 ones are faster but need AVX2 (most Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If unsure, take the plain one.
 
@@ -214,16 +214,6 @@ jobs:
             arch: arm64
             suffix: ''
             rustflags: ''
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            arch: x86_64
-            suffix: ''
-            rustflags: ''
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            arch: x86_64
-            suffix: '-avx2'
-            rustflags: -Ctarget-cpu=x86-64-v3
     runs-on: ${{ matrix.runner }}
     # The static dav1d and the Rust code both build for macOS 11, not the runner's macOS 15.
     env:

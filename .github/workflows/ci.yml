@@ -93,9 +93,6 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             arch: arm64
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-            arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
