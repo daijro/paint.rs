@@ -87,6 +87,22 @@ def supplemental_notices(package, supplement_root):
     return []
 
 
+def workspace_root_notices(package, root):
+    """For a path dependency (no registry source) whose licence file sits at the root of the Cargo
+    workspace it belongs to, as OpenD2D's crates do, return that root's licence and notice files."""
+    if package.get('source') is not None:
+        return []
+    for parent in root.parents:
+        manifest = parent / 'Cargo.toml'
+        if manifest.is_file() and '[workspace]' in manifest.read_text(encoding='utf-8'):
+            found = [path for path in sorted(parent.iterdir()) if path.is_file() and path.stat().st_size
+                     and (is_notice(path) or path.name.upper().startswith('THIRD-PARTY-NOTICES'))]
+            if any(path.name.lower().startswith(('license', 'licence', 'copying')) for path in found):
+                return found
+            return []
+    return []
+
+
 def collect_dependencies(metadata, destination, supplement_root=None):
     """Retain the full metadata superset, including build/test and other-target crates."""
     inventory = dict(scope='Unfiltered Cargo metadata superset; not a linked dependency closure',
@@ -121,7 +137,15 @@ def collect_dependencies(metadata, destination, supplement_root=None):
             entry['error'] = 'No Cargo license expression or license_file'
         elif not any(notice.get('role') == 'license-terms' for _, notice, _ in supplements) and not any(path.name.lower().startswith(('license', 'licence', 'copying', 'ofl'))
                      and path.parent == root and path.stat().st_size for path in files):
-            entry.setdefault('error', 'Cargo license expression has no supplied license text')
+            shared = workspace_root_notices(package, root)
+            if shared:
+                for source in shared:
+                    target = Path('rust') / key / 'workspace' / source.name
+                    copy(source, destination / target)
+                    entry['notices'].append(dict(path=str(target), source_path='<workspace root>/' + source.name,
+                                                 sha256=hashlib.sha256(source.read_bytes()).hexdigest()))
+            else:
+                entry.setdefault('error', 'Cargo license expression has no supplied license text')
         for source in sorted(files):
             if not source.resolve().is_relative_to(root):
                 entry['error'] = 'Notice symlink escapes the package root'

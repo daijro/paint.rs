@@ -117,6 +117,25 @@ class NoticesTests(unittest.TestCase):
                     self.assertTrue(all(p['authors'] == authors for p in inventory['packages']))
                     self.assertEqual((output / 'rust/tiny-skia-1/LICENSE').read_bytes(), original)
 
+    def test_path_dependency_takes_its_workspace_root_license(self):
+        # OpenD2D's crates come in as path dependencies whose licence sits at their workspace root.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            ws = tmp / 'opend2d'
+            (ws / 'crates/d2d').mkdir(parents=True)
+            (ws / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/d2d"]\n')
+            (ws / 'LICENSE').write_text('GNU GENERAL PUBLIC LICENSE\n')
+            (ws / 'THIRD-PARTY-NOTICES').write_text('third-party terms\n')
+            package = dict(id='d2d', name='d2d', version='0.1.0', source=None, license='GPL-3.0-or-later',
+                           manifest_path=str(ws / 'crates/d2d/Cargo.toml'), license_file=None, repository=None)
+            metadata = dict(packages=[package], workspace_members=[])
+            notices.collect_dependencies(metadata, tmp / 'out')
+            self.assertEqual((tmp / 'out/rust/d2d-0.1.0/workspace/LICENSE').read_text(), 'GNU GENERAL PUBLIC LICENSE\n')
+            self.assertTrue((tmp / 'out/rust/d2d-0.1.0/workspace/THIRD-PARTY-NOTICES').is_file())
+            package['source'] = 'registry+https://github.com/rust-lang/crates.io-index'
+            with self.assertRaisesRegex(ValueError, 'd2d'):  # a registry crate must ship its own text
+                notices.collect_dependencies(metadata, tmp / 'registry')
+
     def test_cargo_license_file_is_honored_and_missing_notice_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
