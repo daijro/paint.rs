@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Effects.Core</AssemblyName>
+    <RootNamespace>PaintDotNet.Effects</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/Core.csproj" />
+    <!-- EffectConfigDialog: a classic plugin's own settings dialog. -->
+    <ProjectReference Include="../WindowsForms/WindowsForms.csproj" />
+    <ProjectReference Include="../PropertySystem/PropertySystem.csproj" />
+    <!-- ClassicEffectBase is a RefTrackedObject. -->
+    <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+    <!-- 5A-6: GpuImageEffect (PaintDotNet.Effects.Gpu) returns PaintDotNet.Direct2D1 images, which
+         live in the shared PaintDotNet.Windows identity. -->
+    <ProjectReference Include="../Windows/Windows.csproj" />
+    <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
+    <!-- A layer's blend mode (IEffectLayerInfo.BlendMode) is Data's LayerBlendMode, as in Paint.NET. -->
+    <ProjectReference Include="../Data/Data.csproj" />
+    <!-- System.Drawing.Image appears on the classic effect ctors. -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PdnBridge" />
+    <InternalsVisibleTo Include="PaintNetWeb" />
+  </ItemGroup>
+</Project>

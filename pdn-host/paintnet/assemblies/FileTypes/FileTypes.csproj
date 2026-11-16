@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.FileTypes</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Primitives/Primitives.csproj" />
+    <ProjectReference Include="../Fundamentals/Fundamentals.csproj" />
+    <ProjectReference Include="../Core/Core.csproj" />
+    <ProjectReference Include="../Windows/Windows.csproj" />
+    <ProjectReference Include="../PropertySystem/PropertySystem.csproj" />
+  </ItemGroup>
+</Project>

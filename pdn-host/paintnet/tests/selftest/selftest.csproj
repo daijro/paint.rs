@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>PdnSelfTest</AssemblyName>
+    <RootNamespace>PdnSelfTest</RootNamespace>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- RawFileType copies pixels through the bitmap-lock buffer pointers. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- ResourceEffect's non-string resource, written for System.Resources.Extensions' reader. -->
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../assemblies/Primitives/Primitives.csproj" />
+    <ProjectReference Include="../../assemblies/Core/Core.csproj" />
+    <ProjectReference Include="../../assemblies/Effects.Core/Effects.Core.csproj" />
+    <!-- BuiltinsEffect drives the classic built-ins. -->
+    <ProjectReference Include="../../assemblies/Effects.Legacy/Effects.Legacy.csproj" />
+    <!-- Paint.NET 3.x-5.1's document classes (Classic4.cs), aliased as the bridge does beside FileTypes' names. -->
+    <ProjectReference Include="../../assemblies/Data/Data.csproj" Aliases="pdndata" />
+    <ProjectReference Include="../../assemblies/PropertySystem/PropertySystem.csproj" />
+    <!-- The in-tree RawFileType (IFileType + the bitmap-lock surface). -->
+    <ProjectReference Include="../../assemblies/Windows/Windows.csproj" />
+    <ProjectReference Include="../../assemblies/FileTypes/FileTypes.csproj" />
+    <!-- ChartEffect draws a Chart (BoltBait's Chart or Graph does). -->
+    <ProjectReference Include="../../assemblies/WindowsFormsDataVisualization/WindowsFormsDataVisualization.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+    <PackageReference Include="System.Resources.Extensions" Version="11.0.0" />
+  </ItemGroup>
+</Project>

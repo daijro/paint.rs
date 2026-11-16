@@ -17,7 +17,6 @@
 mod color_popup;
 mod external;
 mod layouts;
-pub(in crate::dialogs) use layouts::tab_strip;
 mod preview;
 mod special;
 mod widgets;
@@ -51,7 +50,22 @@ use color_popup::ColorPopup;
 use external::{ExternalInput, PresetLoad};
 use preview::JobResult;
 #[cfg(target_arch = "wasm32")]
-use preview::SlicedSeam;
+use preview::{SlicedPlugin, SlicedSeam};
+
+/// A plug-in FileType's window (`EffectConfigDialog::for_window`): its controls, and where OK or Cancel goes.
+struct WindowAnswer {
+    controls: Vec<Control>,
+    done: Option<WindowDone>,
+}
+
+/// A plug-in window's displacement grid being edited: its size in cells, and the node being dragged.
+type GridEdit = ((u32, u32), Option<(u32, u32)>);
+
+/// Where a FileType's window's OK (its values) or Cancel (`None`) goes.
+type WindowDone = Box<dyn FnOnce(Option<Values>, &mut DialogCx)>;
+
+/// The title-bar icon of a FileType's window: the plug-in effects' one.
+const PLUGIN_WINDOW_ICON: &str = pdn_core::effect::dotnet::ICON;
 
 /// The Curves layout's editors: one per mode, each keeping its own points.
 struct CurvesState {
@@ -110,6 +124,8 @@ pub struct EffectConfigDialog {
     #[cfg(test)]
     acquisitions: usize,
     session: Option<EffectSession>,
+    /// A plug-in FileType's window shown while a file opens or saves (`for_window`), in place of a session.
+    window: Option<WindowAnswer>,
     values: Values,
     title: String,
     icon: String,
@@ -124,6 +140,8 @@ pub struct EffectConfigDialog {
     job_cancel: Option<Arc<AtomicBool>>,
     #[cfg(target_arch = "wasm32")]
     sliced_seam: Option<SlicedSeam>,
+    #[cfg(target_arch = "wasm32")]
+    sliced_plugin: Option<SlicedPlugin>,
     finalizing: bool,
     failed: bool,
     /// The final render's worker ended without a result (a panic): `failed`, and reported.
@@ -131,6 +149,12 @@ pub struct EffectConfigDialog {
     pending_notice: Option<String>,
     noticed_generation: Option<u64>,
     curves: Option<CurvesState>,
+    /// A plug-in window's curve editor and the channels it shows (`plugin_curve`).
+    plugin_curve: Option<(&'static [&'static str], CurveEditor)>,
+    /// A plug-in window's displacement grid (`plugin_grid`): its size, and the node being dragged.
+    plugin_grid: Option<GridEdit>,
+    /// The image under that grid at its device size.
+    grid_thumb: Option<(usize, usize, Canvas)>,
     /// The Levels gradient handle being dragged: (output column, handle index).
     levels_drag: Option<(bool, usize)>,
     /// The Rotate/Zoom roll canvas drag: (start pointer, start roll vector, on the sphere).
@@ -238,12 +262,18 @@ impl EffectConfigDialog {
         if external {
             session.set_image(None);
         }
+        let mut d = Self::blank(values, title, icon);
+        if external {
+            d.input = ExternalInput::Unstarted;
+        }
+        (d.session, d.curves, d.histogram, d.chart) = (Some(session), curves, histogram, chart);
+        d
+    }
+
+    /// A dialog with no session yet: nothing to preview, no file work.
+    fn blank(values: Values, title: String, icon: String) -> Self {
         Self {
-            input: if external {
-                ExternalInput::Unstarted
-            } else {
-                ExternalInput::Resolved
-            },
+            input: ExternalInput::Resolved,
             files: Files::current(),
             file_source: FileSource::default(),
             candidate: None,
@@ -255,7 +285,8 @@ impl EffectConfigDialog {
             typed_paths: true,
             #[cfg(test)]
             acquisitions: 0,
-            session: Some(session),
+            session: None,
+            window: None,
             values,
             title,
             icon,
@@ -268,12 +299,17 @@ impl EffectConfigDialog {
             job_cancel: None,
             #[cfg(target_arch = "wasm32")]
             sliced_seam: None,
+            #[cfg(target_arch = "wasm32")]
+            sliced_plugin: None,
             finalizing: false,
             failed: false,
             worker_lost: false,
             pending_notice: None,
             noticed_generation: None,
-            curves,
+            curves: None,
+            plugin_curve: None,
+            plugin_grid: None,
+            grid_thumb: None,
             levels_drag: None,
             roll_drag: None,
             thumb_presses: vec![],
@@ -282,16 +318,35 @@ impl EffectConfigDialog {
             color_popup: None,
             color_dismiss_gesture: false,
             canvases: vec![],
-            histogram,
+            histogram: None,
             roll_image: None,
             pan_thumb: None,
             pan_thumbs: vec![],
             shown: None,
             font_error: None,
             faces: (0, vec![]),
-            chart,
+            chart: None,
             rows_scroll: (0.0, None),
         }
+    }
+
+    /// A plug-in FileType's window (`PluginWindow`) shown while a file opens or saves: its settings in the generic
+    /// rows, at their defaults, and OK and Cancel. OK hands `done` the values, Cancel (or closing it) `None`.
+    pub fn for_window(
+        title: String,
+        controls: Vec<Control>,
+        done: impl FnOnce(Option<Values>, &mut DialogCx) + 'static,
+    ) -> Self {
+        let values = controls
+            .iter()
+            .map(|c| (c.key().to_owned(), c.default_value()))
+            .collect();
+        let mut d = Self::blank(values, title, PLUGIN_WINDOW_ICON.into());
+        d.window = Some(WindowAnswer {
+            controls,
+            done: Some(Box::new(done)),
+        });
+        d
     }
 
     /// R152 Q54: the plugin's idempotent hook on the current values.
@@ -300,6 +355,25 @@ impl EffectConfigDialog {
             && let Some(ui) = s.def.indirect
         {
             (ui.on_change)(&mut self.values, &s.env());
+        }
+    }
+
+    /// A plug-in window's button (`Control::Button`): pressed in the plug-in's own window over the layer, keeping the
+    /// token that makes and the window's settings after it (a list's new items). False when it could not be
+    /// pressed; the reason goes to the notice line.
+    pub(super) fn press(&mut self, key: &str) -> bool {
+        let Some(s) = &self.session else {
+            return false;
+        };
+        let env = s.env();
+        match pdn_core::effect::dotnet::press(s.def.id, key, s.source(), &mut self.values, &env) {
+            Ok(()) => true,
+            Err(e) => {
+                if let Some(notice) = env.notice {
+                    *notice.lock().unwrap() = Some(e);
+                }
+                false
+            }
         }
     }
 
@@ -338,6 +412,9 @@ impl EffectConfigDialog {
     }
 
     fn controls(&self) -> Vec<Control> {
+        if let Some(w) = &self.window {
+            return w.controls.clone();
+        }
         self.session
             .as_ref()
             .map(|s| s.def.controls.clone())
@@ -370,6 +447,10 @@ impl EffectConfigDialog {
     }
 
     fn ok(&mut self, cx: &mut DialogCx, ctx: &egui::Context) -> DialogState {
+        if let Some(done) = self.window.as_mut().and_then(|w| w.done.take()) {
+            done(Some(self.values.clone()), cx);
+            return DialogState::Closed(DialogResult::Ok);
+        }
         self.poll_external(cx.app);
         if self
             .session
@@ -417,6 +498,10 @@ impl EffectConfigDialog {
     }
 
     fn cancel(&mut self, cx: &mut DialogCx) -> DialogState {
+        if let Some(done) = self.window.as_mut().and_then(|w| w.done.take()) {
+            done(None, cx);
+            return DialogState::Closed(DialogResult::Cancel);
+        }
         self.cancel_job();
         self.input = ExternalInput::Retired;
         self.chooser = None;
@@ -555,10 +640,12 @@ impl Dialog for EffectConfigDialog {
 
     fn show(&mut self, ui: &mut Ui, cx: &mut DialogCx) -> DialogState {
         let ctx = ui.ctx().clone();
-        if self
-            .session
-            .as_ref()
-            .is_none_or(|s| !s.owner_exists(cx.app))
+        let window = self.window.is_some();
+        if !window
+            && self
+                .session
+                .as_ref()
+                .is_none_or(|s| !s.owner_exists(cx.app))
         {
             return self.cancel(cx);
         }
@@ -623,7 +710,7 @@ impl Dialog for EffectConfigDialog {
             changed = merge(changed, c);
         };
         let mut footer = |ui: &mut Ui, f: Rect| {
-            action = footer_ui(ui, f, layout, preset, &mut preview);
+            action = footer_ui(ui, f, layout, preset, (!window).then_some(&mut preview));
         };
         let chart = layout == Some(DialogLayout::Chart);
         let mut draw_parent = || {
@@ -740,14 +827,17 @@ impl Dialog for EffectConfigDialog {
         if changed.is_none() {
             changed = self.poll_chooser();
         }
-        if let Some(immediate) = changed {
-            self.notify(cx, &ctx, immediate);
+        // A FileType's window has no image to preview.
+        if !window {
+            if let Some(immediate) = changed {
+                self.notify(cx, &ctx, immediate);
+            }
+            self.acquire_external(cx.app, &ctx, cx.clipboard.as_deref_mut());
+            self.poll_external(cx.app);
+            self.check_faces(cx);
+            self.run_previews(cx, &ctx);
+            self.repaint_file_work(&ctx);
         }
-        self.acquire_external(cx.app, &ctx, cx.clipboard.as_deref_mut());
-        self.poll_external(cx.app);
-        self.check_faces(cx);
-        self.run_previews(cx, &ctx);
-        self.repaint_file_work(&ctx);
         // Edits and cancellation were routed before this frame's results; acceptance comes last.
         if submit {
             return self.ok(cx, &ctx);
@@ -785,7 +875,7 @@ fn footer_ui(
     f: Rect,
     layout: Option<DialogLayout>,
     preset: bool,
-    preview: &mut bool,
+    preview: Option<&mut bool>,
 ) -> Option<FooterAction> {
     let theme = theme::current(ui.ctx());
     let ppp = ui.ctx().pixels_per_point();
@@ -820,7 +910,10 @@ fn footer_ui(
         }
         x += w + EFFECT_FOOTER_GAP;
     }
-    if !has_left && layout.is_none() {
+    if !has_left
+        && layout.is_none()
+        && let Some(preview) = preview
+    {
         // `.effect-config-checkbox`: the 16-px box, 7 px, "Preview".
         let (side, gap, min_h) = EFFECT_CHECKBOX;
         let top = content.center().y - min_h / 2.0;
@@ -1825,6 +1918,210 @@ pub(crate) mod bb29_tests {
                 assert_eq!(app.active_ws().unwrap().history.undo.len(), history);
             }
         }
+    }
+
+    /// A plug-in's text (no IndirectUI, so the generic rows) is a box to type in, focused first.
+    #[test]
+    fn a_generic_text_row_takes_typing() {
+        let probe = EffectDef {
+            id: "genericTextProbe",
+            indirect: None,
+            dialog: None,
+            controls: vec![Control::Text {
+                key: "w:0.",
+                label: "Text",
+                default: "",
+                max_len: 32767,
+                multiline: false,
+            }],
+            ..pdn_core::effect::find("invertColorsEffect").unwrap()
+        };
+        let mut app = fresh_doc(6, 4, Some(4));
+        let s = EffectSession::begin(&mut app, probe).unwrap();
+        let values = s.defaults();
+        let mut d = EffectConfigDialog::new(s, values);
+        let ctx = context();
+        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
+        frame_with(
+            &ctx,
+            &mut app,
+            None,
+            &mut d,
+            vec![egui::Event::Text("Hi".into())],
+            false,
+        );
+        assert_eq!(d.values["w:0."], json!("Hi"));
+    }
+
+    /// A plug-in window's displacement grid keeps the nodes the dialog opened with, and another size (its size
+    /// choice) starts with none moved, as the plug-in's grid does.
+    #[test]
+    fn a_plugin_grid_resets_with_its_size() {
+        let probe = EffectDef {
+            id: "pluginGridProbe",
+            indirect: None,
+            dialog: None,
+            controls: vec![
+                Control::Select {
+                    key: "w:0.",
+                    label: "Columns",
+                    default: "0",
+                    choices: &[("0", "2"), ("1", "4")],
+                },
+                Control::PluginGrid {
+                    key: "w:grid",
+                    label: "Grid",
+                    columns: 2,
+                    rows: 2,
+                    columns_by: Some("w:0."),
+                    rows_by: None,
+                },
+            ],
+            ..pdn_core::effect::find("invertColorsEffect").unwrap()
+        };
+        let mut app = fresh_doc(6, 4, Some(4));
+        let s = EffectSession::begin(&mut app, probe).unwrap();
+        let mut values = s.defaults();
+        let moved = json!([[1, 1, 0.5, -0.25]]);
+        values.insert("w:grid".into(), moved.clone());
+        let mut d = EffectConfigDialog::new(s, values);
+        let ctx = context();
+        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
+        assert_eq!(d.values["w:grid"], moved, "opened with");
+        assert_eq!(d.plugin_grid.map(|g| g.0), Some((2, 2)));
+        d.values.insert("w:0.".into(), json!("1"));
+        frame_with(&ctx, &mut app, None, &mut d, vec![], false);
+        assert_eq!(d.values["w:grid"], json!([]));
+        assert_eq!(d.plugin_grid.map(|g| g.0), Some((4, 2)));
+    }
+
+    /// A FileType's window shown while a file opens or saves: no image needed, its settings at their defaults,
+    /// typing edits them, Enter (OK) hands them over once, and Escape (Cancel) hands over nothing.
+    #[test]
+    fn a_filetype_window_hands_back_its_values() {
+        let controls = || {
+            vec![
+                Control::Text {
+                    key: "w:0.",
+                    label: "Name",
+                    default: "",
+                    max_len: 32767,
+                    multiline: false,
+                },
+                Control::Checkbox {
+                    key: "w:1.",
+                    label: "Merged",
+                    default: true,
+                },
+            ]
+        };
+        use std::{cell::RefCell, rc::Rc};
+        let got: Rc<RefCell<Vec<Option<Values>>>> = Rc::default();
+        let mut app = fresh_doc(6, 4, Some(4));
+        let ctx = context();
+        let into = got.clone();
+        let mut d =
+            EffectConfigDialog::for_window("Save Options".into(), controls(), move |v, _| {
+                into.borrow_mut().push(v)
+            });
+        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
+        frame_with(
+            &ctx,
+            &mut app,
+            None,
+            &mut d,
+            vec![egui::Event::Text("ab".into())],
+            false,
+        );
+        let state = frame_with(
+            &ctx,
+            &mut app,
+            None,
+            &mut d,
+            key(Key::Enter, egui::Modifiers::NONE),
+            false,
+        );
+        assert_eq!(state, DialogState::Closed(DialogResult::Ok));
+        let values = got.borrow()[0].clone().expect("OK hands the values over");
+        assert_eq!(
+            (&values["w:0."], &values["w:1."]),
+            (&json!("ab"), &json!(true))
+        );
+
+        let into = got.clone();
+        let mut d =
+            EffectConfigDialog::for_window("Save Options".into(), controls(), move |v, _| {
+                into.borrow_mut().push(v)
+            });
+        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
+        let state = frame_with(
+            &ctx,
+            &mut app,
+            None,
+            &mut d,
+            key(Key::Escape, egui::Modifiers::NONE),
+            false,
+        );
+        assert_eq!(state, DialogState::Closed(DialogResult::Cancel));
+        assert_eq!(got.borrow().len(), 2);
+        assert!(got.borrow()[1].is_none(), "Cancel hands nothing over");
+    }
+
+    /// A plug-in window's curve shows the channels its mode picks; another mode starts from that mode's own points,
+    /// and the values the dialog opened with are kept.
+    #[test]
+    fn a_plugin_curve_follows_its_mode() {
+        use pdn_core::effect::CurveChannels;
+        let leak = |v: serde_json::Value| -> &'static serde_json::Value { Box::leak(Box::new(v)) };
+        let gray = CurveChannels {
+            names: &["Gray"],
+            colors: &[None],
+            default: leak(json!([[[0, 0], [255, 255]]])),
+        };
+        let colour = CurveChannels {
+            names: &["Red", "Green"],
+            colors: &[Some([255, 0, 0]), Some([0, 255, 0])],
+            default: leak(json!([[[0, 0], [255, 255]], [[0, 0], [255, 255]]])),
+        };
+        let probe = EffectDef {
+            id: "pluginCurveProbe",
+            indirect: None,
+            dialog: None,
+            controls: vec![
+                Control::Select {
+                    key: "w:0.",
+                    label: "Mode",
+                    default: "0",
+                    choices: &[("0", "Gray"), ("1", "Colour")],
+                },
+                Control::PluginCurve {
+                    key: "w:1.curve",
+                    label: "Setting",
+                    max: 255,
+                    own: gray.clone(),
+                    by: Some("w:0."),
+                    sets: Box::leak(vec![gray, colour].into_boxed_slice()),
+                },
+            ],
+            ..pdn_core::effect::find("invertColorsEffect").unwrap()
+        };
+        let mut app = fresh_doc(6, 4, Some(4));
+        let s = EffectSession::begin(&mut app, probe).unwrap();
+        let mut values = s.defaults();
+        let bent = json!([[[0, 0], [128, 90], [255, 255]]]);
+        values.insert("w:1.curve".into(), bent.clone());
+        let mut d = EffectConfigDialog::new(s, values);
+        let ctx = context();
+        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
+        assert_eq!(d.values["w:1.curve"], bent, "opened with");
+        assert_eq!(d.plugin_curve.as_ref().unwrap().1.channels.len(), 1);
+        d.values.insert("w:0.".into(), json!("1"));
+        frame_with(&ctx, &mut app, None, &mut d, vec![], false);
+        assert_eq!(
+            d.values["w:1.curve"],
+            json!([[[0, 0], [255, 255]], [[0, 0], [255, 255]]])
+        );
+        assert_eq!(d.plugin_curve.as_ref().unwrap().1.channels.len(), 2);
     }
 
     /// R157: with no system Impact (Bundled), the session waits for the Impact attempt to

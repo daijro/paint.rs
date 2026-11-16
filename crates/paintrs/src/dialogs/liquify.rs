@@ -405,6 +405,7 @@ impl LiquifyDialog {
                 ui,
                 &mut self.slider,
                 key,
+                label,
                 spec,
                 &mut self.values,
                 range,

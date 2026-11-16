@@ -1,5 +1,7 @@
-//! Settings ▸ Plugins: the installed plug-ins and looks (`platform::plugins`), Install… for files
-//! and Browse Store… for the ArtCraft Store (`dialogs::plugin_store`), laid out as Fonts is.
+//! Settings ▸ Plugins: the installed plug-in files (`platform::plugins`): Paint.NET plug-ins
+//! (`.dll`), PhotoCraft filters (`.wasm`), LightCraft looks (`.cube`, `.3dl`) and develop presets
+//! (`.xmp`), each an Effects ▸ Plugins item; Install… (or a drop) takes any of them or a `.zip`.
+//! Laid out as Fonts is.
 use super::fonts::action;
 use super::{EntryUi, mix, reveal_focus};
 use crate::{
@@ -11,8 +13,8 @@ use crate::{
 };
 use egui::{Pos2, Rect, Vec2};
 
-const ROW: f32 = 64.;
-const PITCH: f32 = 70.;
+const ROW: f32 = 40.;
+const PITCH: f32 = 46.;
 
 /// `text` wrapped to the page width in the Settings paragraph colour.
 fn paragraph(e: &mut EntryUi, text: &str, color: egui::Color32) {
@@ -50,9 +52,9 @@ pub fn show(e: &mut EntryUi) {
     e.add_heading("Plugins", "");
     paragraph(
         e,
-        "Install PhotoCraft filter plug-ins (.wasm), LightCraft looks (.cube, .3dl) and develop \
-         presets (.xmp). They appear under Effects > Plugins, marked with a puzzle piece. \
-         Plug-ins run sandboxed: they cannot reach your files, the network or other apps.",
+        "Install Paint.NET plug-ins (.dll), or a .zip of them: effects and adjustments (classic, \
+         property-based and GPU) appear under Effects ▸ Plugins, and FileType plug-ins add formats \
+         to Open and Save. A plug-in that cannot load is listed below with the reason.",
         soft,
     );
     e.y += 9.;
@@ -63,13 +65,11 @@ pub fn show(e: &mut EntryUi) {
     let (ready, busy) = (manager.ready(), manager.busy());
     let items = manager.items.clone();
     let status = manager.status.clone();
+    let failed = manager.failed.clone();
     #[cfg(not(target_arch = "wasm32"))]
     let folder = manager.folder().map(|f| f.display().to_string());
-    let button =
-        |x: f32, w: f32| Rect::from_min_size(Pos2::new(e.rect.min.x + x, e.y), Vec2::new(w, 27.));
-    let (install, browse) = (button(0., 112.), button(120., 128.));
+    let install = Rect::from_min_size(Pos2::new(e.rect.min.x, e.y), Vec2::new(112., 27.));
     let install = action(e, "Install…", "Install plug-ins…", install, ready && !busy).0;
-    let browse = action(e, "Browse Store…", "Browse Store…", browse, true).0;
     e.y += 27. + 10.;
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(folder) = folder {
@@ -77,6 +77,14 @@ pub fn show(e: &mut EntryUi) {
     }
     if !status.is_empty() {
         paragraph(e, &status, t.menu_item_text);
+    }
+    if !failed.is_empty() {
+        e.y += 6.;
+        e.add_section_heading("Did not load");
+        for (file, reason) in &failed {
+            paragraph(e, &format!("{file}: {reason}"), t.menu_item_text);
+            e.y += 4.;
+        }
     }
     e.y += 6.;
     e.add_section_heading("Installed");
@@ -91,7 +99,7 @@ pub fn show(e: &mut EntryUi) {
         e.ui.painter()
             .rect_filled(empty.shrink(1.), 0., t.number_input_background);
         let label = if ready {
-            "Nothing is installed yet. Install a file or browse the store."
+            "Nothing is installed yet. Install a plug-in (.dll, .wasm), a look (.cube, .3dl), a preset (.xmp) or a .zip of them."
         } else {
             "Loading installed plug-ins…"
         };
@@ -113,7 +121,7 @@ pub fn show(e: &mut EntryUi) {
         }
         let clip = e.ui.clip_rect();
         e.ui.set_clip_rect(clip.intersect(list));
-        for (i, item) in items.iter().enumerate() {
+        for (i, file) in items.iter().enumerate() {
             let row = Rect::from_min_size(
                 Pos2::new(list.min.x, list.min.y + i as f32 * PITCH - scroll as f32),
                 Vec2::new(list.width() - if max > 0. { THICKNESS } else { 4. }, ROW),
@@ -124,45 +132,26 @@ pub fn show(e: &mut EntryUi) {
             e.ui.painter().rect_filled(row, 0., t.window_border);
             e.ui.painter()
                 .rect_filled(row.shrink(1.), 0., t.number_input_background);
-            let text_w = row.width() - 104.;
             text::draw_ellipsized(
                 e.ui.painter(),
-                Rect::from_min_size(row.min + Vec2::new(8., 7.), Vec2::new(text_w, 15.)),
-                &item.name,
+                Rect::from_min_size(
+                    row.min + Vec2::new(8., 12.),
+                    Vec2::new(row.width() - 104., 15.),
+                ),
+                file,
                 FontSpec::new(DIALOG_FONT_SIZE).bold(),
                 t.menu_item_text,
-            );
-            // Where it is in the menus.
-            text::draw_ellipsized(
-                e.ui.painter(),
-                Rect::from_min_size(row.min + Vec2::new(8., 25.), Vec2::new(text_w, 15.)),
-                &format!("Effects > Plugins > {}", item.name),
-                FontSpec::new(11.).bold(),
-                t.menu_item_selected_border,
-            );
-            text::draw_ellipsized(
-                e.ui.painter(),
-                Rect::from_min_size(row.min + Vec2::new(8., 42.), Vec2::new(text_w, 15.)),
-                &format!("{} · {}", item.detail, item.file),
-                FontSpec::new(11.),
-                mix(t.menu_item_text, t.number_input_background, 0.64),
             );
             let rect = Rect::from_min_size(
                 Pos2::new(row.max.x - 78., row.center().y - 13.),
                 Vec2::new(70., 26.),
             );
-            let (clicked, response) = action(
-                e,
-                "Remove",
-                &format!("remove-plugin:{}", item.id),
-                rect,
-                !busy,
-            );
-            e.ui.ctx().accesskit_node_builder(response.id, |n| {
-                n.set_label(format!("Remove {}", item.name))
-            });
+            let (clicked, response) =
+                action(e, "Remove", &format!("remove-plugin:{file}"), rect, !busy);
+            e.ui.ctx()
+                .accesskit_node_builder(response.id, |n| n.set_label(format!("Remove {file}")));
             if clicked {
-                remove = Some(item.id.clone());
+                remove = Some(file.clone());
             }
             reveal_focus(e.ui, &response, &mut scroll, max);
         }
@@ -183,10 +172,7 @@ pub fn show(e: &mut EntryUi) {
     if install {
         library.plugins.pick();
     }
-    if let Some(id) = remove {
-        library.plugins.remove(&id);
-    }
-    if browse {
-        crate::dialogs::plugin_store::PluginStoreDialog::open();
+    if let Some(file) = remove {
+        library.plugins.remove(&file);
     }
 }

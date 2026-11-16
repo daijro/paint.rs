@@ -155,6 +155,7 @@ impl EffectSession {
             layer_index: self.layer_index,
             palette: &self.palette,
             selection: &self.selection,
+            rois: &[],
             today: self.today,
             culture: &self.culture,
         }
@@ -234,6 +235,31 @@ impl EffectSession {
         (out, notice.into_inner().unwrap())
     }
 
+    /// A browser-only incremental render for a real Paint.NET plugin effect, stepped across frames
+    /// like the seam carver so Cancel and the progress bar work on the single-threaded runtime
+    /// (`dialogs::effect_config::preview`). `None` for anything but a loaded plugin effect; the
+    /// completed pixels are byte-identical to `render_with`'s (same host, same strips + clip).
+    #[cfg(target_arch = "wasm32")]
+    pub fn plugin_slice(&self, values: &Values) -> Option<PluginSlice> {
+        if !matches!(self.def.kind, super::EffectKind::Plugin) {
+            return None;
+        }
+        let b = self.bounds;
+        let job = super::dotnet::render_begin(
+            self.def.id,
+            &self.source,
+            (b.x, b.y, b.w as i32, b.h as i32),
+            values,
+            &self.env(),
+        )
+        .ok()?;
+        Some(PluginSlice {
+            job: Some(job),
+            source: self.source.clone(),
+            mask: self.mask.clone(),
+        })
+    }
+
     fn workspace<'a>(&self, app: &'a mut AppWorkspace) -> Option<&'a mut DocumentWorkspace> {
         app.documents
             .iter_mut()
@@ -283,7 +309,18 @@ impl EffectSession {
     }
 
     fn land(self, app: &mut AppWorkspace, values: Values, rendered: Option<ImageData>) -> bool {
-        let out = rendered.unwrap_or_else(|| self.render(&values));
+        let out = match rendered {
+            Some(out) => out,
+            None => match self.render_with(&values, None) {
+                // A plug-in that threw left the layer as it was: say why, and add no history step.
+                (_, Some(notice)) if matches!(self.def.kind, super::EffectKind::Plugin) => {
+                    app.ui_requests
+                        .push(crate::action::UiRequest::ToolError(notice));
+                    return false;
+                }
+                (out, _) => out,
+            },
+        };
         let mut values = values;
         if let Some(ui) = self.def.indirect {
             for key in ui.transient_keys {
@@ -328,6 +365,70 @@ impl EffectSession {
         self.show(app, None);
         if let Some(ws) = self.workspace(app) {
             ws.set_dirty(self.dirty);
+        }
+    }
+}
+
+/// The state of a stepped plugin render (mirrors the seam carver's `CarveStatus`).
+#[cfg(target_arch = "wasm32")]
+pub enum PluginStatus {
+    Pending,
+    Complete(ImageData, Option<String>),
+    Cancelled,
+}
+
+/// A browser incremental render of one plugin effect: the host's strip job plus the inputs needed
+/// to clip the finished pixels to the selection, exactly as `apply` does for `EffectKind::Plugin`.
+#[cfg(target_arch = "wasm32")]
+pub struct PluginSlice {
+    job: Option<super::dotnet::PluginJob>,
+    source: std::sync::Arc<ImageData>,
+    mask: std::sync::Arc<Option<Mask>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PluginSlice {
+    /// Total strips and strips rendered so far, for the progress bar.
+    pub fn progress(&self) -> (usize, usize) {
+        self.job.as_ref().map_or((0, 0), |j| (j.done(), j.strips()))
+    }
+
+    /// Render up to `n` more strips. On the last one, finish and clip to the selection.
+    pub fn step(
+        &mut self,
+        n: usize,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> PluginStatus {
+        if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if let Some(job) = self.job.take() {
+                job.cancel();
+            }
+            return PluginStatus::Cancelled;
+        }
+        let Some(job) = self.job.as_mut() else {
+            return PluginStatus::Cancelled;
+        };
+        match job.step(n) {
+            Ok(false) => PluginStatus::Pending,
+            Ok(true) => {
+                let job = self.job.take().unwrap();
+                match job.finish() {
+                    Ok(data) => {
+                        let mut out = ImageData {
+                            width: self.source.width,
+                            height: self.source.height,
+                            data,
+                        };
+                        if let Some(mask) = self.mask.as_ref().as_ref() {
+                            super::underwrite(&self.source, &mut out, mask);
+                        }
+                        PluginStatus::Complete(out, None)
+                    }
+                    // A render failure leaves the source unchanged, as the synchronous path does.
+                    Err(_) => PluginStatus::Complete(self.source.as_ref().clone(), None),
+                }
+            }
+            Err(_) => PluginStatus::Complete(self.source.as_ref().clone(), None),
         }
     }
 }

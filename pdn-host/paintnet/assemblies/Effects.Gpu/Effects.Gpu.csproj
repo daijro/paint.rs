@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Effects.Gpu</AssemblyName>
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Primitives/Primitives.csproj" />
+    <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+    <ProjectReference Include="../Windows/Windows.csproj" />
+    <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
+    <ProjectReference Include="../WindowsFramework/WindowsFramework.csproj" />
+  </ItemGroup>
+</Project>

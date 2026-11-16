@@ -1,0 +1,7 @@
+# Build artefacts (Rust target, .NET build caches, published outputs)
+native/d2dgpu/target/
+verify/target/
+.build/
+**/bin/
+**/obj/
+artifacts/

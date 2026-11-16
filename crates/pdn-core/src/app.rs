@@ -144,6 +144,33 @@ pub struct CloneAnchor {
     pub offset: Option<[f64; 2]>,
 }
 
+/// The last pointer move by an arrow key: the key (with its modifiers), when (app ms), the quick
+/// repeats since the first press and the speed (image px a press).
+#[derive(Default)]
+pub struct ArrowRepeat {
+    key: Option<KeyPress>,
+    at_ms: f64,
+    repeats: u32,
+    speed: u32,
+}
+
+/// The Pan tool picked by its shortcut key, which is still down (`AppWorkspace::on_key_up`).
+pub struct SpringPan {
+    /// The key that picked it.
+    pub key: String,
+    /// The tool to go back to.
+    pub previous: ToolType,
+    pub at_ms: f64,
+    /// A press on the canvas while the key was down.
+    pub used: bool,
+    /// The key is up; the switch back waits for the last button on the tool.
+    pub released: bool,
+}
+
+/// Holding the Pan tool's key this long (ms) makes its release go back to the previous tool; a
+/// quicker tap keeps Pan.
+pub const SPRING_HOLD_MS: f64 = 300.0;
+
 pub struct AppWorkspace {
     pub documents: Vec<DocumentWorkspace>,
     pub active: Option<usize>,
@@ -206,6 +233,22 @@ pub struct AppWorkspace {
     /// The arrow keys held (Left, Right, Up, Down), kept current by the UI: a nudge moves by
     /// every held arrow (`tool::arrow_nudge`).
     pub arrow_keys_down: [bool; 4],
+    /// Where the arrow keys moved the pointer (`keyboard_pointer`), in canvas points: the UI adds
+    /// it to every real pointer position, since a browser or Wayland can't move the OS cursor.
+    /// It lasts through a press and is dropped by the next real move made with no button down,
+    /// so the pointer behaves as a moved OS cursor would.
+    pub pointer_offset: (f64, f64),
+    /// Space went down with no button pressed on the tool; it lasts until Space is up
+    /// (`on_key_up`). A press then drags the view and the arrows scroll it; the tool sees neither
+    /// that nor the pointer's moves.
+    pub pan_mode: bool,
+    /// Set while the key that picked the Pan tool is held.
+    pub spring_pan: Option<SpringPan>,
+    /// The pointer type and pressure of the last sample the tool got (a press starts afresh):
+    /// a keyboard move repeats them, so a pen stroke keeps its width.
+    pub last_pointer: (crate::tool::PointerType, Option<f64>),
+    /// The last arrow press that moved the pointer, for the speed-up.
+    pub arrow_repeat: ArrowRepeat,
     /// The mouse buttons held anywhere, one bit per `MouseButton` value: canvas presses and
     /// releases set and clear them, and the UI writes the pointer state each frame (a toolbar
     /// slider drag holds a button too; painting-tools-2.md §7.4 step 5, §7.6 note §).
@@ -292,6 +335,11 @@ impl Default for AppWorkspace {
             clipboard: Default::default(),
             control_key_down: false,
             arrow_keys_down: [false; 4],
+            pointer_offset: (0.0, 0.0),
+            pan_mode: false,
+            spring_pan: None,
+            last_pointer: (crate::tool::PointerType::Mouse, None),
+            arrow_repeat: ArrowRepeat::default(),
             shift_key_down: false,
             alt_key_down: false,
             mouse_buttons: 0,
@@ -846,7 +894,7 @@ impl AppWorkspace {
     /// What the canvas shows as the pointer: the middle-button pan's hand while it drags, else
     /// the active tool's request (`AppView.temporaryPanCursorState` restores it on release).
     pub fn cursor(&self) -> CursorRequest {
-        if self.pan_tool.is_tracking() {
+        if self.pan_tool.is_tracking() || self.pan_mode {
             return self.pan_tool.cursor();
         }
         if self.perspective.is_some() {
@@ -872,6 +920,12 @@ impl AppWorkspace {
             (s.x, s.y) = (q.x, q.y);
         }
         Some((p, input))
+    }
+
+    /// Drops the active tool's drawing or edit under way with no entry, as Escape mid-stroke does
+    /// (a second finger landing on the canvas). Tools without a transaction keep theirs.
+    pub fn cancel_gesture(&mut self) {
+        self.with_transacted(|t, app| t.cancel_gesture(app));
     }
 
     /// Ctrl+Z, Ctrl+Y and Edit ▸ Undo/Redo are ignored while this holds (painting-tools-1.md §8.2,
@@ -911,13 +965,23 @@ impl AppWorkspace {
     /// active gesture; subsequent buttons must not take a stroke over for panning.
     pub fn on_mouse_down(&mut self, x: f64, y: f64, b: MouseButton, input: &PointerInput) -> bool {
         let first = self.tool_buttons == 0;
+        self.last_pointer = input
+            .samples
+            .last()
+            .map_or((crate::tool::PointerType::Mouse, None), |s| {
+                (input.pointer_type, s.pressure)
+            });
         self.mouse_buttons |= 1 << b as u8;
         self.canvas_buttons |= 1 << b as u8;
         self.tool_buttons |= 1 << b as u8;
+        if let Some(s) = &mut self.spring_pan {
+            s.used = true;
+        }
         let Some((p, input)) = self.tool_position(x, y, input) else {
             return false;
         };
-        if self.pan_tool.is_tracking() || (first && b == MouseButton::Middle) {
+        // A first Middle press, or any first press in Space's pan mode, drags the view.
+        if self.pan_tool.is_tracking() || (first && (b == MouseButton::Middle || self.pan_mode)) {
             let mut pan = std::mem::take(&mut self.pan_tool);
             let handled = pan.on_mouse_down(self, p.x, p.y, b, &input);
             self.pan_tool = pan;
@@ -949,6 +1013,9 @@ impl AppWorkspace {
     /// active tool.
     pub fn on_mouse_move(&mut self, x: f64, y: f64, input: &PointerInput) -> bool {
         self.last_mouse = (x, y);
+        if let Some(s) = input.samples.last() {
+            self.last_pointer = (input.pointer_type, s.pressure);
+        }
         let Some((p, input)) = self.tool_position(x, y, input) else {
             return false;
         };
@@ -957,6 +1024,9 @@ impl AppWorkspace {
             let handled = pan.on_mouse_move(self, p.x, p.y, &input);
             self.pan_tool = pan;
             return handled;
+        }
+        if self.pan_mode {
+            return false;
         }
         if self.perspective.is_some() {
             if let Some(p) = self.perspective_point(x, y) {
@@ -968,8 +1038,15 @@ impl AppWorkspace {
             .unwrap_or(false)
     }
 
-    /// `AppView.onMouseUp`: a tracking pan takes any button's release.
+    /// `AppView.onMouseUp`: a tracking pan takes any button's release. A held Pan key released
+    /// meanwhile switches back once the last button is up.
     pub fn on_mouse_up(&mut self, x: f64, y: f64, b: MouseButton, input: &PointerInput) -> bool {
+        let handled = self.mouse_up(x, y, b, input);
+        self.end_spring_pan();
+        handled
+    }
+
+    fn mouse_up(&mut self, x: f64, y: f64, b: MouseButton, input: &PointerInput) -> bool {
         self.mouse_buttons &= !(1 << b as u8);
         self.canvas_buttons &= !(1 << b as u8);
         self.tool_buttons &= !(1 << b as u8);
@@ -1027,6 +1104,9 @@ impl AppWorkspace {
         {
             return true;
         }
+        if self.keyboard_pointer(key) {
+            return true;
+        }
         if key.key.eq_ignore_ascii_case("x") && !(key.ctrl || key.alt || key.meta) {
             self.swap_colors();
             return true;
@@ -1043,6 +1123,123 @@ impl AppWorkspace {
             return true;
         }
         false
+    }
+
+    /// A key released. Space ends pan mode, and the tool then sees the pointer where it is, as
+    /// Paint.NET's tools do. Releasing the key that picked the Pan tool goes back to the tool
+    /// before it when the key was held `SPRING_HOLD_MS` or more or pressed on the canvas; a
+    /// quick tap keeps Pan, as Paint.NET's tool keys do.
+    pub fn on_key_up(&mut self, key: &str) {
+        if matches!(key, " " | "Space")
+            && std::mem::take(&mut self.pan_mode)
+            && !self.pan_tool.is_tracking()
+            && self.zoom_anchor.is_some()
+        {
+            let (x, y) = self.last_mouse;
+            self.on_mouse_move(x, y, &self.repeat_pointer(x, y));
+        }
+        let now = self.now_ms;
+        let Some(s) = self.spring_pan.as_mut() else {
+            return;
+        };
+        if !s.key.eq_ignore_ascii_case(key) {
+            return;
+        }
+        if s.used || now - s.at_ms >= SPRING_HOLD_MS {
+            s.released = true;
+            self.end_spring_pan();
+        } else {
+            self.spring_pan = None;
+        }
+    }
+
+    /// Back to the tool before a held Pan key once it is up and no button is down on the tool.
+    fn end_spring_pan(&mut self) {
+        if self.tool_buttons != 0 || !self.spring_pan.as_ref().is_some_and(|s| s.released) {
+            return;
+        }
+        let previous = self.spring_pan.take().map(|s| s.previous);
+        if self.tool_type == Some(ToolType::Pan)
+            && let Some(t) = previous
+        {
+            self.set_active_tool_from_type(t);
+        }
+    }
+
+    /// A pointer sample at (x, y) with the last sample's type and pressure.
+    fn repeat_pointer(&self, x: f64, y: f64) -> PointerInput {
+        let (pointer_type, pressure) = self.last_pointer;
+        PointerInput {
+            pointer_type,
+            samples: vec![crate::tool::PointerSample {
+                x,
+                y,
+                pressure,
+                time_ms: self.now_ms,
+            }],
+        }
+    }
+
+    /// The keys a tool left, as Paint.NET's base tool takes them. Space with no button pressed
+    /// starts pan mode, where an arrow scrolls the view 10 device px (Ctrl: 100). Otherwise a
+    /// plain arrow over the canvas moves the pointer ⌈zoom × speed⌉ device px (`speed` image px)
+    /// and the tool sees that move, so a held button's stroke or drag follows it. An arrow
+    /// pressed again within 250 ms of its last move is a quick repeat: from the 16th on, every
+    /// 4th adds 1 to the speed; a slower press, or any other key between, starts again at 1.
+    fn keyboard_pointer(&mut self, key: &KeyPress) -> bool {
+        if self.arrow_repeat.key.as_ref() != Some(key) {
+            self.arrow_repeat.key = Some(key.clone());
+            self.arrow_repeat.at_ms = f64::NEG_INFINITY;
+        }
+        if matches!(key.key.as_str(), " " | "Space") && self.tool_buttons == 0 {
+            self.pan_mode = true;
+            return false;
+        }
+        let (dx, dy) = match key.key.as_str() {
+            "ArrowLeft" => (-1.0, 0.0),
+            "ArrowRight" => (1.0, 0.0),
+            "ArrowUp" => (0.0, -1.0),
+            "ArrowDown" => (0.0, 1.0),
+            _ => return false,
+        };
+        let plain = !(key.shift || key.ctrl || key.alt || key.meta);
+        if self.pan_mode {
+            let step = match (key.ctrl, plain) {
+                (true, _) => 100.0,
+                (false, true) => 10.0,
+                _ => return false,
+            };
+            if let Some(v) = self.active_ws_mut().map(|ws| &mut ws.view)
+                && !v.zoom_to_window
+            {
+                let step = step / v.ppp;
+                v.set_view_position(v.viewport_x + dx * step, v.viewport_y + dy * step);
+            }
+            return true;
+        }
+        let Some((zoom, ppp)) = self.active_ws().map(|ws| (ws.view.zoom, ws.view.ppp)) else {
+            return false;
+        };
+        if !plain || (self.canvas_buttons == 0 && self.zoom_anchor.is_none()) {
+            return false;
+        }
+        let km = &mut self.arrow_repeat;
+        if self.now_ms - km.at_ms > 250.0 {
+            (km.repeats, km.speed) = (0, 1);
+        } else {
+            km.repeats += 1;
+            if km.repeats > 15 && km.repeats.is_multiple_of(4) {
+                km.speed += 1;
+            }
+        }
+        km.at_ms = self.now_ms;
+        let step = (zoom * f64::from(km.speed)).ceil() / ppp;
+        let (dx, dy) = (dx * step, dy * step);
+        self.pointer_offset = (self.pointer_offset.0 + dx, self.pointer_offset.1 + dy);
+        let (x, y) = (self.last_mouse.0 + dx, self.last_mouse.1 + dy);
+        self.fire(AppEvent::MouseMove { x, y });
+        self.on_mouse_move(x, y, &self.repeat_pointer(x, y));
+        true
     }
 
     /// AppView `isGridVisible`.

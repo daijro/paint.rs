@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Microsoft's MIT chart control (github.com/dotnet/winforms-datavisualization, upstream/,
+       PAINTRS-PATCH.md), built against the headless System.Windows.Forms stand-in so plugins that
+       draw a Chart off-screen (BoltBait's Chart or Graph: Chart.SaveImage) render as the library
+       would. The designer (upstream Design/) is left out; DesignStubs.cs names its editor types. -->
+  <PropertyGroup>
+    <AssemblyName>System.Windows.Forms.DataVisualization</AssemblyName>
+    <RootNamespace>System.Windows.Forms.DataVisualization.Charting</RootNamespace>
+    <!-- The identity plugins reference (the 1.0.0 NuGet package's). -->
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <DefineConstants>$(DefineConstants);WINFORMS_CONTROL</DefineConstants>
+    <Nullable>disable</Nullable>
+    <CLSCompliant>false</CLSCompliant>
+    <!-- Upstream's own warnings: System.Drawing is Windows-only on paper (GDI+ is libgdiplus here),
+         nullable struct comparisons, WebRequest for image URLs. -->
+    <NoWarn>$(NoWarn);CA1416;CS8073;SYSLIB0014</NoWarn>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
+    <EmbeddedResourceUseDependentUponConvention>false</EmbeddedResourceUseDependentUponConvention>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="upstream/**/*.cs" />
+    <Compile Include="DesignStubs.cs" />
+    <EmbeddedResource Include="upstream/Common/SR.resx" LogicalName="System.Windows.Forms.DataVisualization.Charting.SR.resources" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../WindowsForms/WindowsForms.csproj" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
+</Project>

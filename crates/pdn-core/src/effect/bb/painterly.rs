@@ -93,13 +93,13 @@ fn oil_painted(src: &ImageData, brush: u32) -> ImageData {
     recolour(oil_painting(src, brush.min(8), 50))
 }
 
-fn oil_plus(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
+fn oil_plus(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
     let b = num(v, "brushSize").clamp(1.0, 10.0) as u32;
     let d = num(v, "shadowDetail").clamp(1.0, 10.0) as u32;
     let n = num(v, "shadowAmount").clamp(1.0, 10.0) as u32;
     let painted = oil_painted(src, b);
     let smoothed = median(src, b, 50);
-    let sketch = pencil_sketch(&smoothed, d, (2 * d) as i32);
+    let sketch = pencil_sketch(&smoothed, d, (2 * d) as i32, env.rois);
     let mut out = median(&painted, 2 * b, 50);
     // ponytail: rebuilt per render; cache painted/smoothed by brush size if previews are slow.
     for _ in 0..n {
@@ -116,7 +116,7 @@ fn oil_plus(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
     out
 }
 
-fn pastel_render(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
+fn pastel_render(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
     let size = num(v, "size").clamp(1.0, 8.0) as u32;
     let roughness = num(v, "roughness").clamp(3.0, 255.0) as u32;
     let pencil = num(v, "pencil").clamp(0.0, 1.0);
@@ -125,7 +125,7 @@ fn pastel_render(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
         return paint;
     }
     let tip = num(v, "tip").clamp(1.0, 20.0) as u32;
-    let sketch = pencil_sketch(src, tip, 0);
+    let sketch = pencil_sketch(src, tip, 0, env.rois);
     for (p, &s) in paint
         .data
         .as_chunks_mut::<4>()
@@ -213,17 +213,26 @@ mod tests {
             &img,
             &with_selection(32, 32, &mask, &polygons),
         );
-        let whole = bb("bbOilPaintingPlus", json!({}), &img);
+        // Outside the selection: the original, untouched (the aliased clip). Inside: the effect ran.
+        // It is NOT equal to the whole-image render inside — the effect tiles over the selection's
+        // coverage scans like the real app, so its ROI-dependent part (the pencil-sketch overlay's
+        // legacy Gaussian blur) truncates at the selection scan-lefts, not at x=0. That per-selection
+        // tiling is VM-verified byte-exact against genuine GaussianBlurEffect under both a rect and a
+        // non-rect selection (pdn-host/paintnet/tests/seleffect-vm.py); here we only guard the clip.
+        let mut changed_inside = false;
         for y in 0..32 {
             for x in 0..32 {
-                let want = if (8..24).contains(&x) && (8..20).contains(&y) {
-                    px(&whole, x, y)
+                if (8..24).contains(&x) && (8..20).contains(&y) {
+                    changed_inside |= px(&selected, x, y) != px(&img, x, y);
                 } else {
-                    px(&img, x, y)
-                };
-                assert_eq!(px(&selected, x, y), want);
+                    assert_eq!(px(&selected, x, y), px(&img, x, y), "outside ({x},{y})");
+                }
             }
         }
+        assert!(
+            changed_inside,
+            "the effect should have rendered inside the selection"
+        );
     }
 
     /// Both classic effects use whole-image intermediates, final selection clipping,

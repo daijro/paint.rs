@@ -209,8 +209,10 @@ impl Scrollbar {
         let Some((pos, len)) = thumb else {
             return false;
         };
-        let before = *offset;
         let max_offset = content_len - view_len;
+        // An offset left beyond a shrunken range (a zoom out) clamps silently: only input changes it.
+        *offset = offset.clamp(0.0, max_offset);
+        let before = *offset;
         let track_start = self.start() + BUTTON_LENGTH;
         let track_len = self.length() - 2.0 * BUTTON_LENGTH;
         let thumb_start = track_start + pos as f32;

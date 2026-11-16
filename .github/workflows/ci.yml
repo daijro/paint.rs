@@ -24,6 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install native codecs and software Vulkan
         run: |
           sudo apt-get update
@@ -37,7 +41,8 @@ jobs:
           echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg" >> "$GITHUB_ENV"
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
-      - run: cargo +1.99.1 fmt --all -- --check
+      # Workspace members only: --all would also check the path dependencies (opend2d, its own repo).
+      - run: cargo +1.99.1 fmt -- --check
       # With the tests: code built only for the web and the tests (the live-editing module) is linted too.
       - run: cargo +1.99.1 clippy --locked --workspace --all-features --tests -- -D warnings
       - run: cargo +1.99.1 test --locked --workspace --all-features --no-fail-fast
@@ -54,12 +59,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal --target ${{ matrix.target }}
       - name: Install native dav1d and pkgconf
         shell: pwsh
+        # dav1d from scripts/ci/vcpkg-ports: vcpkg's 1.5.4 plus upstream's fix for MSVC 19.52 (the Arm runner's).
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:${{ matrix.triplet }} pkgconf:${{ matrix.triplet }}
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install --overlay-ports="$env:GITHUB_WORKSPACE/scripts/ci/vcpkg-ports" dav1d:${{ matrix.triplet }} pkgconf:${{ matrix.triplet }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}"
           "PKG_CONFIG=$prefix/tools/pkgconf/pkgconf.exe" >> $env:GITHUB_ENV
@@ -97,6 +107,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install native codecs and Rust
         run: |
           test "$(uname -m)" = '${{ matrix.arch }}'
@@ -126,6 +140,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install native codecs and Rust
         run: |
           sudo apt-get update
@@ -139,6 +157,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install the cross toolchain and Rust
         run: |
           sudo apt-get update
@@ -153,8 +175,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       # The release workflow's ALPINE_IMAGE.
-      - run: docker run --rm -v "$PWD:/src" -w /src alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh scripts/ci/alpine-build.sh paint.rs-ci-linux-x86_64-musl
+      - run: docker run --rm -v "$PWD:/src" -v "$OPEND2D_DIR:/opend2d" -w /src alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f sh scripts/ci/alpine-build.sh paint.rs-ci-linux-x86_64-musl
 
   build-web:
     runs-on: ubuntu-24.04
@@ -163,6 +189,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install web build tools
         run: |
           rustup toolchain install 1.99.1 --profile minimal --target wasm32-unknown-unknown

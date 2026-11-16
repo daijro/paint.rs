@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Windows.Framework</AssemblyName>
+    <!-- Same-named extension classes exist in Windows/Windows.Core, as in the genuine assemblies. -->
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Primitives/Primitives.csproj" />
+    <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+    <ProjectReference Include="../Windows/Windows.csproj" />
+    <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
+    <!-- Paint.NET's own pixel shaders (PdnShaders.cs) run through ComputeSharp.D2D1, as plugins' do. -->
+    <PackageReference Include="ComputeSharp.D2D1" Version="3.2.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PaintDotNet.Effects.Gpu" />
+    <InternalsVisibleTo Include="PaintDotNet.Framework" />
+  </ItemGroup>
+</Project>

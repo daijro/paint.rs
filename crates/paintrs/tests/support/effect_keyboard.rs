@@ -251,7 +251,7 @@ fn registered_slider_keyboard_values() {
         let mut values = pdn_core::effect::defaults(&def);
         values.insert(key.into(), serde_json::json!(initial));
         open_def(&mut h, def, values);
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         press(&mut h, input);
         assert!(h.state().shell.dialogs.is_open(), "{effect} {key}");
@@ -277,7 +277,7 @@ fn slider_declines_modifiers_and_endpoints() {
         (Modifiers::ALT, Key::ArrowRight),
         (Modifiers::SHIFT, Key::PageUp),
     ] {
-        h.get_by_role_and_label(Role::Slider, "intensity").focus();
+        h.get_by(slider_key("intensity")).focus();
         h.run_steps(2);
         h.key_press_modifiers(mods, key);
         h.run_steps(2);
@@ -294,7 +294,7 @@ fn hue_slider_clamps_while_builtin_numeric_wraps() {
         values.insert("hue".into(), serde_json::json!(180));
         open_def(&mut h, def, values);
         if !numeric {
-            h.get_by_role_and_label(Role::Slider, "hue").focus();
+            h.get_by(slider_key("hue")).focus();
             h.run_steps(2);
         }
         press(&mut h, Key::ArrowUp);
@@ -309,7 +309,7 @@ fn hue_slider_clamps_while_builtin_numeric_wraps() {
 fn pan_pad_is_not_a_tab_destination() {
     let mut h = app_harness();
     open_effect(&mut h, "rotateZoomEffect");
-    h.get_by_role_and_label(Role::Slider, "panX").focus();
+    h.get_by(slider_key("panX")).focus();
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
     h.run_steps(3);
@@ -354,7 +354,7 @@ fn exponential_keyboard_uses_transformed_absolute_steps() {
         ];
         let values = pdn_core::effect::defaults(&def);
         open_def(&mut h, def, values);
-        h.get_by_role_and_label(Role::Slider, "value").focus();
+        h.get_by(slider_key("value")).focus();
         h.run_steps(2);
         press(&mut h, key);
         let got = finish(&mut h, "keyboardProbe")["value"].as_f64().unwrap();
@@ -369,7 +369,7 @@ fn focused_reset_cancel_and_slider_escape_have_single_actions() {
     let mut values = pdn_core::effect::defaults(&def);
     values.insert("intensity".into(), serde_json::json!(70));
     open_def(&mut h, def, values);
-    h.get_by_role_and_label(Role::Slider, "intensity").focus();
+    h.get_by(slider_key("intensity")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     press(&mut h, Key::Tab);
@@ -386,7 +386,7 @@ fn focused_reset_cancel_and_slider_escape_have_single_actions() {
     assert_eq!(undo_len(&h), history);
     assert_eq!(h.state().app.effect_tokens["addNoiseEffect"], remembered);
     open_effect(&mut h, "addNoiseEffect");
-    h.get_by_role_and_label(Role::Slider, "intensity").focus();
+    h.get_by(slider_key("intensity")).focus();
     h.run_steps(2);
     press(&mut h, Key::Escape);
     assert!(!h.state().shell.dialogs.is_open());
@@ -422,7 +422,7 @@ fn subresolution_slider_step_does_not_edit_the_property() {
     def.controls = vec![range("value", "Value", 0.0, 100.0, 1.0).slider_keys(2, 0.004, 5.0, false)];
     let values = pdn_core::effect::defaults(&def);
     open_def(&mut h, def, values);
-    h.get_by_role_and_label(Role::Slider, "value").focus();
+    h.get_by(slider_key("value")).focus();
     h.run_steps(2);
     press(&mut h, Key::ArrowRight);
     assert_eq!(finish(&mut h, "resolutionProbe")["value"], 1.0);
@@ -576,8 +576,8 @@ fn push_button_reset_space_has_no_action_until_release() {
         let mut values = pdn_core::effect::defaults(&def);
         values.insert("value".into(), serde_json::json!(5));
         open_def(&mut h, def, values);
-        let r = h.get_by_role_and_label(Role::Slider, "value").rect();
-        h.get_by_role_and_label(Role::Slider, "value").focus();
+        let r = h.get_by(slider_key("value")).rect();
+        h.get_by(slider_key("value")).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         press(&mut h, Key::Tab);
@@ -639,7 +639,7 @@ fn push_button_disabling_a_row_drops_its_held_space() {
     let mut values = pdn_core::effect::defaults(&def);
     values.insert("value".into(), serde_json::json!(5));
     open_def(&mut h, def, values);
-    h.get_by_role_and_label(Role::Slider, "value").focus();
+    h.get_by(slider_key("value")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     press(&mut h, Key::Tab);
@@ -647,15 +647,11 @@ fn push_button_disabling_a_row_drops_its_held_space() {
     h.get_by_role_and_label(Role::CheckBox, "Enable value")
         .click();
     h.run_steps(2);
-    assert!(
-        h.get_by_role_and_label(Role::Slider, "value")
-            .accesskit_node()
-            .is_disabled()
-    );
+    assert!(h.get_by(slider_key("value")).accesskit_node().is_disabled());
     h.get_by_role_and_label(Role::CheckBox, "Enable value")
         .click();
     h.run_steps(2);
-    h.get_by_role_and_label(Role::Slider, "value").focus();
+    h.get_by(slider_key("value")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     press(&mut h, Key::Tab);
@@ -691,9 +687,9 @@ fn numeric_edit_then_slider_press_keeps_pointer_value() {
     h.event(egui::Event::Text("20".into()));
     h.run();
     assert_eq!(focused_node(&h), ("value".into(), "20".into()));
-    let slider = h.get_by_role_and_label(Role::Slider, "value").rect();
+    let slider = h.get_by(slider_key("value")).rect();
     click(&mut h, slider.max.x - 1.0, slider.center().y);
-    assert!(h.get_by_role_and_label(Role::Slider, "value").is_focused());
+    assert!(h.get_by(slider_key("value")).is_focused());
     assert_eq!(finish(&mut h, "pointerProbe")["value"], 100.0);
 }
 
@@ -778,7 +774,7 @@ fn bb12_strength_and_zoom_keys() {
         values.insert(key.into(), serde_json::json!(initial));
         values.insert("shadowType".into(), serde_json::json!(tab));
         open_def(&mut h, def, values);
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         if numeric {
             press(&mut h, Key::Tab);
@@ -846,7 +842,7 @@ fn bb12_location_companion_keys_and_tab_order() {
         values.insert("shadowType".into(), serde_json::json!(2));
         open_def(&mut h, def, values);
         let key = format!("location.{axis}");
-        h.get_by_role_and_label(Role::Slider, &key).focus();
+        h.get_by(slider_key(&key)).focus();
         h.run_steps(2);
         if numeric {
             press(&mut h, Key::Tab);
@@ -860,10 +856,7 @@ fn bb12_location_companion_keys_and_tab_order() {
         assert_eq!(focused_node(&h).0, "Reset");
         if axis == "X" {
             press(&mut h, Key::Tab);
-            assert!(
-                h.get_by_role_and_label(Role::Slider, "location.Y")
-                    .is_focused()
-            );
+            assert!(h.get_by(slider_key("location.Y")).is_focused());
         }
         let token = finish(&mut h, "bbDropShadowPlus");
         let index = usize::from(axis == "Y");
@@ -887,7 +880,7 @@ fn bb12_inner_strength_native_numeric_default() {
     for (input, want) in [(Key::ArrowUp, 1.0), (Key::ArrowDown, 0.0)] {
         let mut h = bb12_harness();
         open_effect(&mut h, "bbInnerShadowObject");
-        h.get_by_role_and_label(Role::Slider, "strength").focus();
+        h.get_by(slider_key("strength")).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         press(&mut h, input);
@@ -936,7 +929,7 @@ fn bb12_numeric_spin_matches_keys_and_narrow_tilt_clamps() {
         values.insert(key.into(), serde_json::json!(initial));
         values.insert("shadowType".into(), serde_json::json!(2));
         open_def(&mut h, def, values);
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         if let Some(text) = typed {
@@ -944,7 +937,7 @@ fn bb12_numeric_spin_matches_keys_and_narrow_tilt_clamps() {
             h.event(egui::Event::Text(text.into()));
             h.run();
         }
-        let rect = h.get_by_role_and_label(Role::Slider, key).rect();
+        let rect = h.get_by(slider_key(key)).rect();
         let pos = egui::pos2(
             rect.max.x + 8.0 + 72.0 - 7.0,
             rect.center().y + if up { -4.0 } else { 4.0 },
@@ -996,7 +989,7 @@ fn bb12_pan_initial_focus_clamp_reset_disabled_and_hidden() {
     values.insert("location".into(), serde_json::json!([0.99, -0.99]));
     open_def(&mut h, def.clone(), values);
     assert_eq!(focused_node(&h), ("location.X".into(), "0.990".into()));
-    h.get_by_role_and_label(Role::Slider, "location.X").focus();
+    h.get_by(slider_key("location.X")).focus();
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::SHIFT, Key::Tab);
     h.run_steps(2);
@@ -1004,7 +997,7 @@ fn bb12_pan_initial_focus_clamp_reset_disabled_and_hidden() {
         h.get_by(|n| n.is_focused()).accesskit_node().role(),
         Role::Image
     );
-    h.get_by_role_and_label(Role::Slider, "location.X").focus();
+    h.get_by(slider_key("location.X")).focus();
     h.run_steps(2);
     press(&mut h, Key::ArrowRight);
     press(&mut h, Key::Tab);
@@ -1012,11 +1005,11 @@ fn bb12_pan_initial_focus_clamp_reset_disabled_and_hidden() {
     press(&mut h, Key::Tab);
     press(&mut h, Key::Enter);
     assert!(h.state().shell.dialogs.is_open());
-    h.get_by_role_and_label(Role::Slider, "location.X").focus();
+    h.get_by(slider_key("location.X")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     assert_eq!(focused_node(&h).1, "0.000");
-    h.get_by_role_and_label(Role::Slider, "location.Y").focus();
+    h.get_by(slider_key("location.Y")).focus();
     h.run_steps(2);
     press(&mut h, Key::PageDown);
     press(&mut h, Key::Tab);
@@ -1027,7 +1020,7 @@ fn bb12_pan_initial_focus_clamp_reset_disabled_and_hidden() {
     values.insert("allow".into(), serde_json::json!(false));
     open_def(&mut h, def, values);
     assert!(
-        h.get_by_role_and_label(Role::Slider, "location.X")
+        h.get_by(slider_key("location.X"))
             .accesskit_node()
             .is_disabled()
     );
@@ -1037,10 +1030,7 @@ fn bb12_pan_initial_focus_clamp_reset_disabled_and_hidden() {
     }
     press(&mut h, Key::Escape);
     open_effect(&mut h, "bbDropShadowPlus");
-    assert!(
-        h.query_by_role_and_label(Role::Slider, "location.X")
-            .is_none()
-    );
+    assert!(h.query_by(slider_key("location.X")).is_none());
     press(&mut h, Key::Escape);
 }
 
@@ -1343,7 +1333,7 @@ fn bb15_strength_keys_and_numeric_default() {
             let mut values = pdn_core::effect::defaults(&def);
             values.insert("strength".into(), serde_json::json!(0.4));
             open_def(&mut h, def, values);
-            h.get_by_role_and_label(Role::Slider, "strength").focus();
+            h.get_by(slider_key("strength")).focus();
             h.run_steps(2);
             if numeric {
                 press(&mut h, Key::Tab);
@@ -1393,7 +1383,7 @@ fn bb15_angle_spin_and_transient_tab() {
         let mut values = pdn_core::effect::defaults(&def);
         values.insert("angle".into(), serde_json::json!(359.75));
         open_def(&mut h, def, values);
-        let rect = h.get_by_role_and_label(Role::Slider, "angle").rect();
+        let rect = h.get_by(slider_key("angle")).rect();
         let pos = egui::pos2(rect.max.x + 8.0 + 72.0 - 7.0, rect.center().y - 4.0);
         h.event(egui::Event::PointerMoved(pos));
         h.run_steps(1);
@@ -1434,12 +1424,12 @@ fn bb16_decimal_keys_and_numeric_display() {
             let def = pdn_core::effect::find("bbVignettePlus").unwrap();
             let values = pdn_core::effect::defaults(&def);
             open_def(&mut h, def, values);
-            h.get_by_role_and_label(Role::Slider, key).focus();
+            h.get_by(slider_key(key)).focus();
             h.run_steps(2);
             press(&mut h, Key::Tab);
             assert_eq!(focused_node(&h), (key.into(), "0.50".into()));
             if !numeric {
-                h.get_by_role_and_label(Role::Slider, key).focus();
+                h.get_by(slider_key(key)).focus();
                 h.run_steps(2);
             }
             press(&mut h, input);
@@ -1468,7 +1458,7 @@ fn bb16_dream_dynamic_reset_and_keys() {
     values.insert("radius".into(), serde_json::json!(40));
     values.insert("vignette".into(), serde_json::json!(false));
     open_def(&mut h, def, values);
-    h.get_by_role_and_label(Role::Slider, "radius").focus();
+    h.get_by(slider_key("radius")).focus();
     h.run_steps(2);
     press(&mut h, Key::ArrowRight);
     press(&mut h, Key::PageUp);
@@ -1476,7 +1466,7 @@ fn bb16_dream_dynamic_reset_and_keys() {
     assert_eq!(focused_node(&h), ("radius".into(), "46".into()));
     press(&mut h, Key::Tab);
     press(&mut h, Key::Enter);
-    h.get_by_role_and_label(Role::Slider, "radius").focus();
+    h.get_by(slider_key("radius")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     assert_eq!(focused_node(&h), ("radius".into(), "24".into()));
@@ -1497,7 +1487,7 @@ fn bb17_integer_slider_keys_and_reset() {
     ] {
         let mut h = bb12_harness();
         open_effect(&mut h, "bbCombinedPhotoEffects");
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         for input in [Key::ArrowRight, Key::PageUp] {
             press(&mut h, input);
@@ -1508,7 +1498,7 @@ fn bb17_integer_slider_keys_and_reset() {
         assert_eq!(focused_node(&h), (key.into(), (default + 7).to_string()));
         press(&mut h, Key::ArrowDown);
         assert_eq!(focused_node(&h), (key.into(), (default + 6).to_string()));
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         press(&mut h, Key::ArrowLeft);
         press(&mut h, Key::PageDown);
@@ -1517,7 +1507,7 @@ fn bb17_integer_slider_keys_and_reset() {
         press(&mut h, Key::ArrowUp);
         press(&mut h, Key::Tab);
         press(&mut h, Key::Enter);
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         assert_eq!(focused_node(&h), (key.into(), default.to_string()));
@@ -1552,11 +1542,7 @@ fn bb17_preview_disables_and_retains_controls() {
     h.run_steps(2);
     press(&mut h, Key::Space);
     for (key, _) in settings {
-        assert!(
-            h.get_by_role_and_label(Role::Slider, key)
-                .accesskit_node()
-                .is_disabled()
-        );
+        assert!(h.get_by(slider_key(key)).accesskit_node().is_disabled());
     }
     press(&mut h, Key::Tab);
     assert_eq!(
@@ -1577,11 +1563,7 @@ fn bb17_preview_disables_and_retains_controls() {
     h.run_steps(2);
     press(&mut h, Key::Space);
     for (key, _) in settings {
-        assert!(
-            !h.get_by_role_and_label(Role::Slider, key)
-                .accesskit_node()
-                .is_disabled()
-        );
+        assert!(!h.get_by(slider_key(key)).accesskit_node().is_disabled());
     }
     assert_eq!(
         finish(&mut h, "bbCombinedPhotoEffects")["previewOriginal"],
@@ -1615,7 +1597,7 @@ fn bb19_angle_numeric_and_slider_keys() {
         open_def(&mut h, def, values);
         assert_eq!(focused_node(&h).1, format!("{initial:.3}"));
         if !numeric {
-            h.get_by_role_and_label(Role::Slider, "angle").focus();
+            h.get_by(slider_key("angle")).focus();
             h.run_steps(2);
         }
         if let Some(text) = typed {
@@ -1647,7 +1629,7 @@ fn bb19_horizon_companions_and_reset() {
         open_def(&mut h, def, values);
         assert_eq!(focused_node(&h).0, "horizon.X");
         let label = format!("horizon.{axis}");
-        h.get_by_role_and_label(Role::Slider, &label).focus();
+        h.get_by(slider_key(&label)).focus();
         h.run_steps(2);
         if numeric {
             press(&mut h, Key::Tab);
@@ -1668,7 +1650,7 @@ fn bb19_horizon_companions_and_reset() {
     let mut values = pdn_core::effect::defaults(&def);
     values.insert("horizon".into(), serde_json::json!([0.5, 0.5]));
     open_def(&mut h, def, values);
-    h.get_by_role_and_label(Role::Slider, "horizon.Y").focus();
+    h.get_by(slider_key("horizon.Y")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     press(&mut h, Key::Tab);
@@ -1686,7 +1668,7 @@ fn bb19_angle_spin_matches_numeric_key() {
     let mut values = pdn_core::effect::defaults(&def);
     values.insert("angle".into(), serde_json::json!(179.75));
     open_def(&mut h, def, values);
-    let rect = h.get_by_role_and_label(Role::Slider, "angle").rect();
+    let rect = h.get_by(slider_key("angle")).rect();
     let pos = egui::pos2(rect.max.x + 8.0 + 72.0 - 7.0, rect.center().y - 4.0);
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
@@ -1713,7 +1695,7 @@ fn bb20_integer_keys_reset_and_cancel_live_while_applying() {
         open_effect(&mut h, id);
         h.get_by_role_and_label(Role::CheckBox, "Preview").click();
         h.run_steps(3);
-        h.get_by_role_and_label(Role::Slider, "amount").focus();
+        h.get_by(slider_key("amount")).focus();
         h.run_steps(2);
         press(&mut h, Key::ArrowRight);
         press(&mut h, Key::PageUp);
@@ -1724,7 +1706,7 @@ fn bb20_integer_keys_reset_and_cancel_live_while_applying() {
         press(&mut h, Key::Tab);
         assert_eq!(focused_node(&h).0, "Reset");
         press(&mut h, Key::Enter);
-        h.get_by_role_and_label(Role::Slider, "amount").focus();
+        h.get_by(slider_key("amount")).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         assert_eq!(focused_node(&h), ("amount".into(), "1".into()));
@@ -1780,7 +1762,7 @@ fn bb20_final_warning_and_repeat_cancel_boundary() {
     assert_eq!(undo_len(&h), repeated_before + 1);
     h.run_steps(2);
     assert!(h.get_by_label("OK").accesskit_node().label().is_some());
-    assert!(h.query_by_role_and_label(Role::Slider, "amount").is_none());
+    assert!(h.query_by(slider_key("amount")).is_none());
     press(&mut h, Key::Escape);
     assert!(!h.state().shell.dialogs.is_open());
     assert_eq!(undo_len(&h), repeated_before + 1);
@@ -1794,7 +1776,7 @@ fn bb20_final_warning_and_repeat_cancel_boundary() {
     h.key_press_modifiers(Modifiers::CTRL, Key::F);
     h.run_steps(1);
     assert!(h.state().shell.dialogs.is_open());
-    assert!(h.query_by_role_and_label(Role::Slider, "amount").is_none());
+    assert!(h.query_by(slider_key("amount")).is_none());
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(!h.state().shell.dialogs.is_open());
@@ -1819,11 +1801,7 @@ fn bb21_palette_enable_preservation_and_integer_keys() {
             .accesskit_node()
             .is_disabled()
     );
-    assert!(
-        h.get_by_role_and_label(Role::Slider, "count")
-            .accesskit_node()
-            .is_disabled()
-    );
+    assert!(h.get_by(slider_key("count")).accesskit_node().is_disabled());
     h.get_by_label("palette").focus();
     h.run_steps(2);
     press(&mut h, Key::Enter);
@@ -1834,12 +1812,8 @@ fn bb21_palette_enable_preservation_and_integer_keys() {
             .accesskit_node()
             .is_disabled()
     );
-    assert!(
-        !h.get_by_role_and_label(Role::Slider, "count")
-            .accesskit_node()
-            .is_disabled()
-    );
-    h.get_by_role_and_label(Role::Slider, "count").focus();
+    assert!(!h.get_by(slider_key("count")).accesskit_node().is_disabled());
+    h.get_by(slider_key("count")).focus();
     h.run_steps(2);
     press(&mut h, Key::ArrowRight);
     press(&mut h, Key::PageUp);
@@ -1867,12 +1841,8 @@ fn bb21_palette_enable_preservation_and_integer_keys() {
             .accesskit_node()
             .is_disabled()
     );
-    assert!(
-        h.get_by_role_and_label(Role::Slider, "count")
-            .accesskit_node()
-            .is_disabled()
-    );
-    h.get_by_role_and_label(Role::Slider, "brightness").focus();
+    assert!(h.get_by(slider_key("count")).accesskit_node().is_disabled());
+    h.get_by(slider_key("brightness")).focus();
     h.run_steps(2);
     press(&mut h, Key::ArrowRight);
     press(&mut h, Key::PageUp);
@@ -1880,7 +1850,7 @@ fn bb21_palette_enable_preservation_and_integer_keys() {
     assert_eq!(focused_node(&h), ("brightness".into(), "6".into()));
     press(&mut h, Key::ArrowDown);
     assert_eq!(focused_node(&h), ("brightness".into(), "5".into()));
-    h.get_by_role_and_label(Role::Slider, "contrast").focus();
+    h.get_by(slider_key("contrast")).focus();
     h.run_steps(2);
     press(&mut h, Key::PageDown);
     press(&mut h, Key::Tab);
@@ -2006,7 +1976,7 @@ fn bb22_slider_and_numeric_values() {
         let mut v = pdn_core::effect::defaults(&def);
         v.insert(key.into(), serde_json::json!(start));
         open_def(&mut h, def, v);
-        h.get_by_role_and_label(Role::Slider, key).focus();
+        h.get_by(slider_key(key)).focus();
         h.run_steps(2);
         if numeric {
             press(&mut h, Key::Tab);
@@ -2041,7 +2011,7 @@ fn bb22_angle_numeric_and_spin() {
         let mut v = pdn_core::effect::defaults(&def);
         v.insert("angle".into(), serde_json::json!(start));
         open_def(&mut h, def, v);
-        h.get_by_role_and_label(Role::Slider, "angle").focus();
+        h.get_by(slider_key("angle")).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         assert_eq!(focused_node(&h), ("angle".into(), format!("{start:.2}")));
@@ -2060,7 +2030,7 @@ fn bb22_angle_numeric_and_spin() {
     let mut v = pdn_core::effect::defaults(&def);
     v.insert("angle".into(), serde_json::json!(179.75));
     open_def(&mut h, def, v);
-    let rect = h.get_by_role_and_label(Role::Slider, "angle").rect();
+    let rect = h.get_by(slider_key("angle")).rect();
     let pos = egui::pos2(rect.max.x + 8.0 + 72.0 - 7.0, rect.center().y - 4.0);
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
@@ -2098,7 +2068,7 @@ fn bb22_styles_checkbox_and_reset() {
     h.get_by_role_and_label(Role::CheckBox, "Anti-Aliased")
         .click();
     h.run_steps(2);
-    h.get_by_role_and_label(Role::Slider, "vertices").focus();
+    h.get_by(slider_key("vertices")).focus();
     h.run_steps(2);
     press(&mut h, Key::ArrowRight);
     press(&mut h, Key::Tab);
@@ -2999,7 +2969,7 @@ fn d59_harness(ppp: f32) -> Harness<'static, paintrs::PaintApp> {
 }
 
 fn d59_pointer(h: &mut Harness<'_, paintrs::PaintApp>, key: &str, fraction: f32) {
-    let rect = h.get_by_role_and_label(Role::Slider, key).rect();
+    let rect = h.get_by(slider_key(key)).rect();
     // Existing Effect thumb is 14 DIP, with the same centre/drag travel as range_line.
     let pos = egui::pos2(
         rect.min.x + 7.0 + fraction * (rect.width() - 14.0),
@@ -3077,7 +3047,7 @@ const D59_ANGLES: [(&str, &str, f64, f64, f64); 11] = [
 ];
 
 fn d59_number(h: &mut Harness<'_, paintrs::PaintApp>, key: &str) {
-    h.get_by_role_and_label(Role::Slider, key).focus();
+    h.get_by(slider_key(key)).focus();
     h.run_steps(1);
     h.key_press(Key::Tab);
     h.run_steps(1);
@@ -3186,7 +3156,7 @@ fn d59_angle_strict_endpoints_pending_text_keys_and_spin() {
                 d59_type(&mut h, text);
             }
             if spin {
-                let rect = h.get_by_role_and_label(Role::Slider, "angle").rect();
+                let rect = h.get_by(slider_key("angle")).rect();
                 let pos = egui::pos2(
                     rect.max.x + 8.0 + 72.0 - 7.0,
                     rect.center().y + if up { -4.0 } else { 4.0 },
@@ -3354,7 +3324,7 @@ fn d59_zero_minimum_old_exponential_flags_open_finitely_and_keep_values() {
             let mut values = pdn_core::effect::defaults(&def);
             values.insert(key.into(), serde_json::json!(initial));
             open_def(&mut h, def, values);
-            let rect = h.get_by_role_and_label(Role::Slider, key).rect();
+            let rect = h.get_by(slider_key(key)).rect();
             assert!(rect.is_finite());
             h.run_steps(2);
             assert_eq!(
@@ -3457,7 +3427,7 @@ fn d59_thumb_offset_drag_clamps_release_and_reset_keep_existing_geometry() {
     let mut values = pdn_core::effect::defaults(&def);
     values.insert("radius".into(), serde_json::json!(75.0));
     open_def(&mut h, def, values);
-    let rect = h.get_by_role_and_label(Role::Slider, "radius").rect();
+    let rect = h.get_by(slider_key("radius")).rect();
     let mut pos = egui::pos2(rect.center().x + 3.0, rect.center().y);
     h.input_mut().events.extend([
         egui::Event::PointerMoved(pos),
@@ -3481,7 +3451,7 @@ fn d59_thumb_offset_drag_clamps_release_and_reset_keep_existing_geometry() {
     h.run_steps(1);
     assert_eq!(finish(&mut h, "blurEffect")["radius"], 168.8);
     open_effect(&mut h, "blurEffect");
-    let rect = h.get_by_role_and_label(Role::Slider, "radius").rect();
+    let rect = h.get_by(slider_key("radius")).rect();
     pos = egui::pos2(rect.center().x, rect.center().y);
     h.input_mut().events.extend([
         egui::Event::PointerMoved(pos),
@@ -3530,16 +3500,16 @@ fn bb26_clipboard_fractional_keyboard_controls() {
         let def = pdn_core::effect::find(id).unwrap();
         let values = pdn_core::effect::defaults(&def);
         open_def(&mut h, def, values);
-        h.get_by_role_and_label(Role::Slider, "zoom").focus();
+        h.get_by(slider_key("zoom")).focus();
         h.run_steps(1);
         press(&mut h, Key::ArrowRight);
-        h.get_by_role_and_label(Role::Slider, "zoom").focus();
+        h.get_by(slider_key("zoom")).focus();
         h.run_steps(1);
         press(&mut h, Key::PageUp);
-        h.get_by_role_and_label(Role::Slider, "placement.X").focus();
+        h.get_by(slider_key("placement.X")).focus();
         h.run_steps(1);
         press(&mut h, Key::ArrowRight);
-        h.get_by_role_and_label(Role::Slider, "placement.X").focus();
+        h.get_by(slider_key("placement.X")).focus();
         h.run_steps(1);
         press(&mut h, Key::PageUp);
         h.get_by_label("Nearest neighbor sampling").click();
@@ -3692,7 +3662,7 @@ fn bb28_press_at(h: &mut Harness<'_, paintrs::PaintApp>, pos: egui::Pos2) {
 fn bb28_horizon_key_visit_sticks_through_ok() {
     let mut h = bb12_harness();
     let before = bb28_horizon(&mut h, [0.0, -1.0], [0.1, -1.0]);
-    h.get_by_role_and_label(Role::Slider, "end.Y").focus();
+    h.get_by(slider_key("end.Y")).focus();
     h.run_steps(2);
     press(&mut h, Key::PageUp);
     press(&mut h, Key::PageDown);
@@ -3716,7 +3686,7 @@ fn bb28_horizon_key_visit_sticks_through_ok() {
 fn bb28_horizon_typed_visit_and_same_frame_ok() {
     let mut h = bb12_harness();
     let before = bb28_horizon(&mut h, [0.0, -1.0], [0.1, -1.0]);
-    h.get_by_role_and_label(Role::Slider, "end.Y").focus();
+    h.get_by(slider_key("end.Y")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     for (text, commit) in [("1", true), ("-1", false)] {
@@ -3743,7 +3713,7 @@ fn bb28_horizon_typed_visit_and_same_frame_ok() {
 fn bb28_horizon_spin_visit_and_reset() {
     let mut h = bb12_harness();
     let before = bb28_horizon(&mut h, [0.0, -0.33], [0.005, -0.33]);
-    let rect = h.get_by_role_and_label(Role::Slider, "end.Y").rect();
+    let rect = h.get_by(slider_key("end.Y")).rect();
     bb28_press_at(
         &mut h,
         egui::pos2(rect.max.x + 8.0 + 72.0 - 7.0, rect.center().y - 4.0),
@@ -3768,7 +3738,7 @@ fn bb28_horizon_pointer_visit_and_tabs() {
         .get_by_role_and_label(Role::Image, "Ending Position")
         .rect();
     bb28_press_at(&mut h, egui::pos2(pad.center().x, pad.max.y - 3.0));
-    h.get_by_role_and_label(Role::Slider, "end.Y").focus();
+    h.get_by(slider_key("end.Y")).focus();
     h.run_steps(2);
     for _ in 0..8 {
         press(&mut h, Key::PageDown);
@@ -3790,10 +3760,7 @@ fn bb28_horizon_step_tab_drives_output_and_repeat() {
     let before = bb28_horizon(&mut h, [-0.9, -0.33], [0.9, -0.23]);
     h.key_press_modifiers(Modifiers::CTRL, Key::Tab);
     h.run_steps(3);
-    assert!(
-        h.query_by_role_and_label(Role::Slider, "end.Y").is_none(),
-        "step 2 page"
-    );
+    assert!(h.query_by(slider_key("end.Y")).is_none(), "step 2 page");
     let token = finish(&mut h, "bbLevelHorizon");
     assert_eq!(token["step"], serde_json::json!(1));
     bb28_assert_label(&h, &before, &token, false);
@@ -3885,7 +3852,7 @@ fn bb30_calendar_dialog_rows_year_range_ok_and_repeat() {
     );
     let font = h.get_by_role_and_label(Role::ComboBox, "font");
     assert_eq!(font.accesskit_node().value().as_deref(), Some("Selawik"));
-    h.get_by_role_and_label(Role::Slider, "year").focus();
+    h.get_by(slider_key("year")).focus();
     h.run_steps(2);
     for _ in 0..30 {
         press(&mut h, Key::PageUp);
@@ -4000,7 +3967,7 @@ fn bb30_calendar_year_pointer_accessibility_same_frame_ok_and_history() {
     let source = select_pixels(&h);
     let history = h.state().app.active_ws().unwrap().history.undo.len();
     open_effect(&mut h, "bbCalendar");
-    let year = h.get_by_role_and_label(Role::Slider, "year");
+    let year = h.get_by(slider_key("year"));
     let node = year.accesskit_node();
     assert_eq!(
         (
@@ -4029,9 +3996,7 @@ fn bb30_calendar_year_pointer_accessibility_same_frame_ok_and_history() {
     }
     h.event(button(end, false));
     h.run_steps(2);
-    let node = h
-        .get_by_role_and_label(Role::Slider, "year")
-        .accesskit_node();
+    let node = h.get_by(slider_key("year")).accesskit_node();
     assert_eq!(
         node.numeric_value(),
         Some(2146.0),
@@ -4060,7 +4025,7 @@ fn bb30_calendar_year_pointer_accessibility_same_frame_ok_and_history() {
     // A typed year left pending in the number box commits with the OK click.
     for (text, want) in [("2030", 2030.0), ("1800", 1906.0), ("3000", 2146.0)] {
         open_effect(&mut h, "bbCalendar");
-        h.get_by_role_and_label(Role::Slider, "year").focus();
+        h.get_by(slider_key("year")).focus();
         h.run_steps(2);
         press(&mut h, Key::Tab);
         h.key_press_modifiers(Modifiers::CTRL, Key::A);
@@ -4301,27 +4266,27 @@ fn bb31_shared_depth_and_light_rows() {
     h.run_steps(3);
     h.get_by_role_and_label(Role::Tab, "Metallic").click();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Slider, "depth").focus();
+    h.get_by(slider_key("depth")).focus();
     h.run_steps(2);
     for _ in 0..5 {
         press(&mut h, Key::PageUp);
     }
     h.get_by_role_and_label(Role::Tab, "3D").click();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Slider, "depth").focus();
+    h.get_by(slider_key("depth")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     assert_eq!(focused_node(&h), ("depth".into(), "30".into()));
     h.get_by_role_and_label(Role::Tab, "Shadow").click();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Slider, "light").focus();
+    h.get_by(slider_key("light")).focus();
     h.run_steps(2);
     for _ in 0..3 {
         press(&mut h, Key::PageDown);
     }
     h.get_by_role_and_label(Role::Tab, "Fill").click();
     h.run_steps(3);
-    h.get_by_role_and_label(Role::Slider, "light").focus();
+    h.get_by(slider_key("light")).focus();
     h.run_steps(2);
     press(&mut h, Key::Tab);
     let (key, shown) = focused_node(&h);
@@ -4334,4 +4299,9 @@ fn bb31_shared_depth_and_light_rows() {
         (token["depth"].clone(), token["light"].clone()),
         (serde_json::json!(30.0), serde_json::json!(-60.0))
     );
+}
+
+/// A dialog slider by its value's key: its AccessKit author id (its label is the text a user reads).
+pub fn slider_key(key: &str) -> impl Fn(&egui_kittest::kittest::AccessKitNode<'_>) -> bool + '_ {
+    move |n| n.role() == egui::accesskit::Role::Slider && n.author_id() == Some(key)
 }

@@ -645,6 +645,17 @@ pub fn css_width(text: &str, size: f32) -> f32 {
     w
 }
 
+/// Shrink-to-fit: `size` scaled by `width / css_width(text, size)` when `text` is wider than
+/// `width`, never below 2/3 of `size` (8 px for the 12-px UI text). Floored to 1/4 px, so the
+/// result fits despite LayoutUnit rounding and only a few sizes reach the glyph caches.
+pub fn fit_size(text: &str, width: f32, size: f32) -> f32 {
+    let w = css_width(text, size);
+    if w <= width {
+        return size;
+    }
+    ((size * width / w * 4.0).floor() / 4.0).max(size * 2.0 / 3.0)
+}
+
 #[derive(Default)]
 struct WidthCache {
     family: String,
@@ -870,6 +881,32 @@ mod pdn_text_tests {
         pdn_core::canvas::text::unregister_font(family);
         assert_ne!(carlito, noto);
         assert_eq!(css_width("Width:", 12.0), noto);
+    }
+
+    /// Shrink-to-fit: a fitting text keeps its size, a long one shrinks until it fits, never
+    /// below 3/4.
+    #[test]
+    fn fit_size_shrinks_long_text_to_its_width() {
+        assert_eq!(fit_size("Arial", 124.0, 12.0), 12.0);
+        let long = "IntoneMono NF Medium";
+        let size = fit_size(long, 124.0, 12.0);
+        assert!(size < 12.0 && css_width(long, size) <= 124.0, "{size}");
+        assert_eq!(fit_size(&long.repeat(3), 124.0, 12.0), 8.0);
+    }
+
+    /// Long Nerd Font family names (cut in 0.7.3's font list) fit the list's name column whole.
+    #[test]
+    fn long_font_names_fit_the_font_list() {
+        let (column, ..) = crate::theme::TOOL_FONT_COLUMNS;
+        for name in [
+            "IntoneMono NFM Light Italic",
+            "IntoneMono NFM SemiBold Italic",
+            "Iosevka NF ExtraBold Extended Oblique",
+            "Iosevka NF ExtraLight Extended Oblique",
+        ] {
+            let size = fit_size(name, column, crate::theme::TOOL_POPUP_FONT_SIZE);
+            assert!(css_width(name, size) <= column, "{name} at {size} px");
+        }
     }
 
     /// `ui-text-and-glyphs.md §8.3`: A_gdi(12) of the paintdotjs-checked strings.

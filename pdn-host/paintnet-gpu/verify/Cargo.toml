@@ -1,0 +1,115 @@
+# Verifies Paint.NET's built-in GPU effect pixel shaders through crates/d2d's
+# effect graph (effects/shader.rs -- the PixelShaderEffect draw transform), not
+# the d2d-shader bridge, and compares to the WARP oracle captured by d2d-ref.
+# Standalone workspace (path dep on d2d) so it never touches the root manifest.
+# crates/d2d lives in the opend2d repo (our merge workspace, read-only); this
+# harness reads it through the path dep below and builds into its own target dir.
+[package]
+name = "pdngpu-verify"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "pdngpu-verify"
+path = "src/main.rs"
+
+[[bin]]
+name = "pdngpu-addnoise"
+path = "src/addnoise.rs"
+
+[[bin]]
+name = "pdngpu-clouds"
+path = "src/clouds.rs"
+
+[[bin]]
+name = "pdngpu-surfaceblur"
+path = "src/surfaceblur.rs"
+
+[[bin]]
+name = "pdngpu-reducenoise"
+path = "src/reducenoise.rs"
+
+[[bin]]
+name = "pdngpu-orderdither"
+path = "src/orderdither.rs"
+
+[[bin]]
+name = "pdngpu-crystalize"
+path = "src/crystalize.rs"
+
+[[bin]]
+name = "pdngpu-samplemap"
+path = "src/samplemap.rs"
+
+[[bin]]
+name = "pdngpu-samplemap-apply"
+path = "src/samplemap_apply.rs"
+
+[[bin]]
+name = "pdngpu-run"
+path = "src/run.rs"
+
+[[bin]]
+name = "pdngpu-dents"
+path = "src/dents.rs"
+
+[dependencies]
+d2d = { path = "../../../../../../opend2d/crates/d2d" }
+crt = { path = "../../../../../../opend2d/crates/crt" }
+serde_json = "1.0.149"
+windows-core = { version = "=0.62.2", default-features = false }
+
+[[bin]]
+name = "pdngpu-runf"
+path = "src/runf.rs"
+
+[[bin]]
+name = "pdngpu-fractal"
+path = "src/fractal.rs"
+
+[[bin]]
+name = "pdngpu-tex"
+path = "src/tex.rs"
+
+[[bin]]
+name = "pdngpu-embossgraph"
+path = "src/embossgraph.rs"
+
+[[bin]]
+name = "pdngpu-reliefgraph"
+path = "src/reliefgraph.rs"
+
+[[bin]]
+name = "pdngpu-gaussiangraph"
+path = "src/gaussiangraph.rs"
+
+[[bin]]
+name = "pdngpu-glowgraph"
+path = "src/glowgraph.rs"
+
+[[bin]]
+name = "pdngpu-dropshadowgraph"
+path = "src/dropshadowgraph.rs"
+
+[[bin]]
+name = "pdngpu-bokehgraph"
+path = "src/bokehgraph.rs"
+
+[[bin]]
+name = "pdngpu-sketchblurgraph"
+path = "src/sketchblurgraph.rs"
+
+[[bin]]
+name = "pdngpu-softenportraitgraph"
+path = "src/softenportraitgraph.rs"
+
+[[bin]]
+name = "pdngpu-inksketchgraph"
+path = "src/inksketchgraph.rs"
+
+[[bin]]
+name = "pdngpu-pencilsketchgraph"
+path = "src/pencilsketchgraph.rs"

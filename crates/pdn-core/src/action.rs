@@ -2339,10 +2339,23 @@ pub fn dispatch_key(
         .filter_map(|a| Some((a.id, ToolType::from_id(a.id)?)))
         .collect();
     let picked = dispatch_tool_actions(app, &tools, shift, now_ms)?;
+    let before = app.tool_type;
     if let ActionOutcome::Ui(request) = perform(app, picked) {
         app.ui_requests.push(request);
     }
     app.last_tool_switch_at = now_ms;
+    // The Pan tool's key held down pans until it is up (`AppWorkspace::on_key_up`).
+    if let Some(previous) = before.filter(|&t| t != ToolType::Pan)
+        && app.tool_type == Some(ToolType::Pan)
+    {
+        app.spring_pan = Some(crate::app::SpringPan {
+            key: key.to_string(),
+            previous,
+            at_ms: now_ms,
+            used: false,
+            released: false,
+        });
+    }
     Some(picked)
 }
 

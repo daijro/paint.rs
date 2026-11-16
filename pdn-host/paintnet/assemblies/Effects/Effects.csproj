@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compatibility shim: Paint.NET 5.0-era plugins (e.g. the BoltBait pack, net7) reference the
+       classic effect base types from the PaintDotNet.Effects *assembly*; PDN 5.2 (and this
+       replacement set) moved them into PaintDotNet.Effects.Core. Forward the moved types so those
+       plugins bind here unchanged. No code of its own — just type forwarders. -->
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Effects</AssemblyName>
+    <RootNamespace>PaintDotNet.Effects</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Effects.Core/Effects.Core.csproj" />
+    <ProjectReference Include="../Effects.Legacy/Effects.Legacy.csproj" />
+  </ItemGroup>
+</Project>

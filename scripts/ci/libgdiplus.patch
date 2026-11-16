@@ -1,0 +1,344 @@
+--- a/src/graphics-path.c
++++ b/src/graphics-path.c
+@@ -1821,12 +1821,158 @@
+ 	return NotImplemented;
+ }
+ 
+-/* MonoTODO */
+-GpStatus WINGDIPAPI 
++/* The outline a pen draws along a path, for GdipWidenPath: each figure's two sides, offset by half the pen's width,
++ * with the pen's joins at its corners and its caps at an open figure's ends. */
++typedef struct {
++	GpPointF *points;
++	BYTE *types;
++	int count, size;
++} WidenOut;
++
++static BOOL
++widen_add (WidenOut *out, float x, float y, BOOL start)
++{
++	if (out->count == out->size) {
++		int size = out->size ? out->size * 2 : 64;
++		GpPointF *points = gdip_realloc (out->points, size * sizeof (GpPointF));
++		BYTE *types;
++		if (!points)
++			return FALSE;
++		out->points = points;
++		types = gdip_realloc (out->types, size * sizeof (BYTE));
++		if (!types)
++			return FALSE;
++		out->types = types;
++		out->size = size;
++	}
++	out->points[out->count].X = x;
++	out->points[out->count].Y = y;
++	out->types[out->count] = start ? PathPointTypeStart : PathPointTypeLine;
++	out->count++;
++	return TRUE;
++}
++
++static void
++widen_close (WidenOut *out)
++{
++	if (out->count > 0)
++		out->types[out->count - 1] |= PathPointTypeCloseSubpath;
++}
++
++/* An arc of radius r around c from angle a0 sweeping by sweep (radians), its first point excluded. */
++static BOOL
++widen_arc (WidenOut *out, GpPointF c, float r, double a0, double sweep, float flatness)
++{
++	double step = (r > flatness) ? 2 * acos (1 - flatness / r) : M_PI / 2;
++	int n, i;
++	if (step < M_PI / 64)
++		step = M_PI / 64;
++	n = (int) ceil (fabs (sweep) / step);
++	if (n < 1)
++		n = 1;
++	for (i = 1; i <= n; i++) {
++		double a = a0 + sweep * i / n;
++		if (!widen_add (out, c.X + r * cos (a), c.Y + r * sin (a), FALSE))
++			return FALSE;
++	}
++	return TRUE;
++}
++
++/* One side of a figure's points pts[0..n): offset by h along each segment's left normal times side (1 or -1),
++ * walked forwards, with joins at its corners. A closed figure's side starts after its first segment and ends with
++ * the join at pts[0]. Its first point starts a figure when start is set. */
++#define ADD(x, y) (widen_add (out, (x), (y), start) && ((start = FALSE), TRUE))
++static BOOL
++widen_side (WidenOut *out, const GpPointF *pts, int n, BOOL closed, float h, int side, GpPen *pen, float flatness, BOOL start)
++{
++	int segs = closed ? n : n - 1;
++	int k;
++	for (k = 0; k < segs; k++) {
++		GpPointF p0 = pts[k], p1 = pts[(k + 1) % n];
++		double dx = p1.X - p0.X, dy = p1.Y - p0.Y, len = sqrt (dx * dx + dy * dy);
++		double nx = -dy / len * side, ny = dx / len * side;
++		GpPointF a = { p0.X + nx * h, p0.Y + ny * h }, b = { p1.X + nx * h, p1.Y + ny * h };
++		GpPointF q;
++		double ex, ey, elen, mx, my, cross, dot, cosh;
++		BOOL last = (k == segs - 1);
++		if (k == 0 && !closed && !ADD (a.X, a.Y))
++			return FALSE;
++		if (last && !closed)
++			return ADD (b.X, b.Y);
++		/* the corner at p1, to the next segment */
++		q = pts[(k + 2) % n];
++		ex = q.X - p1.X; ey = q.Y - p1.Y; elen = sqrt (ex * ex + ey * ey);
++		mx = -ey / elen * side; my = ex / elen * side;
++		cross = (dx * ey - dy * ex) / (len * elen);
++		dot = (dx * ex + dy * ey) / (len * elen);
++		if (cross * side > 0) {
++			/* the inner side: the offset lines meet, unless a segment is too short for it */
++			double t = (dot > -0.999) ? h * sqrt ((1 - dot) / (1 + dot)) : -1;
++			if (t >= 0 && t <= len && t <= elen) {
++				if (!ADD (b.X - dx / len * t, b.Y - dy / len * t))
++					return FALSE;
++			} else if (!ADD (b.X, b.Y) || !ADD (p1.X + mx * h, p1.Y + my * h)) {
++				return FALSE;
++			}
++		} else {
++			/* the outer side: the pen's join */
++			if (!ADD (b.X, b.Y))
++				return FALSE;
++			cosh = sqrt ((1 + dot) / 2);	/* the cosine of half the turn */
++			if (pen->line_join == LineJoinRound) {
++				double a0 = atan2 (ny, nx), a1 = atan2 (my, mx), sweep = a1 - a0;
++				while (sweep > M_PI) sweep -= 2 * M_PI;
++				while (sweep < -M_PI) sweep += 2 * M_PI;
++				if (!widen_arc (out, p1, h, a0, sweep, flatness))
++					return FALSE;
++			} else {
++				if ((pen->line_join == LineJoinMiter || pen->line_join == LineJoinMiterClipped) && cosh > 1e-6
++				    && 1 / cosh <= pen->miter_limit) {
++					double d = h / cosh, bx = nx + mx, by = ny + my, bl = sqrt (bx * bx + by * by);
++					if (bl > 1e-9 && !ADD (p1.X + bx / bl * d, p1.Y + by / bl * d))
++						return FALSE;
++				}
++				if (!ADD (p1.X + mx * h, p1.Y + my * h))
++					return FALSE;
++			}
++		}
++	}
++	return TRUE;
++}
++#undef ADD
++
++/* A cap at end p of an open figure, from its side at offset +n·h round to the other, d the direction outwards. */
++static BOOL
++widen_cap (WidenOut *out, GpLineCap cap, GpPointF p, double dx, double dy, float h, float flatness)
++{
++	double nx = -dy, ny = dx;
++	switch (cap) {
++	case LineCapSquare:
++	case LineCapSquareAnchor:
++		return widen_add (out, p.X + (nx + dx) * h, p.Y + (ny + dy) * h, FALSE)
++			&& widen_add (out, p.X + (dx - nx) * h, p.Y + (dy - ny) * h, FALSE);
++	case LineCapRound:
++	case LineCapRoundAnchor:
++		return widen_arc (out, p, h, atan2 (ny, nx), -M_PI, flatness);
++	case LineCapTriangle:
++	case LineCapDiamondAnchor:
++		return widen_add (out, p.X + dx * h, p.Y + dy * h, FALSE);
++	default:
++		return TRUE;
++	}
++}
++
++/* Replaces the path with the outline the pen draws along it (after the matrix, curves flattened): for an open
++ * figure one closed figure round both sides and its caps; for a closed one its outer and inner sides, in opposite
++ * directions, so the outline fills as a ring in either fill mode. Dashes, compound lines and custom caps are drawn
++ * as a plain line. */
++GpStatus WINGDIPAPI
+ GdipWidenPath (GpPath *nativePath, GpPen *pen, GpMatrix *matrix, float flatness)
+ {
+-	static int called = 0;
+ 	GpStatus status;
++	WidenOut out = { NULL, NULL, 0, 0 };
++	float h;
++	int i, first;
+ 
+ 	if (!nativePath || !pen)
+ 		return InvalidParameter;
+@@ -1840,14 +1986,88 @@
+ 	if (status != Ok)
+ 		return status;
+ 
+-	/* TODO inner path (same number of points as the prepared path) */
+-
+-	/* TODO outer path (twice the number of points as the prepared path) */
+-
+-	if (!called) {
+-		g_warning ("NOT IMPLEMENTED: GdipWidenPath");
+-		called = 1;
++	h = (pen->width > 0 ? pen->width : 1) / 2;
++	if (flatness <= 0)
++		flatness = 0.25f;
++	for (first = 0; first < nativePath->count; first = i) {
++		GpPointF *pts;
++		int n = 0, end;
++		BOOL closed;
++		for (end = first + 1; end < nativePath->count && (nativePath->types[end] & PathPointTypePathTypeMask) != PathPointTypeStart; end++)
++			;
++		i = end;
++		closed = (nativePath->types[end - 1] & PathPointTypeCloseSubpath) != 0;
++		/* the figure's points, repeats dropped (and the closing one) */
++		pts = GdipAlloc ((end - first) * sizeof (GpPointF));
++		if (!pts) {
++			status = OutOfMemory;
++			break;
++		}
++		for (int k = first; k < end; k++) {
++			GpPointF p = nativePath->points[k];
++			if (n > 0 && fabs (p.X - pts[n - 1].X) < 1e-6 && fabs (p.Y - pts[n - 1].Y) < 1e-6)
++				continue;
++			pts[n++] = p;
++		}
++		if (closed && n > 2 && fabs (pts[0].X - pts[n - 1].X) < 1e-6 && fabs (pts[0].Y - pts[n - 1].Y) < 1e-6)
++			n--;
++		if (n < 2) {
++			GdipFree (pts);
++			continue;
++		}
++		if (closed && n > 2) {
++			GpPointF *rev = GdipAlloc (n * sizeof (GpPointF));
++			BOOL ok = rev != NULL && widen_side (&out, pts, n, TRUE, h, 1, pen, flatness, TRUE);
++			if (ok) {
++				widen_close (&out);
++				for (int k = 0; k < n; k++)
++					rev[k] = pts[n - 1 - k];
++				ok = widen_side (&out, rev, n, TRUE, h, 1, pen, flatness, TRUE);
++				widen_close (&out);
++			}
++			GdipFree (rev);
++			if (!ok) {
++				GdipFree (pts);
++				status = OutOfMemory;
++				break;
++			}
++		} else {
++			/* forwards on the left, the end cap, back on the other side, the start cap */
++			GpPointF *rev = GdipAlloc (n * sizeof (GpPointF));
++			GpPointF a = pts[n - 2], b = pts[n - 1], c = pts[1], d = pts[0];
++			double l1 = sqrt ((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
++			double l0 = sqrt ((d.X - c.X) * (d.X - c.X) + (d.Y - c.Y) * (d.Y - c.Y));
++			BOOL ok = rev != NULL && widen_side (&out, pts, n, FALSE, h, 1, pen, flatness, TRUE)
++				&& widen_cap (&out, pen->end_cap, b, (b.X - a.X) / l1, (b.Y - a.Y) / l1, h, flatness);
++			if (ok) {
++				for (int k = 0; k < n; k++)
++					rev[k] = pts[n - 1 - k];
++				ok = widen_side (&out, rev, n, FALSE, h, 1, pen, flatness, FALSE)
++					&& widen_cap (&out, pen->line_cap, d, (d.X - c.X) / l0, (d.Y - c.Y) / l0, h, flatness);
++				widen_close (&out);
++			}
++			GdipFree (rev);
++			if (!ok) {
++				GdipFree (pts);
++				status = OutOfMemory;
++				break;
++			}
++		}
++		GdipFree (pts);
+ 	}
++	if (status != Ok) {
++		GdipFree (out.points);
++		GdipFree (out.types);
++		return status;
++	}
++
++	GdipFree (nativePath->points);
++	GdipFree (nativePath->types);
++	nativePath->points = out.points;
++	nativePath->types = out.types;
++	nativePath->count = out.count;
++	nativePath->size = out.size;
++	nativePath->start_new_fig = TRUE;
+ 	return Ok;
+ }
+ 
+--- a/src/region-bitmap.c
++++ b/src/region-bitmap.c
+@@ -844,14 +844,16 @@
+ process_line (GpRegionBitmap *bitmap, int y, int *x, int *w)
+ {
+ 	int pos = *x;
+-	*x = -1;
++	/* a flag, not x = -1: a rectangle may start at -1 */
++	BOOL started = FALSE;
+ 	*w = -1;
+ 
+ 	while (pos < bitmap->X + bitmap->Width) {
+ 		BOOL visible = gdip_region_bitmap_is_point_visible (bitmap, pos, y);
+-		if (*x == -1) {
++		if (!started) {
+ 			if (visible) {
+-				*x += pos + 1;
++				*x = pos;
++				started = TRUE;
+ 			}
+ 		} else {
+ 			if (!visible) {
+@@ -863,7 +865,7 @@
+ 	}
+ 
+ 	/* end of line - have we started a rect ? */
+-	if (*x != -1) {
++	if (started) {
+ 		*w = pos - *x;
+ 		return TRUE;
+ 	}
+--- a/src/gifcodec.c
++++ b/src/gifcodec.c
+@@ -548,7 +548,11 @@
+ 
+ 	do {
+ 		if (DGifGetRecordType(GifFile, &RecordType) == GIF_ERROR) {
+-			goto error;
++			/* After an image, a byte that starts no record ends the file, as in Windows GDI+ (Simon B's
++			 * Animated GIF writes one before the trailer) */
++			if (GifFile->ImageCount == 0 || GifFile->Error != D_GIF_ERR_WRONG_RECORD)
++				goto error;
++			RecordType = TERMINATE_RECORD_TYPE;
+ 		}
+ 
+ 		switch (RecordType) {
+@@ -1130,6 +1134,10 @@
+ 	if (!fp) {
+ 		return FileNotFound;
+ 	}
++#if GIFLIB_MAJOR >= 5
++	/* GIF89a, as Windows GDI+ writes: every image has a control extension */
++	EGifSetGifVersion (fp, true);
++#endif
+ 
+ 	red = NULL;
+ 	green = NULL;
+@@ -1305,6 +1313,10 @@
+ 				}
+ 			}
+ 
++			/* A quantized image keeps a full 256-colour table, as Windows GDI+ writes one: plug-ins (Simon B's
++			 * Animated GIF) cut its output at the offsets that layout gives. */
++			if (!gdip_is_an_indexed_pixelformat (bitmap_data->pixel_format))
++				cmap_size = 256;
+ #if GIFLIB_MAJOR >= 5
+ 			cmap->BitsPerPixel = GifBitSize (cmap_size);
+ #else
+@@ -1345,11 +1357,12 @@
+ 				}
+ 			}
+ 
+-			/* Every image has a control extension specifying the time delay */
+-			if (animated || bitmap_data->transparent < 0) {
++			/* Every image has a control extension specifying the time delay (one that is neither animated nor
++			 * transparent an empty one, as Windows GDI+ writes) */
++			{
+ 				BYTE buffer[4];
+ 
+-				buffer[0] = 0x03;		/* 0000 0100 = do not dispose */
++				buffer[0] = animated ? 0x03 : 0x00;		/* 0000 0100 = do not dispose */
+ 
+ 				if (bitmap_data->transparent < 0) {
+ 					buffer[0] |= 0x01;	/* 0000 0001 = transparent */

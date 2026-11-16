@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Paint.NET's classic CPU built-in effects, which plugins construct and drive as black boxes
+       (EdgeDetectClassic, SharpenClassic, GaussianBlurPlus, OilPaintingPlus, Pastel, FloydSteinberg). -->
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Effects.Legacy</AssemblyName>
+    <RootNamespace>PaintDotNet.Effects</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Effects.Core/Effects.Core.csproj" />
+    <ProjectReference Include="../Data/Data.csproj" />
+  </ItemGroup>
+</Project>

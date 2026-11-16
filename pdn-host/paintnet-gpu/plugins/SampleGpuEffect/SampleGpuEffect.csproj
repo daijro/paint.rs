@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- In-tree test GPU effects written against Paint.NET 5's public API (built-in Direct2D effects only),
+       built against the replacement assemblies the bridge ships. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SampleGpuEffect</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../paintnet/assemblies/Windows/Windows.csproj" />
+    <ProjectReference Include="../../../paintnet/assemblies/WindowsCore/WindowsCore.csproj" />
+    <ProjectReference Include="../../../paintnet/assemblies/Effects.Core/Effects.Core.csproj" />
+    <ProjectReference Include="../../../paintnet/assemblies/PropertySystem/PropertySystem.csproj" />
+    <ProjectReference Include="../../../paintnet/assemblies/Primitives/Primitives.csproj" />
+  </ItemGroup>
+</Project>

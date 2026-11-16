@@ -2,11 +2,12 @@
 //! Port of: js/src/engine/document/effect/BitmapEffectEngine.js (`EFFECTS` artistic entries: ids,
 //! icons and control keys only).
 
-use super::adjustments::bc_shift;
-use super::blur::gaussian;
-use super::mix::{W3cBlend, blend_w3c};
+use super::graph::{
+    BORDER_HARD, CLSID_D2D1ConvolveMatrix, CLSID_D2D1Grayscale, CLSID_D2D1Invert,
+    D2D1_BLEND_MODE_COLOR_DODGE, D2D1_BLEND_MODE_DARKEN, Graph, Prop, QUALITY,
+};
 use super::sample::circle_rows;
-use super::surface::{Alpha, Edge, EffectSurface, Space, luma, premultiply, unpremultiply};
+use super::surface::{Alpha, EffectSurface, Space, luma, unpremultiply};
 use super::{
     Category, Control, EffectDef, EffectEnv, EffectKind, GpuFn, RenderInfo, Values, choice, num,
     range,
@@ -95,65 +96,39 @@ pub fn ink_correlation_weight(dx: i32, dy: i32) -> f32 {
     INK_K[(2 - dy) as usize][(2 - dx) as usize]
 }
 
-/// D2D Grayscale on premultiplied colour: unpremultiply, Y, premultiply.
-fn gray(p: [f32; 4]) -> [f32; 4] {
-    let [r, g, b, a] = unpremultiply(p);
-    let y = luma(r, g, b);
-    premultiply([y, y, y, a])
-}
-
-/// F11 on premultiplied colour: unpremultiply, `bc_shift` (B, C on the ±100 scale; clamps),
-/// premultiply.
-pub(super) fn brightness_contrast(p: [f32; 4], b: f32, c: f32) -> [f32; 4] {
-    let [r, g, bl, a] = unpremultiply(p);
-    let [r, g, bl] = bc_shift([r, g, bl], b, c);
-    premultiply([r, g, bl, a])
-}
-
-/// §2.2 Ink Sketch on sRGB premultiplied colour, t = min(ink/100, 0.99), k = coloring/100.
+/// Genuine `PdnInkSketchEffect` (`InkSketchGpuEffect`, WorkingSpace = sRGB, premultiplied), its
+/// graph on d2d: the ink mask `ConvolveMatrix{5×5 INK_K, PreserveAlpha, Hard, ClampOutput} →
+/// Grayscale → AdjustShader` darkens a `PdnGlowEffect` (glow 6) of the source.
 fn ink_sketch(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // approximation: Direct2D ConvolveMatrix, GaussianBlur and Blend (B-E3, B-E6)
-    let t = (num(v, "ink") / 100.0).clamp(0.0, 0.99) as f32;
-    let k = num(v, "color").clamp(0.0, 100.0) / 100.0;
-    let bc = (-(k - 0.5) * 200.0) as f32;
-    // Step 1 with PreserveAlpha: the taps are unpremultiplied, fetched through Mirror (Hard).
-    let straight = EffectSurface {
-        px: src.px.iter().copied().map(unpremultiply).collect(),
-        ..*src
-    };
-    // Step 4: Glow = Screen(src, F11(Gaussian σ 2.5)).
-    let blurred = gaussian(src, 2.5, Edge::Mirror);
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let c = src.at(x, y);
-        let mut e = [0.0f32; 3];
-        for dy in -2..=2 {
-            for dx in -2..=2 {
-                let w = ink_correlation_weight(dx, dy);
-                let s = straight.fetch(x as i32 + dx, y as i32 + dy, Edge::Mirror);
-                for (e, s) in e.iter_mut().zip(s) {
-                    *e += w * s;
-                }
-            }
-        }
-        let [r, g, b] = e.map(|v| v.clamp(0.0, 1.0));
-        let a = c[3];
-        // Steps 2–3 on the re-premultiplied edges.
-        let [r, g, b, _] = unpremultiply(premultiply([r, g, b, a]));
-        let mask = if a <= 0.0 {
+    let t = ((num(v, "ink") / 100.0) as f32).clamp(0.0, 0.99);
+    let k = ((num(v, "color") / 100.0) as f32).clamp(0.0, 1.0);
+    let (mut g, src) = Graph::new(src, Alpha::Premultiplied);
+    let kernel: Vec<f32> = INK_K.iter().flatten().copied().collect();
+    let conv = [
+        (2, Prop::U32(5)),
+        (3, Prop::U32(5)),
+        (4, Prop::Floats(kernel.into())),
+        (8, Prop::Bool(true)),
+        (9, Prop::U32(BORDER_HARD)),
+        (10, Prop::Bool(true)),
+    ];
+    let edges = g.fx(CLSID_D2D1ConvolveMatrix, &conv, [src.clone()]);
+    let edges = g.fx(CLSID_D2D1Grayscale, &[], [edges]);
+    // AdjustShader on the premultiplied grey: white where Y = r/a passes the ink threshold, black
+    // elsewhere; alpha kept.
+    let mask = g.shader(&edges, |[r, _, _, a]| {
+        if a <= 0.0 {
             [0.0; 4]
-        } else if luma(r, g, b) > t {
+        } else if r / a > t {
             [a; 4]
         } else {
             [0.0, 0.0, 0.0, a]
-        };
-        let glow = blend_w3c(
-            W3cBlend::Screen,
-            c,
-            brightness_contrast(blurred.at(x, y), bc, bc),
-        );
-        // Step 5.
-        blend_w3c(W3cBlend::Darken, mask, glow)
-    })
+        }
+    });
+    let bc = (0.0 - (k - 0.5)) * 2.0;
+    let glow = super::photo::glow_graph(&mut g, src, 6.0, bc, bc);
+    let out = g.blend(D2D1_BLEND_MODE_DARKEN, mask, glow);
+    g.finish(&out, Alpha::Premultiplied)
 }
 
 /// §2.2 Oil Painting step 1: clamp(trunc(256·g), 4, 256).
@@ -223,19 +198,20 @@ fn oil_painting(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface
     out
 }
 
-/// §2.2 Pencil Sketch on sRGB premultiplied colour, ρ = range/100:
-/// ColorDodge(Gray(src), Gray(Invert(F11(Gaussian(src, tip·1.5/3), ρ + 0.01, −(ρ + 0.01))))).
+/// Genuine `PdnPencilSketchEffect` (`PencilSketchGpuEffect`, WorkingSpace = sRGB, premultiplied), its
+/// graph on d2d: `Grayscale(src)` ColorDodged by `GaussianBlur{σ = tip·1.5/3, Quality, Hard} →
+/// PdnBrightnessContrast(range + 0.01, −(range + 0.01)) → Invert → Grayscale`.
 fn pencil_sketch(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // approximation: Direct2D chain (B-E15)
-    let tip = num(v, "tip").clamp(1.0, 20.0);
-    let rho = num(v, "range").clamp(-20.0, 20.0) / 100.0;
-    let b = (100.0 * (rho + 0.01)) as f32;
-    let blurred = gaussian(src, tip * 1.5 / 3.0, Edge::Mirror);
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let [r, g, bl, a] = unpremultiply(brightness_contrast(blurred.at(x, y), b, -b));
-        let inv = premultiply([1.0 - r, 1.0 - g, 1.0 - bl, a]);
-        blend_w3c(W3cBlend::ColorDodge, gray(src.at(x, y)), gray(inv))
-    })
+    let tip = (num(v, "tip") as f32).clamp(1.0, 20.0);
+    let n = ((num(v, "range") / 100.0) as f32).clamp(-0.2, 0.2) + 0.01;
+    let (mut g, src) = Graph::new(src, Alpha::Premultiplied);
+    let base = g.fx(CLSID_D2D1Grayscale, &[], [src.clone()]);
+    let top = g.gaussian_blur(src, tip * 1.5 / 3.0, QUALITY, BORDER_HARD);
+    let top = g.brightness_contrast(&top, n, -n);
+    let top = g.fx(CLSID_D2D1Invert, &[], [top]);
+    let top = g.fx(CLSID_D2D1Grayscale, &[], [top]);
+    let out = g.blend(D2D1_BLEND_MODE_COLOR_DODGE, base, top);
+    g.finish(&out, Alpha::Premultiplied)
 }
 
 #[cfg(test)]
@@ -243,6 +219,7 @@ mod tests {
     use super::*;
     use crate::canvas::ImageData;
     use crate::effect::sample::circle_offsets;
+    use crate::effect::surface::Edge;
     use crate::effect::test_util::{from_fn, px, run, solid};
     use serde_json::json;
 
@@ -322,7 +299,8 @@ mod tests {
         );
     }
 
-    /// Pencil Sketch on flat grey (range 0 → B 1, C −1): 128 → 253, 64 → 249, black → 0 (±1, B-E15).
+    /// Genuine pencil graph on flat grey (range 0 → Brightness 0.01, Contrast −0.01; num_b 1,
+    /// num_c −1), in the float graph: 128 → 253, 64 → 249 (8bpc nodes gave 247), black → 0.
     #[test]
     fn pencil_sketch_flat() {
         for (k, want) in [(128u8, 253u8), (64, 249), (0, 0)] {
@@ -363,11 +341,12 @@ mod tests {
         );
     }
 
-    /// Step 1 details:
-    /// - Mirror (F2): on grey 15 with column 1 black, the x = 0 taps at dx −2 and +1 both read the
-    ///   black column → 2v + 10v = 0.71 → white mask (Clamp or Wrap: 7v = 0.41 → black → 0);
-    /// - PreserveAlpha: on grey 50 with the pixel 2 rows below at α 128, unpremultiplied RGB is flat
-    ///   → 2v = 0.39 → black; convolving premultiplied colour would give 2v + 5v(1 − ½) = 0.88.
+    /// ConvolveMatrix details (genuine graph: BorderMode.Hard = clamp, PreserveAlpha):
+    /// - Hard (clamp), NOT Mirror: on grey 15 with column 1 black, the x = 0 taps at dx −2/−1 clamp
+    ///   to the grey edge column, so only the dx +1 black column subtracts → Σ = 7·0.0588 = 0.41 <
+    ///   ½ → black mask → 0. Mirror would also read the black column at dx −2 (Σ = 0.71 > ½ → white).
+    /// - PreserveAlpha: on grey 50 with the pixel 2 rows below at α 128, the taps are unpremultiplied
+    ///   → RGB is flat (Σ = 2·0.196 = 0.39 < ½) → black; convolving premultiplied colour would not.
     #[test]
     fn ink_sketch_edges_and_preserve_alpha() {
         let col = from_fn(9, 9, |x, _| {
@@ -377,7 +356,10 @@ mod tests {
                 [15, 15, 15, 255]
             }
         });
-        assert!(px(&run("inkSketchEffect", json!({}), &col), 0, 4)[0] > 10);
+        assert_eq!(
+            px(&run("inkSketchEffect", json!({}), &col), 0, 4),
+            [0, 0, 0, 255]
+        );
         let img = grey_with(9, 9, 50, (4, 6), [50, 50, 50, 128]);
         assert_eq!(
             px(&run("inkSketchEffect", json!({}), &img), 4, 4),
@@ -494,9 +476,10 @@ mod tests {
         );
     }
 
-    /// Pencil blur σ = tip·1.5/3 (tip 2 → σ 1) on grey 128 with a white column at x = 10:
-    /// x = 8 → 237.62, x = 9 → 204.93 (σ = tip/3: 248, 207). Range ±20 on flat 128: ρ = 0.2 →
-    /// B 21, C −21 → 219.21; ρ = −0.2 → dodge clips → 255 (a flipped C gives 211 for ρ = 0.2).
+    /// Genuine graph: σ = StandardDeviation.FromRadius(tip·1.5) = tip·1.5/3 (tip 2 → σ 1),
+    /// GaussianBlur with Optimization.Quality + BorderMode.Hard. On grey 128 with a white column at
+    /// x = 10: x = 8 → 240, x = 9 → 204. Range ±20 on flat 128: ρ = 0.2 → Brightness 0.21 /
+    /// Contrast −0.21 (num_b 21, num_c −21) → 219; ρ = −0.2 → ColorDodge clips → 255.
     #[test]
     fn pencil_sketch_blur_and_range() {
         let img = from_fn(21, 3, |x, _| {
@@ -508,12 +491,12 @@ mod tests {
         });
         let out = run("pencilSketchEffect", json!({}), &img);
         assert!(
-            near(px(&out, 8, 1), [238, 238, 238, 255]),
+            near(px(&out, 8, 1), [240, 240, 240, 255]),
             "{:?}",
             px(&out, 8, 1)
         );
         assert!(
-            near(px(&out, 9, 1), [205, 205, 205, 255]),
+            near(px(&out, 9, 1), [204, 204, 204, 255]),
             "{:?}",
             px(&out, 9, 1)
         );
@@ -598,28 +581,31 @@ mod tests {
     // ---- Fix round 1: vectors from an independent 2-D Python port of §2.2 (f32, W3C blends). ----
 
     /// Pencil on translucent, non-flat input: grey 128 at α 128 with an opaque white column at
-    /// x = 10. Invert runs on straight colour → (156, 156, 156, 196) at x = 8 and (130, 130, 130,
-    /// 207) at x = 9; inverting the premultiplied colour gives 243 and 217.
+    /// x = 10. The D2D Invert unpremultiplies before inverting (then re-premultiplies), so straight
+    /// colour is inverted → (159, 159, 159, 195) at x = 8 and (131, 131, 131, 207) at x = 9;
+    /// inverting the premultiplied colour directly would blow the unpremultiplied output out of range.
     #[test]
     fn pencil_sketch_translucent() {
         let img = from_fn(21, 3, |x, _| if x == 10 { [255; 4] } else { [128; 4] });
         let out = run("pencilSketchEffect", json!({}), &img);
         assert!(
-            near(px(&out, 8, 1), [156, 156, 156, 196]),
+            near(px(&out, 8, 1), [159, 159, 159, 195]),
             "{:?}",
             px(&out, 8, 1)
         );
         assert!(
-            near(px(&out, 9, 1), [130, 130, 130, 207]),
+            near(px(&out, 9, 1), [131, 131, 131, 207]),
             "{:?}",
             px(&out, 9, 1)
         );
     }
 
     /// Ink glow beside a translucent edge: opaque black for x < 10, white at α 64 from x = 10. The
-    /// mask is white 3+ px from the edge, so the output is Darken(mask, Screen(src, blur)) with the
-    /// blur of premultiplied colour → (229, 229, 229, 157) at x = 13, (243, 243, 243, 152) at
-    /// x = 14; blurring straight colour gives 247 and 252.
+    /// mask is white 3+ px from the edge, so the output is Darken(mask, Screen(src, blur)) where the
+    /// glow's GaussianBlur runs on the PREMULTIPLIED source → (226, 226, 226, 158) at x = 13 and
+    /// (244, 244, 244, 151) at x = 14, genuine Paint.NET 5.1.12's InkSketchGpuEffect captured on the
+    /// VM (pdngpu --builtin); blurring straight colour gives 247 and 252. Native blurs on its halving
+    /// graph at Float32 too (opend2d 09f57bb); the full-resolution float blur gave 231, 156.
     #[test]
     fn ink_sketch_glow_by_a_translucent_edge() {
         let img = from_fn(31, 5, |x, _| {
@@ -631,12 +617,12 @@ mod tests {
         });
         let out = run("inkSketchEffect", json!({}), &img);
         assert!(
-            near(px(&out, 13, 2), [229, 229, 229, 157]),
+            near(px(&out, 13, 2), [226, 226, 226, 158]),
             "{:?}",
             px(&out, 13, 2)
         );
         assert!(
-            near(px(&out, 14, 2), [243, 243, 243, 152]),
+            near(px(&out, 14, 2), [244, 244, 244, 151]),
             "{:?}",
             px(&out, 14, 2)
         );

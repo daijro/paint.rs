@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Core</AssemblyName>
+    <RootNamespace>PaintDotNet</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Windows/Windows.csproj" />
+    <!-- IndirectUI describes controls per Property. -->
+    <ProjectReference Include="../PropertySystem/PropertySystem.csproj" />
+    <!-- IClipboardService extends Base's IClipboard. -->
+    <ProjectReference Include="../Base/Base.csproj" />
+    <!-- PdnBaseForm and HeaderLabel, which classic plugins' settings dialogs build on. -->
+    <ProjectReference Include="../WindowsForms/WindowsForms.csproj" />
+    <!-- RenderArgs exposes a GDI+ Graphics/Bitmap aliasing the surface for classic effects that
+         draw (Polygon, ComplementaryColors, …). -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PaintDotNet.Effects.Core" />
+    <InternalsVisibleTo Include="PaintDotNet.Data" />
+    <InternalsVisibleTo Include="PdnBridge" />
+    <InternalsVisibleTo Include="PaintNetWeb" />
+  </ItemGroup>
+</Project>

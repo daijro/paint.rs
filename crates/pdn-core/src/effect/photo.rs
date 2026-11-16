@@ -3,11 +3,12 @@
 //! redEyeRemoveEffect, sharpenEffect, softenPortraitEffect, straightenEffect and vignetteEffect:
 //! ids, icons and control keys only).
 
-use super::artistic::brightness_contrast;
-use super::blur::gaussian;
 use super::distort::{anchor, catmull_rom, filter4, offset};
-use super::mix::{W3cBlend, blend_w3c};
-use super::surface::{Alpha, Edge, EffectSurface, Space, luma, premultiply, unpremultiply};
+use super::graph::{
+    BORDER_HARD, CLSID_D2D1ColorMatrix, CLSID_D2D1Grayscale, CLSID_D2D1Sharpen,
+    D2D1_BLEND_MODE_OVERLAY, D2D1_BLEND_MODE_SCREEN, Graph, Input, Prop, QUALITY, one_node,
+};
+use super::surface::{Alpha, Edge, EffectSurface, Space};
 use super::{
     Category, Control, EffectDef, EffectEnv, EffectKind, RenderInfo, Values, choice, num, range,
     underwrite,
@@ -121,25 +122,29 @@ pub fn effects() -> Vec<EffectDef> {
     ]
 }
 
-fn premultiplied(src: &EffectSurface) -> EffectSurface {
-    EffectSurface {
-        px: src.px.iter().copied().map(premultiply).collect(),
-        ..*src
-    }
+/// Genuine `GlowGpuEffect` (`WorkingSpace` = sRGB, straight in/out): Paint.NET's `PdnGlowEffect`
+/// graph, [`glow_graph`].
+fn glow(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
+    let radius = (num(v, "radius") as f32).clamp(1.0, 20.0);
+    // GlowGpuEffect's int brightness/contrast (−100..100) → PdnBrightnessContrast's −1..1.
+    let [b, c] = ["brightness", "contrast"].map(|k| (num(v, k) as f32 / 100.0).clamp(-1.0, 1.0));
+    let (mut g, src) = Graph::new(src, Alpha::Straight);
+    let out = glow_graph(&mut g, src, radius, b, c);
+    g.finish(&out, Alpha::Straight)
 }
 
-/// §2.2 on sRGB straight colour: P = premultiply(src); out = unpremultiply(Screen(P,
-/// F11(Gaussian(P, 1.25·radius/3, Hard)))).
-fn glow(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // approximation: D2D GaussianBlur "Quality" (effects-2.md §6 item 7; B-E14)
-    let radius = num(v, "radius").clamp(1.0, 20.0);
-    let [b, c] = ["brightness", "contrast"].map(|k| num(v, k).clamp(-100.0, 100.0) as f32);
-    let pre = premultiplied(src);
-    let blurred = gaussian(&pre, 1.25 * radius / 3.0, Edge::Mirror);
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let glow = brightness_contrast(blurred.at(x, y), b, c);
-        unpremultiply(blend_w3c(W3cBlend::Screen, pre.at(x, y), glow))
-    })
+/// `PdnGlowEffect` on the premultiplied `src` node: GaussianBlur{σ = glow·1.25/3, Quality, Hard} →
+/// PdnBrightnessContrast → Screen over `src`.
+pub(super) fn glow_graph(
+    g: &mut Graph,
+    src: Input,
+    glow: f32,
+    brightness: f32,
+    contrast: f32,
+) -> Input {
+    let blur = g.gaussian_blur(src.clone(), glow * 1.25 / 3.0, QUALITY, BORDER_HARD);
+    let lit = g.brightness_contrast(&blur, brightness, contrast);
+    g.blend(D2D1_BLEND_MODE_SCREEN, src, lit)
 }
 
 /// §2.3 on the 8-bit layer: copy, `strength` passes over the island bounds, then the effect's own
@@ -222,45 +227,39 @@ pub fn red_eye_islands(mask: &Mask) -> Vec<IntRect> {
     islands
 }
 
-/// §2.4 on sRGB premultiplied colour, per channel: out = in + k·(in − box₃ₓ₃(in)) where
-/// |in − box| > threshold, k = amount/2, Mirror (Hard) edges.
+/// Genuine `SharpenGpuEffect` (`WorkingSpace`): d2d's Sharpen (Sharpness = amount, Threshold) on the
+/// premultiplied sRGB layer.
 fn sharpen(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // approximation: D2D Sharpen (effects-2.md §6 item 4; B-E10)
-    let k = (num(v, "amount").clamp(0.0, 10.0) / 2.0) as f32;
-    if k == 0.0 {
-        return src.clone();
-    }
-    let threshold = num(v, "threshold").clamp(0.0, 1.0) as f32;
-    let mean = src.convolve_hv(&[1.0 / 3.0; 3], Edge::Mirror);
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let (c, m) = (src.at(x, y), mean.at(x, y));
-        std::array::from_fn(|i| {
-            let d = c[i] - m[i];
-            if d.abs() > threshold {
-                c[i] + k * d
-            } else {
-                c[i]
-            }
-        })
-    })
+    let [k, t] = [("amount", 10.0), ("threshold", 1.0)]
+        .map(|(key, hi)| Prop::F32(num(v, key).clamp(0.0, hi) as f32));
+    one_node(src, CLSID_D2D1Sharpen, &[(0, k), (1, t)])
 }
 
-/// §2.5 on sRGB straight colour, l = lighting, w = warmth/100: Overlay(A, B) with backdrop
-/// A = premultiply(Y·(1 + w, 1, 1 − w)) unclamped and source B = F11(Gaussian(P, 1.25·softness,
-/// Hard), B = l, C = −l/2).
+/// Genuine `SoftenPortraitGpuEffect` (`WorkingSpace` = sRGB, straight in/out), Paint.NET's
+/// `PdnSoftenPortraitEffect` graph: the warm grey `Grayscale → ×(1 + w, 1, 1 − w)` is the backdrop of
+/// an Overlay whose source is `GaussianBlur{Quality, Hard} → PdnBrightnessContrast(lighting,
+/// −lighting/2)`.
 fn soften_portrait(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // approximation: D2D GaussianBlur "Quality" (effects-2.md §6 item 7; B-E14)
-    let softness = num(v, "softness").clamp(0.0, 10.0);
-    let l = num(v, "lighting").clamp(-20.0, 20.0) as f32;
-    let w = (num(v, "warmth").clamp(0.0, 20.0) / 100.0) as f32;
-    let blurred = gaussian(&premultiplied(src), 1.25 * softness, Edge::Mirror);
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let [r, g, b, a] = src.at(x, y);
-        let grey = luma(r, g, b);
-        let tinted = premultiply([grey * (1.0 + w), grey, grey * (1.0 - w), a]);
-        let lit = brightness_contrast(blurred.at(x, y), l, -l / 2.0);
-        unpremultiply(blend_w3c(W3cBlend::Overlay, tinted, lit))
-    })
+    let softness = num(v, "softness").clamp(0.0, 10.0) as f32;
+    let lighting = ((num(v, "lighting") / 100.0) as f32).clamp(-0.2, 0.2);
+    let w = ((num(v, "warmth") / 100.0) as f32).clamp(0.0, 0.2);
+    let (mut g, src) = Graph::new(src, Alpha::Straight);
+    let mut grey = g.fx(CLSID_D2D1Grayscale, &[], [src.clone()]);
+    if w != 0.0 {
+        // The HLSL multiply on the straight grey: a ColorMatrix in premultiplied mode (1).
+        #[rustfmt::skip]
+        let m = [1.0 + w,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0 - w,0.0, 0.0,0.0,0.0,1.0, 0.0,0.0,0.0,0.0];
+        grey = g.fx(
+            CLSID_D2D1ColorMatrix,
+            &[(0, Prop::M54(m)), (1, Prop::U32(1))],
+            [grey],
+        );
+    }
+    // σ = StandardDeviation.FromRadius(softness·3·1.25).
+    let blur = g.gaussian_blur(src, softness * 3.0 * 1.25 / 3.0, QUALITY, BORDER_HARD);
+    let lit = g.brightness_contrast(&blur, lighting, -lighting / 2.0);
+    let out = g.blend(D2D1_BLEND_MODE_OVERLAY, grey, lit);
+    g.finish(&out, Alpha::Straight)
 }
 
 /// §2.6: the cover scale cos|θ| + max(W/H, H/W)·sin|θ| for θ = clamp(−angle, −45°, 45°).
@@ -427,7 +426,10 @@ mod tests {
     // ---- Vectors from an independent f64 Python port of §2.2–2.7 (the brief's approximations for
     // the delegated effects). Each names the plausible bug it rules out. ----
 
-    /// Glow blur σ = 1.25·radius/3 with Mirror (Hard) edges, and translucent input:
+    /// Glow blur σ = 1.25·radius/3 with Mirror (Hard) edges, and translucent input. Every value below
+    /// is also genuine Paint.NET 5.1.12's GlowGpuEffect, captured on the VM (pdngpu --builtin); the band
+    /// row is genuine's, not the f64 model's: native blurs σ 2.5 on its halving graph, at Float32 too
+    /// (opend2d 09f57bb), which puts x = 3 at 123, not 122.
     /// - grey 64 with a white column at x = 7: x = 3 → 122.17, x = 6 → 138.14 (σ = radius/3:
     ///   119.53, 142.53; σ = 1.25·radius: 125.56, 125.71);
     /// - grey 32 with a white column at x = 1: x = 0 → 116.98 (Clamp 91.99, Transparent 53.55);
@@ -444,14 +446,14 @@ mod tests {
         let out = run("glowEffect", json!({}), &band);
         assert_eq!(
             [3, 4, 5, 6].map(|x| px(&out, x, 1)[0]),
-            [122, 127, 133, 138]
+            [123, 127, 133, 138]
         );
         let edge = from_fn(
             9,
             3,
             |x, _| if x == 1 { [255; 4] } else { [32, 32, 32, 255] },
         );
-        assert_eq!(px(&run("glowEffect", json!({}), &edge), 0, 1)[0], 117);
+        assert_eq!(px(&run("glowEffect", json!({}), &edge), 0, 1)[0], 118);
         assert_eq!(
             px(&run("glowEffect", json!({}), &solid(9, 9, [128; 4])), 4, 4),
             [155, 155, 155, 192]
@@ -482,15 +484,15 @@ mod tests {
         );
     }
 
-    /// Soften Portrait: Overlay(A = grey·(1 + w, 1, 1 − w), B = F11(blur, B = l, C = −l/2)):
-    /// - lighting ±20 on flat 128 → (159.12, 148.37, 133.68) and (121.39, 106.42, 95.62);
-    /// - warmth 20 on flat 128 → (154.00, 128.50 − ε, 102.80);
-    /// - pure red: A = 0.299·(1.1, 1, 0.9) ≤ ½ → 2·A·B = 167.74 for red (Overlay with backdrop
-    ///   and source swapped gives 255);
-    /// - flat 230, warmth 20: A's red 1.08 stays unclamped → 259.1 → 255, green 250.10;
-    /// - (100, 100, 100, 128) → (98.73, 92.77, 86.82, 191.75);
-    /// - blur σ = 1.25·softness: grey 100 with a white column at x = 7, softness 2, x = 6 →
-    ///   (105.76, 96.14, 86.53) (σ = 1.25·softness/3: 118.52; σ = softness: 109.46).
+    /// Soften Portrait, byte-exact vs the genuine `PdnSoftenPortraitEffect` graph (verified in f32
+    /// on the opend2d executor — see `soften_portrait`): Overlay(tint = Premultiply(grey·(1+w,1,1−w)),
+    /// lit = brightnessContrast(GaussianBlur)). Defaults: softness 5, lighting 0, warmth 10.
+    /// - lighting ±20 on flat 128 → (159, 148, 134) and (121, 106, 96);
+    /// - warmth 20 on flat 230 → (255, 250, 241); pure red default → (167, 0, 0) (tint red backdrop
+    ///   ≤ ½ → Overlay doubles the lit layer, not 255);
+    /// - the translucent flat (230,230,230,128) with warmth 20 keeps the tint red unclamped → 254;
+    /// - (100, 100, 100, 128) default → (99, 93, 87, 192) (float graph; 8bpc nodes gave 98, 92, 86);
+    /// - σ = ((softness·3)·1.25)/3: grey 100 with a white column at x = 7, softness 2, x = 6 → (106, 96, 87).
     #[test]
     fn soften_portrait_lighting_warmth_and_blur() {
         assert_eq!(
@@ -517,7 +519,7 @@ mod tests {
             &solid(9, 9, [100, 100, 100, 128]),
         );
         assert_eq!(px(&translucent, 4, 4), [99, 93, 87, 192]);
-        // Branch A stays unclamped: (230, 230, 230, 128), warmth 20 → red 255 (A's red clamped to
+        // Branch A stays unclamped: (230, 230, 230, 128), warmth 20 → red 254 (A's red clamped to
         // 1 gives 247).
         let warm = run(
             "softenPortraitEffect",
@@ -536,42 +538,38 @@ mod tests {
         assert_eq!(px(&out, 6, 1), [106, 96, 87, 255]);
     }
 
-    /// Sharpen (B-E10 approximation) on sRGB premultiplied colour, k = amount/2, 3×3 box, Mirror:
-    /// - grey 100 with a 160 column at x = 2: box 120 → 200 at x = 2, 80 beside it, x = 0 untouched;
-    /// - amount 3 (k 1.5) → 220 and 70; threshold 0.1 keeps x = 1 (|Δ| = 20/255) and sharpens x = 2;
-    /// - the column at x = 0: Mirror's box (160, 160, 100) → 180 (Wrap 200, Transparent 233);
-    /// - a (200, 200, 200, 128) column: x = 1 sharpens premultiplied colour and alpha → 85.65 at α
-    ///   1.17 (straight colour would give 67).
+    /// d2d's Sharpen (native-verified, fx-filters-08/16): an unsharp mask on luminance against the
+    /// separable 5-tap Gaussian (centre 0.6021547), Δ·Sharpness added to every straight channel, α
+    /// kept. Grey 100 with a 160 column: blur 136.1 → 208 at amount 2, 232 at 3; threshold 0.1 scales
+    /// Δ by |Δ|/0.1; a colour column shifts all channels alike; a half-alpha column keeps α 128.
     #[test]
     fn sharpen_vectors() {
-        let col = |c: [u8; 4], k: u32| {
+        let col = |c: [u8; 4]| {
             from_fn(
+                9,
                 5,
-                3,
-                move |x, _| if x == k { c } else { [100, 100, 100, 255] },
+                move |x, _| if x == 4 { c } else { [100, 100, 100, 255] },
             )
         };
-        let row = |v: serde_json::Value, img| {
-            let out = run("sharpenEffect", v, &img);
-            [0, 1, 2, 3].map(|x| px(&out, x, 1)[0])
+        let row = |v: serde_json::Value, img: &ImageData| {
+            let out = run("sharpenEffect", v, img);
+            [2, 3, 4].map(|x| px(&out, x, 2))
         };
+        let grey = |v: [u8; 3]| v.map(|c| [c, c, c, 255]);
+        let g = col([160, 160, 160, 255]);
+        assert_eq!(row(json!({}), &g), grey([99, 77, 208]));
+        assert_eq!(row(json!({"amount": 3}), &g), grey([99, 65, 232]));
+        assert_eq!(row(json!({"threshold": 0.1}), &g), grey([100, 90, 205]));
+        assert_eq!(run("sharpenEffect", json!({"amount": 0}), &g).data, g.data);
+        let flat = solid(9, 5, [100, 100, 100, 255]);
+        assert_eq!(run("sharpenEffect", json!({}), &flat).data, flat.data);
         assert_eq!(
-            row(json!({}), col([160, 160, 160, 255], 2)),
-            [100, 80, 200, 80]
+            row(json!({}), &col([200, 60, 20, 255]))[2],
+            [198, 58, 18, 255]
         );
         assert_eq!(
-            row(json!({"amount": 3}), col([160, 160, 160, 255], 2)),
-            [100, 70, 220, 70]
-        );
-        assert_eq!(
-            row(json!({"threshold": 0.1}), col([160, 160, 160, 255], 2)),
-            [100, 100, 200, 100]
-        );
-        assert_eq!(row(json!({}), col([160, 160, 160, 255], 0))[..2], [180, 80]);
-        let out = run("sharpenEffect", json!({}), &col([200, 200, 200, 128], 2));
-        assert_eq!(
-            [px(&out, 1, 1), px(&out, 2, 1)],
-            [[86, 86, 86, 255], [255, 255, 255, 43]]
+            row(json!({}), &col([200, 200, 200, 128]))[1..],
+            [[62, 62, 62, 255], [255, 255, 255, 128]]
         );
     }
 

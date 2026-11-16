@@ -6,7 +6,7 @@ use super::{
     Dialog, DialogCx, DialogResult, DialogState,
     effect_config::button_clicked,
     flows,
-    save_image::{self, FORMATS, SaveImageDialog, find_format},
+    save_image::{self, SaveImageDialog, find_format},
     task::{TaskChoice, TaskDialog, TaskDialogHandle, TaskDialogSpec},
 };
 use crate::{
@@ -46,7 +46,7 @@ pub fn export_name(pattern: &str, number: usize, count: usize, format: &str) -> 
 /// type's), else after it.
 fn with_extension(name: &str, format: &str) -> String {
     let image = |e: &str| {
-        let known = FORMATS.iter().flat_map(|f| f.extensions);
+        let known = save_image::formats().flat_map(|f| f.extensions);
         known.into_iter().any(|x| x[1..].eq_ignore_ascii_case(e))
     };
     let stem = name.rsplit_once('.').filter(|(_, e)| image(e));
@@ -102,9 +102,7 @@ impl BatchExportDialog {
             .iter()
             .map(|ws| {
                 let own = ws.file_format.as_deref().and_then(|f| {
-                    FORMATS
-                        .iter()
-                        .find(|i| i.id == f && !matches!(f, "heic" | "jxr"))
+                    save_image::formats().find(|i| i.id == f && !matches!(f, "heic" | "jxr"))
                 });
                 let format = own.map_or("png", |f| f.id);
                 let initial = own.map_or(serde_json::Value::Null, |_| ws.save_options.clone());
@@ -162,7 +160,7 @@ impl BatchExportDialog {
             item.save.options[format] = options.clone();
             item.name = name
                 .clone()
-                .unwrap_or_else(|| with_extension(&item.name, FORMATS[format].id));
+                .unwrap_or_else(|| with_extension(&item.name, item.save.formats[format].id));
         }
     }
 
@@ -170,7 +168,9 @@ impl BatchExportDialog {
         let n = self.items.len();
         let names = self.items.iter().enumerate();
         names
-            .map(|(i, item)| export_name(&item.name, i + 1, n, FORMATS[item.save.format].id))
+            .map(|(i, item)| {
+                export_name(&item.name, i + 1, n, item.save.formats[item.save.format].id)
+            })
             .collect()
     }
 
@@ -308,7 +308,9 @@ impl BatchExportDialog {
             match result {
                 Ok(FileSaveOutcome::Written(_) | FileSaveOutcome::DownloadStarted) => {}
                 Ok(FileSaveOutcome::Cancelled) => export.failures.push(format!("{name}: Canceled")),
-                Err(e) => export.failures.push(format!("{name}: {e}")),
+                Err(e) => export
+                    .failures
+                    .push(format!("{name}: {}", flows::readable(e))),
             }
             export.writing = None;
         }
@@ -341,7 +343,8 @@ impl BatchExportDialog {
         export.next += 1;
         let format = item.save.format;
         let options = &item.save.options[format];
-        match flows::encode_document(app, item.save.document, FORMATS[format].id, options) {
+        let id = item.save.formats[format].id;
+        match flows::encode_document(app, item.save.document, id, options) {
             Ok(bytes) => {
                 let target = FileTarget {
                     name: name.clone(),
@@ -562,7 +565,7 @@ impl Dialog for BatchExportDialog {
             let format = item.save.format;
             let bottom = item.save.body(ui, rest, field.max.y + 10.0 - label_y);
             if item.save.format != format {
-                item.name = with_extension(&item.name, FORMATS[item.save.format].id);
+                item.name = with_extension(&item.name, item.save.formats[item.save.format].id);
             }
             let label = "Apply to All";
             let w = dialog_button_width(ui.painter(), label, 105.0);

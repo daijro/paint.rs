@@ -1,6 +1,6 @@
 //! BB spec: effects/blurs-gaussian-blur-plus.md; effects/selection-blur-selection-edge.md; common.md §1–5
 use super::blocks::{blur_soft, straight_over};
-use super::classic::gaussian_blur;
+use super::classic::gaussian_blur_legacy;
 use super::conventions::{BLUR_SELECTION_EDGE_PRESERVE_OUTSIDE_BAND, GPU_CONTEXT};
 use super::manifest::manifest;
 use super::raster::{self, Cap, Join, Pen};
@@ -96,8 +96,10 @@ pub fn effects() -> Vec<EffectDef> {
     ]
 }
 
-fn gaussian_plus(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
-    let mut out = gaussian_blur(src, num(v, "radius") as u32);
+fn gaussian_plus(src: &ImageData, v: &Values, env: &EffectEnv) -> ImageData {
+    // Genuine GaussianBlurPlus runs the LEGACY GaussianBlurEffect (Effects.Legacy.dll), so the port
+    // must too — the modern gaussian_blur differs. ROI-driven for the tile-left truncation.
+    let mut out = gaussian_blur_legacy(src, num(v, "radius") as u32, env.rois);
     let channels = ["red", "green", "blue", "alpha"].map(|k| flag(v, k));
     let most = flag(v, "mostOpaque");
     let mode = BlendMode::from_value(choice(v, "blend"));

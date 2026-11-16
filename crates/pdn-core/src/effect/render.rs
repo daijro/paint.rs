@@ -6,6 +6,7 @@
 //! `feTurbulence` reference code (`init`, `noise2`, `turbulence` with stitching).
 
 use super::blur::madd;
+use super::distort::warp_atan2;
 use super::mix::{CHOICES, MixMode, mix_at};
 use super::perlin::noise;
 use super::sample::rgss_offsets;
@@ -19,7 +20,6 @@ use std::f64::consts::PI;
 
 const SRGB: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Straight);
 const SRGB_PM: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Premultiplied);
-const LINEAR_PM: RenderInfo = RenderInfo::new(Space::Linear, Alpha::Premultiplied);
 
 fn render(
     id: &'static str,
@@ -83,7 +83,7 @@ pub fn effects() -> Vec<EffectDef> {
                 quality(),
                 blend("overwrite"),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             julia,
         ),
         render(
@@ -101,7 +101,7 @@ pub fn effects() -> Vec<EffectDef> {
                 },
                 blend("overwrite"),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             mandelbrot,
         ),
         render(
@@ -176,27 +176,31 @@ fn clouds(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
     })
 }
 
-/// §2.9 steps 1–2 and 7 for both fractals: per RGSS sample, uv = (2p − (W, H))/H turned by the
-/// angle in polar form; `colour(uv′)` is straight, premultiplied, summed in order, × f32(1/n).
+/// §2.9 steps 1–2 and 7 shared by both fractals, in f32 exactly as the genuine DXBC: per RGSS
+/// sample scenePos = (x+½, y+½) + offset, uv = (2·scenePos − size)·invH, radius = |uv| (WARP sqrt),
+/// the point turned by `angleTheta` in polar form via WARP atan2/sincos. `shade(uvP.x, uvP.y)` is
+/// the premultiplied straight colour (iteration + escape colouring); the N premultiplied samples
+/// are summed and divided by N (the WARP resolve pass: WeightedAverage / composite-then-divide).
 fn fractal(
     src: &EffectSurface,
     v: &Values,
-    colour: impl Fn([f64; 2]) -> [f64; 4] + Sync,
+    shade: impl Fn(f32, f32) -> [f32; 4] + Sync,
 ) -> EffectSurface {
     let offsets = rgss_offsets(num(v, "quality").clamp(1.0, 8.0) as u32);
-    let turn = num(v, "angle").clamp(-180.0, 180.0) * PI / 180.0;
-    let (w, h) = (src.w as f64, src.h as f64);
-    let inv = 1.0 / offsets.len() as f32;
+    let n = offsets.len() as f32;
+    let (w, h) = (src.w as f32, src.h as f32);
+    let inv_h = 1.0 / h;
+    let angle_theta = (num(v, "angle").clamp(-180.0, 180.0) * PI / 180.0) as f32;
     EffectSurface::from_fn(src.w, src.h, |x, y| {
         let mut sum = [0.0f32; 4];
         for o in &offsets {
-            let p = [x as f64 + 0.5 + o[0] as f64, y as f64 + 0.5 + o[1] as f64];
-            let uv = [(2.0 * p[0] - w) / h, (2.0 * p[1] - h) / h];
-            let (r, th) = (uv[0].hypot(uv[1]), uv[1].atan2(uv[0]) + turn);
-            let c = colour([r * th.cos(), r * th.sin()]).map(|c| c.clamp(0.0, 1.0) as f32);
-            madd(&mut sum, 1.0, premultiply(c));
+            let (spx, spy) = (x as f32 + 0.5 + o[0], y as f32 + 0.5 + o[1]);
+            let (ux, uy) = ((2.0 * spx - w) * inv_h, (2.0 * spy - h) * inv_h);
+            let radius = warpmath::sqrt(ux * ux + uy * uy);
+            let (s, c) = warpmath::sincos(warp_atan2(uy, ux) + angle_theta);
+            madd(&mut sum, 1.0, shade(radius * c, radius * s));
         }
-        sum.map(|s| s * inv)
+        sum.map(|s| s / n)
     })
 }
 
@@ -209,43 +213,62 @@ fn mix_layer(src: &EffectSurface, art: &EffectSurface, v: &Values) -> EffectSurf
     })
 }
 
-/// §2.9 steps 3–6: X = (u − v·a)/z, Y = (v + u·a)/z with a = H/W; z ← z² + 0.3125 + 0.03i while
-/// n < 256 and |z|² < 10⁴; j = n − (2 − 2·ln 10⁴/ln|z|²), v = F·j/256 → (v − 1, v − 2, v − 3, v).
+/// §2.9 steps 3–6, f32 exactly as JuliaFractalShader: z₀ = ((uvP.x − uvP.y·a)·invZoom,
+/// (uvP.y + uvP.x·a)·invZoom), a = H/W; z ← (x²−y²+0.3125, 2xy+0.03) (2xy as the Dp2 x·y+x·y) while
+/// c < 256 and x²+y² < 10⁴; j = c − (2 − 2·ln10⁴ / ln|z|²) with ln via WARP log2·ln2; colour
+/// saturate(F·j/256 − (1,2,3,0)), premultiplied.
 fn julia(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // GPU f32 escape counts may flip rare pixels: ±1 (effects-2.md §6 item 10)
-    let f = num(v, "factor").clamp(1.0, 10.0);
-    let z = num(v, "zoom").clamp(0.1, 50.0);
-    let a = src.h as f64 / src.w as f64;
-    let art = fractal(src, v, |[u, w]| {
-        let (mut x, mut y) = ((u - w * a) / z, (w + u * a) / z);
-        let mut n = 0;
-        while n < 256 && x * x + y * y < 10000.0 {
-            (x, y) = (x * x - y * y + 0.3125, 2.0 * x * y + 0.03);
-            n += 1;
+    let factor = num(v, "factor").clamp(1.0, 10.0) as f32;
+    let inv_zoom = 1.0 / num(v, "zoom").clamp(0.1, 50.0) as f32;
+    let a = src.h as f32 / src.w as f32;
+    // 2·ln(10000) and ln(2), the exact f32 constants the DXBC carries (0x41935d8e, 0x3f317218).
+    let (two_ln_max, ln2) = (f32::from_bits(0x4193_5d8e), f32::from_bits(0x3f31_7218));
+    let art = fractal(src, v, |upx, upy| {
+        let (mut x, mut y) = ((upx - upy * a) * inv_zoom, (upy + upx * a) * inv_zoom);
+        let mut c = 0i32;
+        loop {
+            let (x2, y2) = (x * x, y * y);
+            if !(c < 256 && x2 + y2 < 10000.0) {
+                break;
+            }
+            (x, y) = (x2 - y2 + 0.3125, y * x + y * x + 0.03);
+            c += 1;
         }
-        let j = n as f64 - (2.0 - 2.0 * 10000f64.ln() / (x * x + y * y).ln());
-        let s = f * j / 256.0;
-        [s - 1.0, s - 2.0, s - 3.0, s]
+        let term = 2.0 - two_ln_max / (warpmath::log2(x * x + y * y) * ln2);
+        let cc = (c as f32 - term) * factor * (1.0 / 256.0);
+        let straight = [cc - 1.0, cc - 2.0, cc - 3.0, cc].map(|s| s.clamp(0.0, 1.0));
+        let al = straight[3];
+        [straight[0] * al, straight[1] * al, straight[2] * al, al]
     });
     mix_layer(src, &art, v)
 }
 
-/// §2.10: c = uv′/M + (−0.7, −0.29), M = 1 + 20·zoom; z ← z² + c from 0 while n·F < 1024 and
-/// |z|² < 10⁵; m = n − ln|z|²/ln 10⁵, v = (64 + F·m)/256 → (v − 3, v − 2, v − 1, v); Invert takes
-/// 1 − rgb of the averaged straight colour.
+/// §2.10, f32 exactly as MandelbrotFractalShader: M = 1 + 20·zoom, invZoom = 1/M, c = uvP·invZoom +
+/// (−0.7, −0.29) (no aspect term); z ← (x²−y²+cr, 2xy+ci) (2xy as Dp2 x·y+x·y) from 0 while c·F <
+/// 1024 and x²+y² < 10⁵; m = c − log2(y²+x²)·0.060206 (= ln|z|²/ln10⁵); colour saturate((64+F·m)/256
+/// − (3,2,1,0)), premultiplied. Invert takes 1 − rgb of the averaged straight colour.
 fn mandelbrot(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // GPU f32 escape counts may flip rare pixels: ±1 (effects-2.md §6 item 10)
-    let f = num(v, "factor").clamp(1.0, 10.0);
-    let m = 1.0 + 20.0 * num(v, "zoom").clamp(0.0, 100.0);
-    let mut art = fractal(src, v, |[u, w]| {
-        let (cr, ci) = (u / m - 0.7, w / m - 0.29);
-        let (mut x, mut y, mut n) = (0.0f64, 0.0f64, 0.0f64);
-        while n * f < 1024.0 && x * x + y * y < 100000.0 {
-            (x, y) = (x * x - y * y + cr, 2.0 * x * y + ci);
-            n += 1.0;
+    let factor = num(v, "factor").clamp(1.0, 10.0) as f32;
+    let inv_zoom = 1.0 / (1.0 + 20.0 * num(v, "zoom").clamp(0.0001, f32::MAX as f64) as f32);
+    // ln(2)/ln(100000), the exact f32 constant the DXBC folds (0x3d769a91 ≈ 0.060206).
+    let inv_log_max = f32::from_bits(0x3d76_9a91);
+    let mut art = fractal(src, v, |upx, upy| {
+        let (cr, ci) = (upx * inv_zoom - 0.7, upy * inv_zoom - 0.29);
+        let (mut x, mut y) = (0.0f32, 0.0f32);
+        let mut c = 0i32;
+        loop {
+            let (x2, y2) = (x * x, y * y);
+            if !(c as f32 * factor < 1024.0 && x2 + y2 < 100000.0) {
+                break;
+            }
+            (x, y) = (x2 - y2 + cr, y * x + y * x + ci);
+            c += 1;
         }
-        let s = (64.0 + f * (n - (x * x + y * y).ln() / 100000f64.ln())) / 256.0;
-        [s - 3.0, s - 2.0, s - 1.0, s]
+        let m = c as f32 - warpmath::log2(y * y + x * x) * inv_log_max;
+        let cc = (factor * m + 64.0) * (1.0 / 256.0);
+        let straight = [cc - 3.0, cc - 2.0, cc - 1.0, cc].map(|s| s.clamp(0.0, 1.0));
+        let al = straight[3];
+        [straight[0] * al, straight[1] * al, straight[2] * al, al]
     });
     if flag(v, "invert") {
         for p in &mut art.px {
@@ -471,8 +494,8 @@ mod tests {
         for ((x, y), want) in [
             ((0, 0), [0, 0, 0, 11]),
             ((32, 32), [0, 0, 0, 159]),
-            ((27, 12), [182, 0, 0, 255]),
-            ((21, 21), [136, 0, 0, 255]),
+            ((27, 12), [120, 0, 0, 255]),
+            ((21, 21), [63, 0, 0, 255]),
         ] {
             assert!(
                 close(px(&j, x, y), want),
@@ -484,7 +507,7 @@ mod tests {
         for ((x, y), want) in [
             ((0, 0), [0, 0, 0, 143]),
             ((16, 40), [0, 0, 0, 200]),
-            ((12, 0), [0, 0, 170, 255]),
+            ((12, 0), [0, 0, 99, 255]),
             ((32, 32), [255, 255, 255, 255]),
         ] {
             assert!(
@@ -499,16 +522,16 @@ mod tests {
             &layer,
         );
         assert!(close(px(&inv, 32, 32), [0, 0, 0, 255]));
-        // q = 2 boundary pixel (α < 1, rgb > 0): Invert unpremultiplies first, then 1 − rgb.
-        // Independent f64 port of §2.10: premul average at (42, 27) (0, 0, .224, .849) →
-        // straight b .264 → 1 − b = .736 → sRGB 223 (stable under 1e−5 offset jitter; α 216.5 → 217).
+        // q = 2 boundary pixel (α < 1, rgb > 0): Invert unpremultiplies the sRGB-premul average,
+        // then 1 − rgb (byte-exact vs WARP on the shader float oracle: the fractal art is sRGB, so
+        // the invert is a straight sRGB 1 − rgb, not the former linear-light derivation).
         let inv2 = run(
             "mandelbrotFractalEffect",
             json!({"quality": 2, "invert": true}),
             &layer,
         );
         assert!(
-            close(px(&inv2, 42, 27), [255, 255, 223, 217]),
+            close(px(&inv2, 42, 27), [239, 180, 180, 217]),
             "{:?}",
             px(&inv2, 42, 27)
         );
@@ -666,15 +689,15 @@ mod tests {
             &[
                 ((27, 12), [0, 0, 0, 90]),
                 ((40, 50), [0, 0, 0, 95]),
-                ((10, 33), [105, 0, 0, 255]),
+                ((10, 33), [36, 0, 0, 255]),
             ],
             "F7 z2.5 a30",
         );
         all_close(
             &run_j(json!({"quality": 2}), 64, 64),
             &[
-                ((27, 12), [160, 61, 0, 183]),
-                ((21, 21), [29, 0, 0, 198]),
+                ((27, 12), [89, 15, 0, 183]),
+                ((21, 21), [3, 0, 0, 198]),
                 ((0, 0), [0, 0, 0, 11]),
             ],
             "q2",
@@ -690,9 +713,10 @@ mod tests {
         );
     }
 
-    /// §2.9 step 8: other modes mix the fractal over the layer in linear premultiplied light.
+    /// §2.9 step 8: other blend modes mix the fractal over the layer in sRGB premultiplied light
+    /// (the fractal art is sRGB, like Clouds — the genuine effect has no ConvertColorSpace).
     #[test]
-    fn julia_mixes_in_linear_light() {
+    fn julia_blends_onto_the_layer() {
         let layer = solid(64, 64, [200, 150, 100, 255]);
         let m = run(
             "juliaFractalEffect",
@@ -706,12 +730,12 @@ mod tests {
         );
         all_close(
             &m,
-            &[((27, 12), [142, 0, 0, 255]), ((0, 0), [196, 147, 98, 255])],
+            &[((27, 12), [94, 0, 0, 255]), ((0, 0), [191, 143, 96, 255])],
             "multiply",
         );
         all_close(
             &o,
-            &[((27, 12), [182, 0, 0, 255]), ((32, 32), [129, 95, 62, 255])],
+            &[((27, 12), [120, 0, 0, 255]), ((32, 32), [76, 57, 38, 255])],
             "over",
         );
     }
@@ -728,7 +752,7 @@ mod tests {
             ),
             &[
                 ((12, 0), [0, 0, 0, 189]),
-                ((40, 20), [0, 0, 195, 255]),
+                ((40, 20), [0, 0, 139, 255]),
                 ((5, 60), [255, 255, 255, 255]),
             ],
             "F3 z4 a−60",

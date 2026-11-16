@@ -1,0 +1,26 @@
+# Native bridge for the Paint.NET GPU host (phase 5A-5). The managed wrapper
+# surface P/Invokes this to run a plugin's precompiled ComputeSharp.D2D1 pixel
+# shader (DXBC) through crates/d2d-shader, which is WARP-exact. Standalone crate
+# (path dep, not a workspace member) so it does not touch the shared manifests.
+[package]
+name = "d2dgpu"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone (not a member of the repo workspace) so it never edits the shared
+# root manifest; path deps still resolve into crates/.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# opend2d is consumed as a library and kept unmodified: the build step (bridge/publish.sh and
+# paintnet-gpu/tests/run.py) symlinks the opend2d checkout to the gitignored `.build/opend2d`
+# anchor (fixed depth from here, so it works from a worktree or the main checkout alike). d2d-shader
+# has no runtime deps of its own, so this is the whole opend2d surface the bridge needs.
+[dependencies]
+d2d-shader = { path = "../../.build/opend2d/crates/d2d-shader" }
+
+[dev-dependencies]
+serde_json = "1.0.149"

@@ -5,12 +5,15 @@
 //! Outline's percentile sampler is Median Blur's.
 
 use super::blur::{gaussian, madd, percentile_filter};
-use super::surface::{Alpha, Edge, EffectSurface, Space, luma};
+use super::graph::{
+    BORDER_HARD, CLSID_D2D1ColorMatrix, CLSID_D2D1ConvolveMatrix, CLSID_D2D1Grayscale, Graph,
+    Input, Prop,
+};
+use super::surface::{Alpha, Edge, EffectSurface, Space, unpremultiply};
 use super::{
     Category, Control, EffectDef, EffectEnv, EffectKind, GpuFn, RenderInfo, Values, choice, flag,
     num, range,
 };
-use std::f64::consts::PI;
 
 const SRGB: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Straight);
 const SRGB_PM: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Premultiplied);
@@ -65,7 +68,11 @@ pub fn effects() -> Vec<EffectDef> {
             "embossEffect",
             "emboss_effect.png",
             vec![range("angle", "Angle", 0.0, 360.0, 0.0)],
-            SRGB,
+            RenderInfo {
+                space: Space::Srgb,
+                input: Alpha::Premultiplied,
+                output: Alpha::Straight,
+            },
             emboss,
         ),
         stylize(
@@ -91,23 +98,22 @@ pub fn effects() -> Vec<EffectDef> {
 
 type Kernel = [[f32; 3]; 3];
 
-/// Σ k[fy][fx]·src(x − 1 + fx, y − 1 + fy) over Mirror-extended taps (D2D BorderMode Hard,
-/// §2.0 item 7).
-fn correlate(src: &EffectSurface, k: &Kernel, x: u32, y: u32) -> [f32; 4] {
+/// Σ k[fy][fx]·src(x − 1 + fx, y − 1 + fy) over `edge`-extended taps.
+fn correlate(src: &EffectSurface, k: &Kernel, x: u32, y: u32, edge: Edge) -> [f32; 4] {
     let mut acc = [0.0; 4];
     for (fy, row) in k.iter().enumerate() {
         for (fx, &w) in row.iter().enumerate() {
             let (sx, sy) = (x as i32 - 1 + fx as i32, y as i32 - 1 + fy as i32);
-            madd(&mut acc, w, src.fetch(sx, sy, Edge::Mirror));
+            madd(&mut acc, w, src.fetch(sx, sy, edge));
         }
     }
     acc
 }
 
 /// The §2.13/§2.15 rows at r with δ = π/4: [cos(r+δ), cos(r+2δ), cos(r+3δ)], [cos r, centre,
-/// cos(r+4δ)], [cos(r−δ), cos(r−2δ), cos(r−3δ)].
-fn angle_kernel(r: f64, centre: f32) -> Kernel {
-    let c = |k: f64| (r + k * PI / 4.0).cos() as f32;
+/// cos(r+4δ)], [cos(r−δ), cos(r−2δ), cos(r−3δ)]. f32 via crt::cosf, matching genuine's MathF.Cos.
+fn angle_kernel(r: f32, centre: f32) -> Kernel {
+    let c = |k: f32| crt::cosf(r + k * (std::f32::consts::PI / 4.0));
     [
         [c(1.0), c(2.0), c(3.0)],
         [c(0.0), centre, c(4.0)],
@@ -131,7 +137,10 @@ fn edge_detect(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface 
     let ky = [[-1.0, -s, -1.0], [0.0; 3], [1.0, s, 1.0]];
     let overlay = flag(v, "overlay");
     EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let (gx, gy) = (correlate(&g, &kx, x, y), correlate(&g, &ky, x, y));
+        let (gx, gy) = (
+            correlate(&g, &kx, x, y, Edge::Mirror),
+            correlate(&g, &ky, x, y, Edge::Mirror),
+        );
         let p = src.at(x, y);
         let e = |c: usize| {
             (gx[c] * gx[c] + gy[c] * gy[c]).sqrt() * strength + if overlay { p[c] } else { 0.0 }
@@ -144,25 +153,46 @@ fn emboss(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
     emboss_surface(src, num(v, "angle").clamp(0.0, 360.0))
 }
 
-/// §2.13 on straight sRGB: Y of rgb/α, correlated with K[2 − fy][2 − fx] (K at r = (angle −
-/// 180)·π/180; D2D's 180° kernel rotation), + 128/255, unclamped; alpha kept. Any angle.
+/// §2.13 sRGB, genuine graph on d2d: Grayscale → ConvolveMatrix{PreserveAlpha, BorderMode.Hard} →
+/// ColorMatrix(+128/255). The kernel is MathF.Cos (f32 via crt::cosf) at num = (angle − 180)·2π/360,
+/// δ = π/4, in genuine's row-major order (d2d flips it for convolution). Premultiplied in (Bevel's
+/// relief premultiplies its height map), straight out; a transparent pixel keeps the flat level, as
+/// its colour is otherwise undefined.
 pub fn emboss_surface(src: &EffectSurface, angle_deg: f64) -> EffectSurface {
-    let k = angle_kernel((angle_deg - 180.0) * PI / 180.0, 0.0);
-    let flipped: Kernel = std::array::from_fn(|fy| std::array::from_fn(|fx| k[2 - fy][2 - fx]));
-    let grey = EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let [mut r, mut g, mut b, a] = src.at(x, y);
-        // quirk(pdn): effects-2.md §2.13 step 1 — Straight selects UnPremultiply on straight data.
-        if a > 0.0 {
-            (r, g, b) = (r / a, g / a, b / a);
-        }
-        let l = luma(r, g, b);
-        [l, l, l, a]
-    });
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let c = correlate(&grey, &flipped, x, y);
-        let o = c[0] + 128.0 / 255.0;
-        [o, o, o, src.at(x, y)[3]]
-    })
+    let num = (angle_deg as f32 - 180.0) * 2.0 * std::f32::consts::PI / 360.0;
+    let (g, n) = Graph::new(src, Alpha::Premultiplied);
+    let n = g.fx(CLSID_D2D1Grayscale, &[], [n]);
+    let n = convolve(&g, angle_kernel(num, 0.0), true, n);
+    let o = 128.0 / 255.0;
+    #[rustfmt::skip]
+    let m = [1.0,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,0.0,1.0, o,o,o,0.0];
+    // Alpha mode 1 (premultiplied): the offset applies to the straight colour.
+    let n = g.fx(
+        CLSID_D2D1ColorMatrix,
+        &[(0, Prop::M54(m)), (1, Prop::U32(1))],
+        [n],
+    );
+    let mut out = g.finish(&n, Alpha::Straight);
+    out.px
+        .iter_mut()
+        .filter(|p| p[3] == 0.0)
+        .for_each(|p| *p = [o, o, o, 0.0]);
+    out
+}
+
+/// A 3×3 ConvolveMatrix node over `input`: `k` in genuine's row-major order (d2d flips it for
+/// convolution), Hard borders; `preserve_alpha` convolves the straight colour and keeps alpha,
+/// otherwise the premultiplied RGBA.
+fn convolve(g: &Graph, k: Kernel, preserve_alpha: bool, input: Input) -> Input {
+    let k: Vec<f32> = k.iter().flatten().copied().collect();
+    let props = [
+        (2, Prop::U32(3)),
+        (3, Prop::U32(3)),
+        (4, Prop::Floats(k.into())),
+        (8, Prop::Bool(preserve_alpha)),
+        (9, Prop::U32(BORDER_HARD)),
+    ];
+    g.fx(CLSID_D2D1ConvolveMatrix, &props, [input])
 }
 
 /// §2.14: the (1 ∓ I)/2 percentiles over radius min(thickness, 50), Clamp; out = (1 − (hi − lo),
@@ -184,11 +214,25 @@ fn outline(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
     })
 }
 
-/// §2.15 on straight sRGB: all four channels correlated with the rows at r = angle·π/180, centre
-/// 1 (the stored 180° pre-rotation cancels D2D's flip), unclamped.
+/// §2.15 sRGB, genuine graph on d2d: ConvolveMatrix{PreserveAlpha=false, BorderMode.Hard} over the
+/// premultiplied RGBA. num = angle·2π/360, centre 1; genuine's matrix is [`angle_kernel`] flipped.
 fn relief(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    let k = angle_kernel(num(v, "angle").clamp(-180.0, 180.0) * PI / 180.0, 1.0);
-    EffectSurface::from_fn(src.w, src.h, |x, y| correlate(src, &k, x, y))
+    let num = num(v, "angle").clamp(-180.0, 180.0) as f32 * (std::f32::consts::PI * 2.0) / 360.0;
+    let k = angle_kernel(num, 1.0);
+    let (g, n) = Graph::new(src, Alpha::Straight);
+    let n = convolve(
+        &g,
+        std::array::from_fn(|y| std::array::from_fn(|x| k[2 - y][2 - x])),
+        false,
+        n,
+    );
+    // The convolved alpha can exceed 1; the layer stores the premultiplied result clamped to
+    // [0, 1] before its colour is unpremultiplied (so the colour is not divided by that alpha).
+    let mut out = g.finish(&n, Alpha::Premultiplied);
+    out.px
+        .iter_mut()
+        .for_each(|p| *p = unpremultiply(p.map(|c| c.clamp(0.0, 1.0))));
+    out
 }
 
 #[cfg(test)]
@@ -203,7 +247,8 @@ mod tests {
         })
     }
 
-    /// effects-2.md §5 vectors 8–9 (they settle the convolution orientation).
+    /// effects-2.md §5 vectors 8–9 (they settle the convolution orientation). Emboss is two-sided in
+    /// genuine's Float32 graph: angle 0 shades the columns to 68 (8bpc nodes clamped it to flat 128).
     #[test]
     fn emboss_and_relief_orientation() {
         assert_eq!(
@@ -259,6 +304,9 @@ mod tests {
         let at = |angle: f64, img: &crate::canvas::ImageData, x, y| {
             px(&run("embossEffect", json!({"angle": angle}), img), x, y)
         };
+        // Genuine graph (Grayscale → ConvolveMatrix{Hard, PreserveAlpha} → +128/255) in float, as
+        // genuine renders it: the shaded side keeps its negative derivative (101) where 8bpc node
+        // stores clamped it to flat 128 (the WARP pdngpu-embossgraph oracle ran at 8bpc).
         assert_eq!(at(90.0, &rows(), 1, 1), [188, 188, 188, 255]);
         assert_eq!(at(90.0, &columns(), 1, 1), [128, 128, 128, 255]);
         assert_eq!(at(30.0, &columns(), 0, 0), [101, 101, 101, 255]);
@@ -267,7 +315,8 @@ mod tests {
             let v = [115u8, 128, 140][x as usize];
             [v, v, v, 128]
         });
-        assert_eq!(at(0.0, &translucent, 1, 1), [8, 8, 8, 128]);
+        // α 128 shades like the opaque columns (68: no second division by α), alpha kept.
+        assert_eq!(at(0.0, &translucent, 1, 1), [68, 68, 68, 128]);
     }
 
     /// §2.15: angle −90 on rows and 0 on columns (68); all four channels are convolved (alpha
@@ -279,10 +328,13 @@ mod tests {
         };
         assert_eq!(at(-90.0, &rows(), 1, 1), [68, 68, 68, 255]);
         assert_eq!(at(0.0, &columns(), 1, 1), [68, 68, 68, 255]);
+        // PreserveAlpha=false convolves the premultiplied RGBA (so a varying alpha pulls colour across
+        // the kernel), the float result stored as the 8bpc layer holds it (the 8bpc WARP
+        // pdngpu-reliefgraph oracle gave 114 for 116). α=0 → transparent black.
         let alpha = from_fn(3, 3, |x, _| [200, 100, 50, [255u8, 128, 64][x as usize]]);
-        assert_eq!(at(0.0, &alpha, 1, 1), [200, 100, 50, 255]);
-        assert_eq!(at(180.0, &alpha, 1, 1), [200, 100, 50, 0]);
-        assert_eq!(at(0.0, &alpha, 0, 0), [200, 100, 50, 255]);
+        assert_eq!(at(0.0, &alpha, 1, 1), [255, 231, 116, 255]);
+        assert_eq!(at(180.0, &alpha, 1, 1), [0, 0, 0, 0]);
+        assert_eq!(at(0.0, &alpha, 0, 0), [255, 220, 110, 255]);
     }
 
     /// §2.14 at intensity 100: lo/hi are the exact min/max over the F6 disc with Clamp edges,

@@ -460,7 +460,13 @@ mod tests {
     #[test]
     fn re_exported_blocks_take_plugin_arguments() {
         let m = grey(9, 9, |x, y| ((x * 3 + y * 5) % 7) as f32 / 7.0);
-        assert_eq!(emboss_surface(&m, -45.0).px, emboss_surface(&m, 315.0).px);
+        // Equal up to the float graph's last bits (cos of −225° vs 135°).
+        let (a, b) = (emboss_surface(&m, -45.0), emboss_surface(&m, 315.0));
+        assert!(
+            a.px.iter()
+                .zip(&b.px)
+                .all(|(p, q)| (0..4).all(|k| (p[k] - q[k]).abs() < 1e-5))
+        );
         let img = crate::effect::test_util::from_fn(9, 9, |x, y| {
             let v = ((x * 3 + y * 5) % 7 * 36) as u8;
             [v, v, v, 255]
@@ -495,7 +501,11 @@ mod tests {
         assert_eq!(rgb_to_hsl(1.0, 0.0, 0.0), [0.0, 1.0, 0.5]);
         let rz: crate::effect::Values =
             serde_json::from_value(serde_json::json!({"zoom": 1.0})).unwrap();
-        assert_eq!(rotate_zoom_with(&m, &rz).px, m.px);
+        // zoom 1 maps each pixel to its own centre; the distort samples the 8bpc sRGB source with
+        // WARP's Q8 fixed-point, so identity holds modulo that per-channel 8bpc quantization.
+        let q8 = |c: f32| (c * 255.0).round() / 255.0;
+        let m_q8: Vec<[f32; 4]> = m.px.iter().map(|p| p.map(q8)).collect();
+        assert_eq!(rotate_zoom_with(&m, &rz).px, m_q8);
         assert_eq!(bc_shift([0.25; 3], 0.0, 0.0), [0.25; 3]);
     }
 }

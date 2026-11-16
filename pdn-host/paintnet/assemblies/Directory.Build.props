@@ -1,0 +1,31 @@
+<Project>
+  <!-- ONE set of independent Paint.NET replacement assemblies (phase 5A-4),
+       merging 5A-1's classic-effect shims and 5A-3's FileType compat set. Each
+       project builds one PaintDotNet.* DLL with the real assembly identity,
+       namespaces, type placement and public signatures (read from the public
+       metadata of ref/pdn-wine), so a plugin's IL binds here unchanged and also
+       binds to the genuine assemblies on Windows. Fresh idiomatic C#; no
+       decompiled Paint.NET code is copied, bar the bytecode of Paint.NET's own
+       pixel shaders (WindowsFramework/PdnShaders.cs). Scoped to the members the test corpus
+       (classic MirrorEffect + the four bundled FileType plugins) actually calls.
+       The effect host, FileType host and browser host all reference this one set. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Deterministic>true</Deterministic>
+    <SignAssembly>false</SignAssembly>
+    <!-- Carry the reference build's identity (>= the 5.200.9707.7577 the bundled
+         plugins reference) so the default bind is satisfied; the host load
+         context also resolves these by simple name. -->
+    <Version>5.200.9793.3533</Version>
+    <AssemblyVersion>5.200.9793.3533</AssemblyVersion>
+    <FileVersion>5.200.9793.3533</FileVersion>
+    <!-- The BB worktree exposes .gitmodules as a device node; SourceLink's git
+         query fails reading it, so turn it off (we embed no SCM metadata). -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+  </PropertyGroup>
+</Project>

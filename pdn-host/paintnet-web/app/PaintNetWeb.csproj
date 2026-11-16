@@ -1,0 +1,168 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>PaintNetWeb</RootNamespace>
+    <WasmMainJSPath>wwwroot/main.js</WasmMainJSPath>
+    <WasmMainHTMLPath>wwwroot/index.html</WasmMainHTMLPath>
+    <!-- Keep the Mono interpreter: plugin DLLs arrive after publish and must run as IL. -->
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <!-- Drop ICU (~1.5 MB): classic CPU effects do pixel math, not culture-aware text. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- No trimming: plugins arrive after publish, so the trimmer cannot see which BCL
+         members they call. A per-plugin trimmed build could shrink the download later. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <EnableUnsafeBinaryFormatterSerialization>true</EnableUnsafeBinaryFormatterSerialization>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The one unified replacement set (phase 5A-4) — the SAME assemblies the desktop bridge
+         references (pdn-host/bridge/PdnBridge.csproj), so the browser host drives real effects
+         through the identical PluginHost and the pixels match the desktop path. -->
+    <ProjectReference Include="../../paintnet/assemblies/Primitives/Primitives.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Fundamentals/Fundamentals.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/SystemLayer/SystemLayer.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/ComponentModel/ComponentModel.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/PropertySystem/PropertySystem.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Core/Core.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Windows/Windows.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/WindowsCore/WindowsCore.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/WindowsFramework/WindowsFramework.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Framework/Framework.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Effects.Gpu/Effects.Gpu.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/FileTypes/FileTypes.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Effects.Core/Effects.Core.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Effects.Legacy/Effects.Legacy.csproj" />
+    <!-- PaintDotNet.Data repeats 5.0 type names that 5.2 moved to PaintDotNet.FileTypes; alias it. -->
+    <ProjectReference Include="../../paintnet/assemblies/Data/Data.csproj" Aliases="pdndata" />
+    <ProjectReference Include="../../paintnet/assemblies/WindowsForms/WindowsForms.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/WindowsFormsPrimitives/WindowsFormsPrimitives.csproj" />
+    <!-- Microsoft's MIT chart control, for plug-ins that draw a Chart, as the desktop bridge has it. -->
+    <ProjectReference Include="../../paintnet/assemblies/WindowsFormsDataVisualization/WindowsFormsDataVisualization.csproj" />
+    <!-- Compatibility shims, as the desktop bridge has them: pre-5.2 plugins resolve types from the
+         assemblies that used to own them (PaintDotNet.Effects / PaintDotNet.Base). -->
+    <ProjectReference Include="../../paintnet/assemblies/Effects/Effects.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Base/Base.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The SAME managed host the desktop bridge drives, plus the FileType host plumbing and the
+         GPU driver it reuses — compiled in, not duplicated (pdn-host/bridge, pdn-host/paintnet-filetypes). -->
+    <Compile Include="../../bridge/PluginHost.cs" />
+    <Compile Include="../../bridge/FileTypeDriver.cs" />
+    <Compile Include="../../bridge/GpuDriver.cs" />
+    <Compile Include="../../bridge/DialogSettings.cs" />
+    <Compile Include="../../bridge/FileTypeWindows.cs" />
+    <Compile Include="../../bridge/Selection.cs" />
+    <Compile Include="../../bridge/WindowsOnlyCalls.cs" />
+    <Compile Include="../../bridge/TokenJson.cs" />
+    <Compile Include="../../paintnet-filetypes/host/HostDocument.cs" />
+    <Compile Include="../../paintnet-filetypes/host/LoadSupport.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- System.Drawing without GDI+ (../drawing/README.md) in place of the package, whose every GDI+ call throws off
+         Windows: the replacement assemblies compile against the package, and the bundle carries ours. -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" ExcludeAssets="compile;runtime" />
+    <ProjectReference Include="../drawing/System.Drawing.Common.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Paint.NET 5 ships ComputeSharp.D2D1 (MIT) for plugins' pixel shaders, as the desktop bridge does. -->
+    <PackageReference Include="ComputeSharp.D2D1" Version="3.2.0" />
+    <!-- Plugins' serialized resources (their icons), as on the desktop (pdn-host/bridge/PdnBridge.csproj):
+         preserialized ones through System.Resources.Extensions, BinaryFormatter ones through the real
+         BinaryFormatter, which .NET 9+ ships only as this package (newer than the runtime pack's stub). -->
+    <PackageReference Include="System.Resources.Extensions" Version="10.0.15" />
+    <PackageReference Include="System.Runtime.Serialization.Formatters" Version="10.0.15" />
+    <!-- Mono.Cecil (MIT) rewrites plug-ins' own threads and Windows calls (Rewrite.cs). It is not in the boot bundle:
+         the page fetches Mono.Cecil.bin beside it only when an installed plug-in needs it (PdnDeployCecil). -->
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" ExcludeAssets="runtime" GeneratePathProperty="true" />
+  </ItemGroup>
+  <!-- The registry plug-ins keep their settings in (Ed Harvey's), in place of the runtime's, which throws in the
+       browser. The desktop hands plug-ins the same stand-in from plugin-shims/, but the browser runtime loads an
+       assembly its bundle carries before any load context is asked, so the bundle carries this one instead. -->
+  <Target Name="PdnRegistryStandIn" AfterTargets="PrepareInputsForWasmBuild">
+    <MSBuild Projects="../../paintnet/assemblies/Win32Registry/Win32Registry.csproj" Targets="Build" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_PdnRegistry" />
+    </MSBuild>
+    <ItemGroup>
+      <_WasmAssembliesInternal Remove="@(_WasmAssembliesInternal)" Condition="'%(Filename)' == 'Microsoft.Win32.Registry'" />
+      <_WasmAssembliesInternal Include="@(_PdnRegistry)" />
+    </ItemGroup>
+  </Target>
+  <!-- WPF's WindowsBase and PresentationCore types plug-ins use (toe_head2001's Radius Corners: Point, EllipseGeometry),
+       the same way: our WindowsBase keeps the framework facade's forwards, so it takes the facade's place. -->
+  <Target Name="PdnWpfStandIns" AfterTargets="PrepareInputsForWasmBuild">
+    <MSBuild Projects="../../paintnet/assemblies/WindowsBase/WindowsBase.csproj;../../paintnet/assemblies/PresentationCore/PresentationCore.csproj"
+             Targets="Build" Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_PdnWpf" />
+    </MSBuild>
+    <ItemGroup>
+      <_WasmAssembliesInternal Remove="@(_WasmAssembliesInternal)" Condition="'%(Filename)' == 'WindowsBase' or '%(Filename)' == 'PresentationCore'" />
+      <_WasmAssembliesInternal Include="@(_PdnWpf)" />
+    </ItemGroup>
+  </Target>
+  <Target Name="PdnDeployCecil" AfterTargets="_WasmGenerateAppBundle">
+    <Copy SourceFiles="$(PkgMono_Cecil)/lib/netstandard2.0/Mono.Cecil.dll" DestinationFiles="$(WasmAppDir)/Mono.Cecil.bin" />
+  </Target>
+  <!-- GPU plugins: the replacement Direct2D/DirectWrite wrappers P/Invoke D2D1CreateFactory ("d2d1")
+       and DWriteCreateFactory ("dwrite") from opend2d's drop-ins, as on the desktop. Statically link
+       them into the Mono wasm runtime (wasm-tools relink). Built for wasm32-unknown-emscripten by
+       build-native.sh; absent builds still run CPU/FileType plugins (a GPU effect then throws). -->
+  <PropertyGroup>
+    <PdnD2dWasmDir Condition="'$(PdnD2dWasmDir)' == ''">$(MSBuildProjectDirectory)/../.build/native-wasm/wasm32-unknown-emscripten/release</PdnD2dWasmDir>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('$(PdnD2dWasmDir)/d2d1.a')">
+    <NativeFileReference Include="$(PdnD2dWasmDir)/d2d1.a" />
+    <NativeFileReference Include="$(PdnD2dWasmDir)/dwrite.a" />
+  </ItemGroup>
+
+  <!-- What the wasm relink cannot know about plug-ins that arrive after publish.
+       1. It links Mono's marshal-ilgen (P/Invokes with non-blittable types) only when a scan of the bundled
+          assemblies finds one. It cannot scan a plug-in's, so always link it.
+       2. Native code can call only the [UnmanagedCallersOnly] methods, and the interpreter can call native code only
+          with the signatures, that it found in the bundled assemblies. GPU plug-ins carry ComputeSharp's effect
+          interop, which OpenD2D calls back into, and call COM through function pointers. So the relink compiles the
+          runtime pack's runtime.c with native/pdn-trampolines.c, which makes the missing entry points and invokers
+          at run time. -->
+  <Target Name="PdnLinkMarshalIlgen" AfterTargets="_ScanAssembliesDecideLightweightMarshaler">
+    <ItemGroup>
+      <_MonoComponent Remove="marshal-ilgen" />
+      <_MonoComponent Include="marshal-ilgen" />
+    </ItemGroup>
+  </Target>
+  <UsingTask TaskName="PdnReplaceInFile" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+      <Find ParameterType="System.String" Required="true" />
+      <Replace ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        string text = System.IO.File.ReadAllText(Source);
+        if (!text.Contains(Find)) { Log.LogError(Source + " no longer has the line paint.rs patches: " + Find); return false; }
+        System.IO.File.WriteAllText(Destination, text.Replace(Find, Replace));
+      ]]></Code>
+    </Task>
+  </UsingTask>
+  <Target Name="PdnRunTimeTrampolines" AfterTargets="_PrepareForBrowserWasmBuildNative">
+    <ItemGroup>
+      <_PdnRuntimeC Include="@(_WasmRuntimePackSrcFile)" Condition="'%(Filename)%(Extension)' == 'runtime.c'" />
+    </ItemGroup>
+    <PropertyGroup>
+      <_PdnRuntimeCopy>$(IntermediateOutputPath)pdn-runtime.c</_PdnRuntimeCopy>
+      <_PdnTrampolines>$(MSBuildProjectDirectory)/native/pdn-trampolines.c</_PdnTrampolines>
+    </PropertyGroup>
+    <PdnReplaceInFile Source="@(_PdnRuntimeC)" Destination="$(_PdnRuntimeCopy)" Find="#include &quot;gc-common.h&quot;"
+                      Replace="#include &quot;gc-common.h&quot;&#10;#include &quot;$(_PdnTrampolines)&quot;" />
+    <PdnReplaceInFile Source="$(_PdnRuntimeCopy)" Destination="$(_PdnRuntimeCopy)" Find="addr = wasm_dl_get_native_to_interp (token, key, extra_arg)%3B"
+                      Replace="addr = wasm_dl_get_native_to_interp (token, key, extra_arg)%3B if (!addr) addr = pdn_native_to_interp (method, extra_arg)%3B" />
+    <PdnReplaceInFile Source="$(_PdnRuntimeCopy)" Destination="$(_PdnRuntimeCopy)" Find="mono_wasm_install_interp_to_native_callback (mono_wasm_interp_to_native_callback)%3B"
+                      Replace="mono_wasm_install_interp_to_native_callback (pdn_interp_to_native_callback)%3B" />
+    <ItemGroup>
+      <_WasmRuntimePackSrcFile Remove="@(_PdnRuntimeC)" />
+      <_WasmRuntimePackSrcFile Include="$(_PdnRuntimeCopy)" Dependencies="@(_PdnRuntimeC->'%(Dependencies)');$(_PdnTrampolines)" ObjectFile="@(_PdnRuntimeC->'%(ObjectFile)')" />
+    </ItemGroup>
+  </Target>
+</Project>

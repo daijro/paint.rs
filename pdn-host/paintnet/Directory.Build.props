@@ -1,0 +1,21 @@
+<Project>
+  <!-- Shared build settings for the Paint.NET classic-plugin host and its
+       independent replacement assemblies. The replacement assemblies carry the
+       real Paint.NET identities/versions so that a plugin compiled against them
+       also binds, unchanged, to the genuine assemblies on Windows. -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <!-- The BB worktree exposes .gitmodules as a device node; SourceLink's git
+         query fails reading it, so turn it off (we embed no SCM metadata). -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <!-- Match the reference build (Paint.NET 5.200.9793.3533) so a default
+         assembly bind is happy; the host's load context resolves by simple name. -->
+    <Version>5.200.9793.3533</Version>
+    <AssemblyVersion>5.200.9793.3533</AssemblyVersion>
+    <FileVersion>5.200.9793.3533</FileVersion>
+  </PropertyGroup>
+</Project>

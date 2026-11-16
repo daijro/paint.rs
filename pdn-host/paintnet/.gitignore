@@ -1,0 +1,11 @@
+# Build caches and render artifacts.
+/.build/
+/artifacts/
+
+# Third-party plugin source and binaries are not redistributed here; only the
+# provenance record is committed (see plugins/provenance.md).
+/plugins/*
+!/plugins/provenance.md
+/.claude/
+**/obj/
+**/bin/

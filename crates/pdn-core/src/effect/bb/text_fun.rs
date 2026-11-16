@@ -3351,7 +3351,13 @@ mod tests {
         for c in [0.0, 1.0] {
             for hard in [false, true] {
                 let out = bevel_letter(&fill, &vec![c; cover.len()], 7.0, -45.0, &bevel(hard));
-                assert_eq!(out.px, fill.px, "cover {c} hard {hard}");
+                // The float graph leaves the fill to its last bits.
+                let same = out
+                    .px
+                    .iter()
+                    .zip(&fill.px)
+                    .all(|(p, q)| (0..4).all(|k| (p[k] - q[k]).abs() < 1e-5));
+                assert!(same, "cover {c} hard {hard}");
             }
         }
     }

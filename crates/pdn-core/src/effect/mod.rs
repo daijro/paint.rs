@@ -7,8 +7,10 @@ pub mod bb;
 pub mod blur;
 pub mod color;
 pub mod distort;
+pub mod dotnet;
 pub mod extra;
 pub mod forum;
+pub mod graph;
 pub mod levels_ui;
 pub mod mix;
 pub mod noise;
@@ -19,6 +21,7 @@ pub mod render;
 pub mod rng;
 pub mod rotate_zoom;
 pub mod sample;
+pub mod schedule;
 pub mod session;
 pub mod slider;
 pub mod stylize;
@@ -111,6 +114,11 @@ pub struct EffectEnv<'a> {
     pub palette: &'a [Px],
     /// The selection outline in canvas pixels (even-odd polygons); empty when nothing is selected.
     pub selection: &'a [Vec<[f64; 2]>],
+    /// The render ROIs for the current classic-effect Render call (one tile's rects), as PaintDotNet's
+    /// scheduler produces them (`effect::schedule`). Empty for whole-image/UI/GPU environments. Effects
+    /// with per-ROI state (a blur's first-column truncation, a per-tile random seed) key off these; the
+    /// left column of each rect is where that state resets. `apply` drives classic effects per ROI call.
+    pub rois: &'a [IntRect],
     /// The UTC date when the effect began (spec-question Q7).
     pub today: rng::CivilDate,
     // spec-question: Q54 Horizon instance state lifetime
@@ -139,6 +147,7 @@ impl EffectEnv<'_> {
             layer_index: 0,
             palette: &DEFAULT_PALETTE_PX,
             selection: &[],
+            rois: &[],
             today: rng::CivilDate::new(2026, 2, 1),
             culture: "en",
         }
@@ -163,7 +172,9 @@ pub enum EffectKind {
         render: CpuFn,
         clip_to_selection: bool,
     },
-    /// An installed WebAssembly plug-in, run by its id (`wasm::render`).
+    /// A plug-in effect, rendered by its id: an installed WebAssembly plug-in or LightCraft look
+    /// (`wasm::render`), else a real Paint.NET plugin through the embedded .NET host
+    /// (`dotnet::render`); clipped to the selection like a CPU effect.
     Plugin,
 }
 
@@ -230,6 +241,7 @@ pub fn display_name_of(id: &str) -> String {
     plugin_manifest(id)
         .map(|m| m.name)
         .or_else(|| extra::manifest::manifest(id).map(|m| m.name))
+        .or_else(|| dotnet::name_of(id))
         .map_or_else(|| i18n::t(&format!("{id}.name")), String::from)
 }
 
@@ -249,17 +261,19 @@ pub fn plugin_manifest(effect_id: &str) -> Option<&'static bb::manifest::PluginI
         .or_else(|| wasm::manifest(effect_id))
 }
 
-/// Every plugin effect: BB's pack, the other forum plugins, then the installed plug-ins.
+/// Every plugin effect: BB's pack, the other forum plugins, the installed WebAssembly plug-ins and
+/// LightCraft looks, then any real Paint.NET plugins loaded through the .NET host.
 pub fn plugin_effects() -> Vec<EffectDef> {
     let mut effects = bb::effects();
     effects.extend(forum::effects());
     effects.extend(wasm::effects());
+    effects.extend(dotnet::effects());
     effects
 }
 
 /// Effect `effect_id`'s provenance; an id is never both Plugin and Extra.
 pub fn provenance_of(effect_id: &str) -> Provenance {
-    if plugin_manifest(effect_id).is_some() {
+    if plugin_manifest(effect_id).is_some() || dotnet::is_plugin(effect_id) {
         Provenance::Plugin
     } else if extra::manifest::manifest(effect_id).is_some() {
         Provenance::Extra
@@ -369,6 +383,42 @@ pub enum Control {
         filters: &'static [&'static str],
         all_files: bool,
     },
+    /// A button of a plug-in's own settings window (one that adds a line to a list, resets, randomizes): pressing it
+    /// runs the window's own handler (`dotnet::press`), which can change any of its settings. No value of its own.
+    Button {
+        key: &'static str,
+        label: &'static str,
+    },
+    /// A list of a plug-in's own settings window, which its buttons may add to: the value is the selected item's
+    /// index (-1: none); the items are the value under `list_items_key(key)`, starting as `items`.
+    List {
+        key: &'static str,
+        label: &'static str,
+        items: &'static [&'static str],
+        default: i64,
+    },
+    /// A plug-in window's curve editor (pyrochild's Curves+): the value is its points, a list per channel of
+    /// `[x, y]` from 0 to `max`. `by`, when set, is the choice whose value picks its channels from `sets`
+    /// (Curves+'s mode); else they are `own`'s.
+    PluginCurve {
+        key: &'static str,
+        label: &'static str,
+        max: i64,
+        own: CurveChannels,
+        by: Option<&'static str>,
+        sets: &'static [CurveChannels],
+    },
+    /// A plug-in window's displacement grid (pyrochild's Grid Warp): `columns` × `rows` cells over the image, its
+    /// value the nodes moved, `[x, y, dx, dy]` each, in cells. `columns_by`/`rows_by`, when set, are the choices
+    /// whose labels give the size instead ([`grid_size`]).
+    PluginGrid {
+        key: &'static str,
+        label: &'static str,
+        columns: u32,
+        rows: u32,
+        columns_by: Option<&'static str>,
+        rows_by: Option<&'static str>,
+    },
     /// A pan (offset) control; the value is `[x, y]`.
     Pan {
         key: &'static str,
@@ -379,6 +429,55 @@ pub enum Control {
         step: f64,
         thumb: PanThumb,
     },
+}
+
+/// A plug-in curve's channels: their names, colours (none: the editor's own) and default points.
+#[derive(Clone, Debug)]
+pub struct CurveChannels {
+    pub names: &'static [&'static str],
+    pub colors: &'static [Option<[u8; 3]>],
+    pub default: &'static Value,
+}
+
+/// The channels a `Control::PluginCurve` has with `values`: those its `by` choice picks, else its own.
+pub fn curve_channels<'a>(
+    own: &'a CurveChannels,
+    by: Option<&str>,
+    sets: &'a [CurveChannels],
+    values: &Values,
+) -> &'a CurveChannels {
+    by.and_then(|k| choice(values, k).parse::<usize>().ok())
+        .and_then(|i| sets.get(i))
+        .filter(|s| !s.names.is_empty())
+        .unwrap_or(own)
+}
+
+/// A `Control::PluginGrid`'s size in cells with `values`: a size its choice sets is that choice's label.
+pub fn grid_size(grid: &Control, controls: &[Control], values: &Values) -> (u32, u32) {
+    let Control::PluginGrid {
+        columns,
+        rows,
+        columns_by,
+        rows_by,
+        ..
+    } = grid
+    else {
+        return (1, 1);
+    };
+    let by = |key: Option<&str>, fallback: u32| {
+        key.and_then(|k| {
+            controls.iter().find_map(|c| match c {
+                Control::Select { key, choices, .. } if *key == k => choices
+                    .iter()
+                    .find(|(v, _)| *v == choice(values, k))
+                    .and_then(|(_, l)| l.trim().parse::<u32>().ok()),
+                _ => None,
+            })
+        })
+        .filter(|&n| n > 0)
+        .unwrap_or(fallback)
+    };
+    (by(*columns_by, *columns), by(*rows_by, *rows))
 }
 
 /// A range with step 1, linear, on the default track.
@@ -437,6 +536,10 @@ impl Control {
             | Self::LayerSelect { key, .. }
             | Self::FontSelect { key, .. }
             | Self::File { key, .. }
+            | Self::Button { key, .. }
+            | Self::List { key, .. }
+            | Self::PluginCurve { key, .. }
+            | Self::PluginGrid { key, .. }
             | Self::Pan { key, .. } => key,
         }
     }
@@ -461,8 +564,28 @@ impl Control {
             Self::LayerSelect { .. } => Value::from(0),
             Self::FontSelect { default, .. } => Value::from(*default),
             Self::File { .. } => Value::from(""),
+            Self::Button { .. } => Value::Null,
+            Self::List { default, .. } => Value::from(*default),
+            Self::PluginCurve { own, .. } => own.default.clone(),
+            Self::PluginGrid { .. } => Value::Array(vec![]),
             Self::Pan { default, .. } => Value::from(&default[..]),
         }
+    }
+}
+
+/// Where a `Control::List`'s current items are kept among the effect's values (its buttons change them).
+pub fn list_items_key(key: &str) -> String {
+    format!("{key}#items")
+}
+
+/// A `Control::List`'s current items: those its buttons left in `values`, else the window's first.
+pub fn list_items(values: &Values, key: &str, first: &[&str]) -> Vec<String> {
+    match values.get(&list_items_key(key)).and_then(Value::as_array) {
+        Some(items) => items
+            .iter()
+            .map(|i| i.as_str().unwrap_or("").to_owned())
+            .collect(),
+        None => first.iter().map(|s| (*s).to_owned()).collect(),
     }
 }
 
@@ -648,6 +771,7 @@ pub fn is_configurable_action(action: &str) -> bool {
             .collect()
     });
     IDS.iter().any(|a| a == action)
+        || dotnet::is_configurable_action(action)
         || action
             .strip_prefix("menu.effects.")
             .and_then(wasm::manifest)
@@ -713,8 +837,33 @@ pub fn apply(source: &ImageData, def: &EffectDef, values: &Values, env: &EffectE
         EffectKind::Cpu {
             render,
             clip_to_selection,
-        } => (render(source, values, &render_env), clip_to_selection),
-        EffectKind::Plugin => (wasm::render(def.id, source, values, &render_env), true),
+        } => {
+            // Classic CPU effects render per PaintDotNet's square-tile schedule: set env.rois to the
+            // tile rects so ROI-dependent effects (a blur's tile-left first-column truncation) match
+            // the real app. ROI-independent effects ignore it. My ports compute each pixel
+            // independently, so one render with all tile rects equals genuine's per-tile batching.
+            // The render region is the effect's render scans: the whole layer with no selection, or
+            // the selection's bi-level coverage (genuine's RenderScans = Selection coverage scans)
+            // with one, so a run that starts at x>0 truncates its first column exactly as genuine's
+            // EffectDriver does. The antialiased edge is composited below (underwrite via env.mask).
+            let region: Vec<IntRect> = env
+                .mask
+                .map(|m| m.coverage_scans())
+                .unwrap_or_else(|| vec![env.bounds]);
+            let tiles: Vec<IntRect> = schedule::classic_tile_rois(env.width, env.height, &region)
+                .into_iter()
+                .flatten()
+                .collect();
+            let cpu_env = EffectEnv {
+                rois: &tiles,
+                ..render_env
+            };
+            (render(source, values, &cpu_env), clip_to_selection)
+        }
+        EffectKind::Plugin if wasm::is_plugin(def.id) => {
+            (wasm::render(def.id, source, values, &render_env), true)
+        }
+        EffectKind::Plugin => (dotnet::render(def.id, source, values, &render_env), true),
     };
     if clip && let Some(mask) = env.mask {
         underwrite(source, &mut out, mask);

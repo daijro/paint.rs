@@ -16,6 +16,17 @@ avif-dav1d = ["dep:dav1d"]
 sam = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:getrandom"]
 
 [dependencies]
+# WARP's shader-math intrinsics (sincos, …), shared from opend2d so the shader-mirroring distort
+# coord-gen matches WARP's transcendentals. Path for now; switches to the github dep at release.
+warpmath = { path = "../../../../../opend2d/crates/warpmath" }
+# ucrtbase CRT maths (sinf/cosf/…), shared from opend2d so the distorts' CPU-side rotation matrices
+# match genuine's MathF (f32). Path for now; github dep at release.
+crt = { path = "../../../../../opend2d/crates/crt" }
+# The GPU effect engine (effect::graph): every GPU effect is a Direct2D effect graph run on opend2d's
+# d2d, which builds for wasm32 too. Path for now; github dep at release. windows-core is d2d's GUID
+# type (its pinned version, already in the tree through d2d).
+d2d = { path = "../../../../../opend2d/crates/d2d" }
+windows-core = { version = "=0.62.2", default-features = false }
 # Task54: bounded user asset-pack ZIP reader.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
@@ -61,6 +72,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging"] 
 # Global Constraints: rayon 1.12, native only (Task 17e: parallel canvas rows and mip tiles).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.12"
+# The embedded .NET host that runs real Paint.NET plugin DLLs (effect::dotnet).
+pdn-bridge = { path = "../pdn-bridge" }
 # Task 47: lossy WebP (libwebp, vendored C; formats-matrix.md §3.9).
 webp = { version = "0.3", default-features = false }
 # Task 48: native decoders (formats-matrix.md §2, §3.5, §3.6, §3.8). dav1d (MIT) links the system
@@ -83,6 +96,10 @@ jpegxl-src = "0.12"
 # wasm-bindgen).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
+# effect::dotnet's web path reaches the Mono browser host (pdn-host/paintnet-web) through the
+# pdn_web.js bridge: async boot, synchronous enumerate/schema/render over a BGRA buffer.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 # `sam` in the web's MobileSAM worker (crates/sam-worker): candle's rand reaches getrandom 0.3,
 # which needs its JS backend on the web.
 getrandom = { version = "0.3", features = ["wasm_js"], optional = true }

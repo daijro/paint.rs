@@ -2,7 +2,8 @@
 //! Paint.NET format order/defaults: document-ops-and-formats §2.1. Actual encoder output
 //! supplies both preview pixels and size (R21); UI text uses the bundled faces (R47).
 use super::effect_config::{
-    OpenSelect, RangeSpec, SelectLook, SliderState, Track, button_clicked, range_line, select,
+    OpenSelect, RangeSpec, SelectLook, SliderState, Track, button_clicked, checkbox_line,
+    range_line, select,
 };
 use super::{Dialog, DialogCx, DialogResult, DialogState};
 use crate::{
@@ -16,6 +17,7 @@ use crate::{
     theme::{self, *},
 };
 use egui::{Color32, Key, Pos2, Rect, Sense, TextureHandle, TextureOptions, Ui, Vec2};
+use pdn_core::effect::Control;
 use pdn_core::io::encode::SaveOptions;
 use serde_json::Value;
 
@@ -26,8 +28,10 @@ pub struct FormatInfo {
     pub extensions: &'static [&'static str],
     pub quality_default: Option<u8>,
     pub supports_layers: bool,
+    /// A FileType plug-in's save options (its property collection); empty for the built-ins.
+    pub controls: &'static [pdn_core::effect::Control],
 }
-macro_rules! format_info {($id:literal,$name:literal,[$($ext:literal),+],$quality:expr,$layers:expr)=>{FormatInfo{id:$id,name:$name,extensions:&[$($ext),+],quality_default:$quality,supports_layers:$layers}};}
+macro_rules! format_info {($id:literal,$name:literal,[$($ext:literal),+],$quality:expr,$layers:expr)=>{FormatInfo{id:$id,name:$name,extensions:&[$($ext),+],quality_default:$quality,supports_layers:$layers,controls:&[]}};}
 pub const FORMATS: &[FormatInfo] = &[
     format_info!("pdn", "Paint.NET image", [".pdn"], None, true),
     format_info!("png", "PNG", [".png"], None, false),
@@ -46,7 +50,48 @@ pub const FORMATS: &[FormatInfo] = &[
 ];
 pub const CHROMA_CHOICES: [&str; 4] = ["4:4:4", "4:4:0", "4:2:2", "4:2:0"];
 pub fn find_format(id: &str) -> &'static FormatInfo {
-    FORMATS.iter().find(|f| f.id == id).unwrap_or(&FORMATS[1])
+    formats().find(|f| f.id == id).unwrap_or(&FORMATS[1])
+}
+
+/// The formats an image saves to: the built-ins, then those of the installed FileType plug-ins.
+pub fn formats() -> impl Iterator<Item = &'static FormatInfo> {
+    FORMATS.iter().chain(plugin_formats())
+}
+
+/// The installed FileType plug-ins' save formats, rebuilt when the loaded plug-ins change (the
+/// list is leaked each time: a few bytes per plug-in reload).
+fn plugin_formats() -> &'static [FormatInfo] {
+    static CACHE: std::sync::Mutex<(u64, &'static [FormatInfo])> =
+        std::sync::Mutex::new((u64::MAX, &[]));
+    let revision = pdn_core::effect::dotnet::revision();
+    let mut cache = CACHE.lock().unwrap();
+    if cache.0 != revision {
+        let list: Vec<FormatInfo> = pdn_core::io::plugins::formats()
+            .into_iter()
+            .filter(|f| f.can_save)
+            .map(|f| FormatInfo {
+                id: f.id,
+                name: f.name,
+                extensions: Box::leak(
+                    f.extensions
+                        .iter()
+                        .map(|e| &*Box::leak(format!(".{e}").into_boxed_str()))
+                        .collect::<Vec<&'static str>>()
+                        .into_boxed_slice(),
+                ),
+                quality_default: None,
+                supports_layers: false,
+                controls: f.controls,
+            })
+            .collect();
+        *cache = (revision, Box::leak(list.into_boxed_slice()));
+    }
+    cache.1
+}
+
+/// The built-in formats plus any plugin formats.
+fn all_formats() -> Vec<FormatInfo> {
+    formats().copied().collect()
 }
 pub struct SaveSelection {
     pub format: &'static str,
@@ -57,6 +102,8 @@ type OnClose = Box<dyn FnOnce(Option<SaveSelection>, &mut DialogCx)>;
 pub struct SaveImageDialog {
     pub(super) document: u64,
     pub(super) format: usize,
+    /// Built-in formats plus plugin formats, snapshotted when the dialog opens.
+    pub(super) formats: Vec<FormatInfo>,
     pub(super) options: Vec<SaveOptions>,
     initial: Value,
     loaded: bool,
@@ -67,6 +114,9 @@ pub struct SaveImageDialog {
     pub(super) preview: Option<TextureHandle>,
     preview_size: Vec2,
     bytes: Option<usize>,
+    /// The format's FileType asks for its options in a window of its own when the image is saved, so it has no
+    /// preview, but OK saves (and shows that window).
+    asks_window: bool,
     pub(super) status: String,
     zoom: f32,
     auto_fit: bool,
@@ -75,10 +125,25 @@ pub struct SaveImageDialog {
 }
 impl SaveImageDialog {
     pub fn default_options(format: &str) -> SaveOptions {
-        SaveOptions::default_for(format)
+        SaveOptions {
+            plugin: find_format(format)
+                .controls
+                .iter()
+                .map(|c| (c.key().to_string(), c.default_value()))
+                .collect(),
+            ..SaveOptions::default_for(format)
+        }
     }
     pub fn options_from(format: &str, value: &Value) -> SaveOptions {
         let mut options = Self::default_options(format);
+        // A plug-in format's remembered options, for the properties it still has.
+        if let Some(props) = value["properties"].as_object() {
+            for (k, v) in props {
+                if let Some(slot) = options.plugin.get_mut(k) {
+                    *slot = v.clone();
+                }
+            }
+        }
         if options.quality.is_some()
             && let Some(q) = value["quality"].as_f64().filter(|q| q.is_finite())
         {
@@ -99,13 +164,15 @@ impl SaveImageDialog {
         initial: Value,
         on_close: impl FnOnce(Option<SaveSelection>, &mut DialogCx) + 'static,
     ) -> Self {
+        let formats = all_formats();
         Self {
             document,
-            format: FORMATS.iter().position(|f| f.id == format).unwrap_or(1),
-            options: FORMATS
+            format: formats.iter().position(|f| f.id == format).unwrap_or(1),
+            options: formats
                 .iter()
                 .map(|f| Self::default_options(f.id))
                 .collect(),
+            formats,
             initial,
             loaded: false,
             open_select: None,
@@ -115,6 +182,7 @@ impl SaveImageDialog {
             preview: None,
             preview_size: Vec2::splat(1.0),
             bytes: None,
+            asks_window: false,
             status: String::new(),
             zoom: 1.0,
             auto_fit: true,
@@ -124,7 +192,7 @@ impl SaveImageDialog {
     }
     fn finish(&mut self, ok: bool, cx: &mut DialogCx) -> DialogState {
         let selection = ok.then(|| SaveSelection {
-            format: FORMATS[self.format].id,
+            format: self.formats[self.format].id,
             options: self.options[self.format].clone(),
         });
         if let Some(done) = self.on_close.take() {
@@ -137,7 +205,7 @@ impl SaveImageDialog {
         })
     }
     fn render_preview(&mut self, ui: &Ui, cx: &DialogCx) {
-        let f = FORMATS[self.format].id;
+        let f = self.formats[self.format].id;
         let result =
             super::flows::encode_document(cx.app, self.document, f, &self.options[self.format])
                 .and_then(|bytes| {
@@ -159,6 +227,7 @@ impl SaveImageDialog {
         match result {
             Ok((len, img)) => {
                 self.bytes = Some(len);
+                self.asks_window = false;
                 self.status.clear();
                 self.preview_size = Vec2::new(img.width as f32, img.height as f32);
                 self.preview = Some(ui.ctx().load_texture(
@@ -173,7 +242,8 @@ impl SaveImageDialog {
             Err(e) => {
                 self.bytes = None;
                 self.preview = None;
-                self.status = e;
+                self.asks_window = pdn_core::io::plugins::PluginWindow::from_error(&e).is_some();
+                self.status = super::flows::readable(e);
             }
         }
         self.due = f64::INFINITY;
@@ -394,11 +464,11 @@ impl SaveImageDialog {
         if self.loaded {
             return;
         }
-        for (i, f) in FORMATS.iter().enumerate() {
+        for (i, f) in self.formats.iter().enumerate() {
             self.options[i] =
                 Self::options_from(f.id, &settings.values["fileTypes"]["saveOptions"][f.id]);
         }
-        let f = FORMATS[self.format].id;
+        let f = self.formats[self.format].id;
         let mut initial = settings.values["fileTypes"]["saveOptions"][f].clone();
         if let Some(values) = self.initial.as_object() {
             if !initial.is_object() {
@@ -449,7 +519,8 @@ impl SaveImageDialog {
             ),
             Vec2::new(side, 31.0),
         );
-        let labels: Vec<String> = FORMATS
+        let labels: Vec<String> = self
+            .formats
             .iter()
             .map(|f| format!("{} ({})", f.name, f.extensions.join(", ")))
             .collect();
@@ -474,7 +545,7 @@ impl SaveImageDialog {
             self.format = pick;
             changed = true;
         }
-        let info = &FORMATS[self.format];
+        let info = &self.formats[self.format];
         let mut y = format_rect.max.y + 10.0;
         let mut bottom = y;
         if let Some(default_quality) = info.quality_default {
@@ -500,6 +571,7 @@ impl SaveImageDialog {
                 ui,
                 &mut self.slider,
                 "quality",
+                "Quality",
                 spec,
                 &mut values,
                 track,
@@ -541,6 +613,109 @@ impl SaveImageDialog {
                 }
                 y += 40.0;
             }
+        }
+        // A FileType plug-in's save options: its properties, as an effect's are shown.
+        if !info.controls.is_empty() {
+            let mut values = self.options[self.format].plugin.clone();
+            for (i, c) in info.controls.iter().enumerate() {
+                match c {
+                    Control::Range {
+                        key,
+                        label,
+                        min,
+                        max,
+                        default,
+                        step,
+                        keyboard,
+                        ..
+                    } => {
+                        heading(ui, Pos2::new(at.x, y), side, label, false);
+                        y += 28.0;
+                        let track = Rect::from_min_size(
+                            Pos2::new(at.x + 2.0, y + 0.5),
+                            Vec2::new(side - 78.0, 28.0),
+                        );
+                        let number =
+                            Rect::from_min_size(Pos2::new(right - 68.0, y), Vec2::new(68.0, 29.0));
+                        let spec = RangeSpec {
+                            min: *min,
+                            max: *max,
+                            default: *default,
+                            step: *step,
+                            role: pdn_core::effect::slider::RangeRole::Slider,
+                            keyboard: *keyboard,
+                        };
+                        let style =
+                            NumberStyle::LAYER_OPACITY.decimals(if *step < 1.0 { 2 } else { 0 });
+                        if range_line(
+                            ui,
+                            &mut self.slider,
+                            key,
+                            label,
+                            spec,
+                            &mut values,
+                            track,
+                            number,
+                            None,
+                            Track::Standard,
+                            style,
+                        )
+                        .is_some()
+                        {
+                            changed = true;
+                        }
+                        y += 39.0;
+                    }
+                    Control::Checkbox { key, label, .. } => {
+                        let color = theme.menu_item_text;
+                        if checkbox_line(ui, &mut values, key, label, at.x, y, side, color, 1.0)
+                            .is_some()
+                        {
+                            changed = true;
+                        }
+                        y += 28.0;
+                    }
+                    Control::Select {
+                        key,
+                        label,
+                        choices,
+                        ..
+                    } => {
+                        heading(ui, Pos2::new(at.x, y), side, label, false);
+                        y += 28.0;
+                        let labels: Vec<&str> = choices.iter().map(|c| c.1).collect();
+                        let current = choices
+                            .iter()
+                            .position(|c| values.get(*key).and_then(Value::as_str) == Some(c.0))
+                            .unwrap_or(0);
+                        if let Some(pick) = select(
+                            ui,
+                            &mut self.open_select,
+                            ui.scope_id().with(("plugin-option", i)),
+                            Rect::from_min_size(Pos2::new(at.x, y), Vec2::new(side, 31.0)),
+                            label,
+                            &labels,
+                            current,
+                            SelectLook {
+                                native: true,
+                                pad_left: 0.0,
+                                font,
+                            },
+                        ) && pick != current
+                        {
+                            values.insert(key.to_string(), Value::from(choices[pick].0));
+                            changed = true;
+                        }
+                        y += 40.0;
+                    }
+                    // ponytail: text and other property kinds keep the plug-in's defaults; add an
+                    // editor when a FileType's save options need one.
+                    _ => {}
+                }
+            }
+            self.options[self.format].plugin = values;
+        }
+        if info.quality_default.is_some() || !info.controls.is_empty() {
             let response = dialog_button(
                 ui,
                 "defaults",
@@ -616,7 +791,7 @@ impl Dialog for SaveImageDialog {
 
         let status = self.status.clone();
         // Like onsubmit in SaveImageDialog.js, OK flushes a pending debounce before saving.
-        let ready = self.bytes.is_some();
+        let ready = self.bytes.is_some() || self.asks_window;
         let mut body = |ui: &mut Ui, r: Rect| {
             self.body(ui, r, 0.0);
         };
@@ -683,7 +858,7 @@ impl Dialog for SaveImageDialog {
             if self.due.is_finite() {
                 self.render_preview(ui, cx);
             }
-            if self.bytes.is_some() {
+            if self.bytes.is_some() || self.asks_window {
                 return self.finish(true, cx);
             }
         }

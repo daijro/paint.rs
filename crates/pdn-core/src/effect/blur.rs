@@ -3,20 +3,21 @@
 //! icons and control keys only).
 //! Includes the Bokeh kernel components, .NET's `Random` and the P² estimator.
 
+use super::graph::{BORDER_HARD, CLSID_D2D1GammaTransfer, Graph, Prop};
 use super::sample::{
-    circle_offsets, circle_rows, coverage, gamma_boost, gamma_unboost, gaussian_kernel, splat,
+    circle_offsets, circle_rows, gamma_boost, gamma_unboost, gaussian_kernel, splat,
 };
 use super::surface::{Alpha, Edge, EffectSurface, Space, premultiply, unpremultiply};
 use super::{
     Category, Control, EffectDef, EffectEnv, EffectKind, GPU_QUALITY, GpuFn, RenderInfo, Values,
     choice, flag, num, range,
 };
-use crate::pixel::gamma::{linear_to_srgb_f32, srgb_to_linear_f32};
 use crate::render::display::for_bands;
 use std::f64::consts::{PI, TAU};
+use std::sync::LazyLock;
 
 const LINEAR: RenderInfo = RenderInfo::new(Space::Linear, Alpha::Straight);
-const LINEAR_PM: RenderInfo = RenderInfo::new(Space::Linear, Alpha::Premultiplied);
+const SRGB_PM: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Premultiplied);
 const SRGB: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Straight);
 
 fn blur(
@@ -75,15 +76,11 @@ pub fn effects() -> Vec<EffectDef> {
                 range("distance", "Distance", 0.0, 400.0, 8.0),
                 range("rotation", "Rotation", 0.0, 360.0, 0.0),
             ],
-            LINEAR_PM,
-            |s, v, _| {
-                let o = fragment_offsets(
-                    num(v, "fragments") as u32,
-                    num(v, "distance"),
-                    num(v, "rotation"),
-                );
-                coverage_normalised(s, |p| o.iter().map(move |o| [p[0] + o[0], p[1] + o[1]]))
-            },
+            // Genuine PdnFragmentEffect wraps the shader in ConvertAlpha only (sRGB premultiplied, like
+            // Radial), summing N bilinear taps and dividing by a FillOutputRect coverage pass; the
+            // bounded input clamps so coverage ≡ N — i.e. /N.
+            SRGB_PM,
+            fragment_effect,
         ),
         blur(
             "medianBlurEffect",
@@ -126,7 +123,9 @@ pub fn effects() -> Vec<EffectDef> {
                     ],
                 },
             ],
-            LINEAR_PM,
+            // Genuine PdnMotionBlurEffect wraps the shader in ConvertAlpha only (no ConvertColorSpace),
+            // so it samples the 8bpc sRGB premultiplied source — like Zoom/Radial, not linear.
+            SRGB_PM,
             motion_effect,
         ),
         blur(
@@ -138,7 +137,9 @@ pub fn effects() -> Vec<EffectDef> {
                 center("centerY", "Center Y"),
                 quality(8.0, GPU_QUALITY),
             ],
-            LINEAR_PM,
+            // Genuine PdnRadialBlurEffect wraps the shader in ConvertAlpha only (sRGB premultiplied,
+            // like Zoom and the distorts), so out-of-bounds taps fade via the premul-alpha unpremul.
+            SRGB_PM,
             radial_effect,
         ),
         blur(
@@ -187,7 +188,9 @@ pub fn effects() -> Vec<EffectDef> {
                 center("centerY", "Center Y"),
                 quality(8.0, GPU_QUALITY),
             ],
-            LINEAR_PM,
+            // Genuine PdnZoomBlurEffect wraps the shader in ConvertAlpha only (no ConvertColorSpace), so
+            // it samples the 8bpc sRGB premultiplied source — like the distorts (SRGB_PM), not linear.
+            SRGB_PM,
             zoom_effect,
         ),
     ]
@@ -217,7 +220,10 @@ fn boosted(
 }
 
 /// §2.3 Gaussian steps 4–5: the HighQuality kernel, horizontal then vertical, on whatever `src`
-/// holds (premultiplied for every caller). σ ≤ 0 returns the input.
+/// holds (premultiplied for every caller). σ ≤ 0 returns the input. This is Paint.NET's
+/// `GaussianBlurEffect2` at its default HighQuality optimization, which is not d2d's GaussianBlur but
+/// its own separable convolution (`GaussianBlurConvolutionEffect`, a CPU-built kernel), so it keeps
+/// its Rust body; BoltBait's blurs all pass HighQuality.
 pub fn gaussian(src: &EffectSurface, sigma: f64, edge: Edge) -> EffectSurface {
     if sigma <= 0.0 {
         return src.clone();
@@ -225,14 +231,41 @@ pub fn gaussian(src: &EffectSurface, sigma: f64, edge: Edge) -> EffectSurface {
     src.convolve_hv(&gaussian_kernel(sigma), edge)
 }
 
-/// §2.3 Gaussian: σ = min(radius/3, 100), Mirror (BorderMode Hard), in linear light.
+/// Genuine `GaussianBlurGpuEffect` (WorkingSpaceLinear) on d2d: `ConvertGamma(1 + boost)` →
+/// `GaussianBlur{ StandardDeviation = radius/3, Optimization = quality − 1, BorderMode.Hard }` →
+/// `ConvertGamma` back. ConvertGamma is a GammaTransfer on the straight colour channels.
 fn gaussian_effect(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    let sigma = (num(v, "radius") / 3.0).min(100.0);
+    let sigma = (num(v, "radius") / 3.0).min(100.0) as f32;
+    // Radius 0 leaves the layer alone (genuine still runs the graph, whose 8bpc linear node nudges
+    // dark values).
     if sigma <= 0.0 {
         return src.clone();
     }
-    // approximation: D2D GaussianBlur for quality 1–3 (B-E2)
-    boosted(src, num(v, "gamma"), |s| gaussian(s, sigma, Edge::Mirror))
+    // GaussianBlurEffect2's optimization = quality − 1 (quality 1..4 → Speed, Balanced, Quality,
+    // HighQuality); the default quality 4 is HighQuality, its own convolution, not d2d's blur.
+    let mode = (num(v, "quality").round() as u32).saturating_sub(1);
+    let gamma = (1.0 + num(v, "gamma")) as f32;
+    // GammaTransfer's R, G and B exponents (props 1, 5, 9); alpha keeps exponent 1.
+    let pow = |e: f32| [(1, Prop::F32(e)), (5, Prop::F32(e)), (9, Prop::F32(e))];
+    let (mut g, mut n) = Graph::new(src, Alpha::Straight);
+    if gamma != 1.0 {
+        n = g.fx(CLSID_D2D1GammaTransfer, &pow(gamma), [n]);
+    }
+    n = if mode >= 3 {
+        // HighQuality: GaussianBlurConvolutionEffect's separable kernel (support 6); its Hard border
+        // is the convolution's Mirror edge mode.
+        let s = g.render(&n);
+        g.image(
+            &gaussian(&s, sigma as f64, Edge::Mirror),
+            Alpha::Premultiplied,
+        )
+    } else {
+        g.gaussian_blur(n, sigma, mode, BORDER_HARD)
+    };
+    if gamma != 1.0 {
+        n = g.fx(CLSID_D2D1GammaTransfer, &pow(1.0 / gamma), [n]);
+    }
+    g.finish(&n, Alpha::Straight)
 }
 
 /// §2.3 Square: w(i) = 1 − (|i| − min(|i|, r)) for i = −⌈r⌉..=⌈r⌉, each × f32(1/(1 + 2r)).
@@ -587,6 +620,7 @@ struct BokehKernel {
 /// T = Σ_components Σⱼ Σₖ Z·Re(KⱼKₖ) + W·Im(KⱼKₖ), cast to f32.
 fn bokeh_kernels(r: f64, q: usize) -> Vec<BokehKernel> {
     let c = r.ceil();
+    let inv_r = 1.0 / r; // genuine CreateComplex1DKernel: num2 = 1.0/radius, u = n·scale·num2
     let scale = if q == 1 { 1.4 } else { 1.2 };
     let parts: Vec<(Vec<[f64; 2]>, f64, f64)> = BOKEH_COMPONENTS[q - 1]
         .iter()
@@ -597,12 +631,17 @@ fn bokeh_kernels(r: f64, q: usize) -> Vec<BokehKernel> {
                 if n.abs() > r {
                     continue;
                 }
-                let u = n * scale / r;
-                let e = (-a * (u * u)).exp();
-                let v = [e * (b * (u * u)).cos(), e * (b * (u * u)).sin()];
+                let u = n * scale * inv_r;
+                let u2 = u * u;
+                let e = (-a * u2).exp();
+                let v = [e * (b * u2).cos(), e * (b * u2).sin()];
                 let f = n + c;
                 let lo = f.floor();
-                for (at, wt) in [(lo, 1.0 - (f - lo)), (lo + 1.0, f - lo)] {
+                // Genuine: num9 = 1 − (f − ⌊f⌋), num10 = 1 − num9 (NOT f − ⌊f⌋ — the double negate
+                // is a distinct f64 value at a tie), splat onto ⌊f⌋ then ⌈f⌉.
+                let w_lo = 1.0 - (f - lo);
+                let w_hi = 1.0 - w_lo;
+                for (at, wt) in [(lo, w_lo), (lo + 1.0, w_hi)] {
                     if wt > 0.0 {
                         let t = &mut k[at as usize];
                         t[0] += v[0] * wt;
@@ -663,6 +702,9 @@ pub fn bokeh_with_edge(
     }
     let kernels = bokeh_kernels(radius, quality.clamp(1, 10));
     boosted(src, gamma, |s| {
+        // Genuine BokehBlurEffect's input is the GPU wrapper's `gammaEffect` output, which genuine's
+        // Float32 render context keeps in float (an 8bpc context would quantise it here), and every
+        // inner node — border, the two ps_5_0 shaders, the Plus composite — is Float32 too.
         let mut sum = EffectSurface::new(s.w, s.h);
         for k in &kernels {
             let (vr, vi) = (vertical(s, &k.re, edge), vertical(s, &k.im, edge));
@@ -699,32 +741,35 @@ fn vertical(src: &EffectSurface, k: &[f32], edge: Edge) -> EffectSurface {
     })
 }
 
-/// F10 over bilinear Transparent taps: Σ sample(sᵢ) / max(1, Σ coverage(sᵢ)), the sᵢ given by
-/// `taps(p)` at each pixel's scene position p = (x + ½, y + ½).
-fn coverage_normalised<I: Iterator<Item = [f32; 2]>>(
-    src: &EffectSurface,
-    taps: impl Fn([f32; 2]) -> I + Sync,
-) -> EffectSurface {
-    let size = [src.w as f32, src.h as f32];
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let (mut sum, mut cov) = ([0.0; 4], 0.0f32);
-        for s in taps([x as f32 + 0.5, y as f32 + 0.5]) {
-            madd(&mut sum, 1.0, src.bilinear(s[0], s[1], Edge::Transparent));
-            cov += coverage(s, size);
-        }
-        sum.map(|c| c / cov.max(1.0))
-    })
-}
-
-/// §2.3 Fragment: θ = radians(rotation − 90); oᵢ = d·(sin(θ + 2πi/n), cos(θ + 2πi/n)).
-pub fn fragment_offsets(n: u32, distance: f64, rotation_deg: f64) -> Vec<[f32; 2]> {
-    let theta = (rotation_deg - 90.0).to_radians();
-    (0..n)
+/// §2.3 Fragment, sRGB premultiplied: N copies of the image superimposed over a ring of offsets
+/// distance·(sin θᵢ, cos θᵢ), θᵢ = rad(rotation − 90) + i·(2π/N) via WARP `sincos`. Genuine sums the
+/// bilinear taps and divides by a FillOutputRect coverage pass; D2DSampleInputAtOffset clamps the
+/// bounded input so coverage ≡ N (the shader's α = N even at the corner), i.e. /N — like Radial.
+fn fragment_effect(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
+    let n = num(v, "fragments").clamp(2.0, 200.0) as u32;
+    let distance = num(v, "distance").clamp(0.0, 400.0) as f32;
+    // (float)DegreesToRadians(rotation − 90) and step = 2π/N, exactly as the f32 shader.
+    let theta = ((num(v, "rotation") - 90.0) * PI / 180.0) as f32;
+    let step = std::f32::consts::PI * 2.0 / n as f32;
+    let offsets: Vec<[f32; 2]> = (0..n)
         .map(|i| {
-            let a = theta + TAU * i as f64 / n as f64;
-            [(distance * a.sin()) as f32, (distance * a.cos()) as f32]
+            let (s, c) = warpmath::sincos(theta + step * i as f32);
+            [distance * s, distance * c]
         })
-        .collect()
+        .collect();
+    let inv_n = 1.0 / n as f32;
+    EffectSurface::from_fn(src.w, src.h, |x, y| {
+        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        let mut sum = [0.0; 4];
+        for o in &offsets {
+            madd(
+                &mut sum,
+                1.0,
+                src.bilinear_q8(px + o[0], py + o[1], Edge::Clamp),
+            );
+        }
+        sum.map(|a| a * inv_n)
+    })
 }
 
 /// §2.3 Motion step 3: (t_min, R).
@@ -823,23 +868,39 @@ fn center(v: &Values, env: &EffectEnv) -> [f32; 2] {
     ]
 }
 
-/// §2.3 Radial: θᵢ = lerp(−A/2, A/2, i·f32(1/(N − 1))); taps at c + R(−θᵢ)(p − c).
+/// §2.3 Radial, sRGB premultiplied (ConvertAlpha only), like Zoom. Genuine sums Σ sample over N
+/// uniform rotations and divides by the coverage sum Σκ; D2DSampleInputAtPosition clamps the bounded
+/// input (the executor/WARP returns the opaque edge texel out of bounds, so κ ≡ 1 and Σκ = N — the
+/// coverage pass degenerates to /N). θᵢ = lerp(−A/2, A/2, i·f32(1/(N − 1))); each tap is
+/// RotateAt(p, c, −θᵢ) via WARP `sincos(−θᵢ)` (pos = c + [cₒ·dx − s·dy, s·dx + cₒ·dy]). Dividing the
+/// premultiplied sum by N leaves a flat image unchanged (α = N·a/N = a) and matches genuine's
+/// unpremultiplied colour Σrgb/Σα byte-for-byte on the WARP shader-float oracle.
 fn radial_effect(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
     let n = sample_count(num(v, "quality").clamp(1.0, 8.0)) as usize;
     let half = (num(v, "angle").to_radians() / 2.0) as f32;
     let step = (1.0 / (n - 1) as f64) as f32;
+    // (sin, cos) of −θᵢ, as WARP's single sincos(−θ) intrinsic computes it for the DXBC.
     let turns: Vec<[f32; 2]> = (0..n)
         .map(|i| {
             let t = -half + (half + half) * (i as f32 * step);
-            [t.cos(), t.sin()]
+            let (s, co) = warpmath::sincos(-t);
+            [s, co]
         })
         .collect();
     let c = center(v, env);
-    coverage_normalised(src, |p| {
-        let d = [p[0] - c[0], p[1] - c[1]];
-        turns
-            .iter()
-            .map(move |&[co, si]| [c[0] + co * d[0] + si * d[1], c[1] - si * d[0] + co * d[1]])
+    let inv_n = 1.0 / n as f32;
+    EffectSurface::from_fn(src.w, src.h, |x, y| {
+        let d = [x as f32 + 0.5 - c[0], y as f32 + 0.5 - c[1]];
+        let mut sum = [0.0; 4];
+        for &[s, co] in &turns {
+            let p = src.bilinear_q8(
+                c[0] + co * d[0] - s * d[1],
+                c[1] + s * d[0] + co * d[1],
+                Edge::Clamp,
+            );
+            madd(&mut sum, 1.0, p);
+        }
+        sum.map(|a| a * inv_n)
     })
 }
 
@@ -864,12 +925,15 @@ fn zoom_effect(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurfac
         (m, big - m)
     };
     let den = if den == 0.0 { 1.0 } else { den };
+    // Genuine multiplies the precomputed inverse `alphaDenominatorInv = (float)(1/num)` (not a per-tap
+    // divide), and the weight uses WARP's `pow`, not Rust `powf`.
+    let den_inv = (1.0 / den) as f32;
     let mu = zoom_weight_multiplier(e) as f32;
-    let (m, big, sub, den, e) = (m as f32, big as f32, sub as f32, den as f32, e as f32);
+    let (m, big, sub, e) = (m as f32, big as f32, sub as f32, e as f32);
     let taps: Vec<(f32, f32)> = (0..n)
         .map(|i| {
             let s = m + (big - m) * (i as f32 / (n - 1) as f32);
-            (s, mu * ((s - sub) / den).abs().powf(e))
+            (s, mu * warpmath::pow(((s - sub) * den_inv).abs(), e))
         })
         .collect();
     let norm = taps.iter().map(|t| t.1).sum::<f32>().max(1.0);
@@ -878,7 +942,7 @@ fn zoom_effect(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurfac
         let d = [x as f32 + 0.5 - c[0], y as f32 + 0.5 - c[1]];
         let mut sum = [0.0; 4];
         for &(s, w) in &taps {
-            let p = src.bilinear(c[0] + d[0] / s, c[1] + d[1] / s, Edge::Clamp);
+            let p = src.bilinear_q8(c[0] + d[0] / s, c[1] + d[1] / s, Edge::Clamp);
             madd(&mut sum, w, p);
         }
         sum.map(|a| a / norm)
@@ -1067,6 +1131,82 @@ fn percentile_impl(
     })
 }
 
+// --- SketchBlur colour management: native `CColorManagement` sRGB↔scRGB (linear) ---------------
+// Genuine's MedianApproximationEffect wraps each P² iteration in a ColorManagement(sRGB→scRGB) node
+// and the resolved average in a ColorManagement(scRGB→sRGB) node. Native `CColorManagement` is NOT
+// the analytic sRGB curve: it is a 1024-entry 16-bit forward LUT (`s_srgbLut`) and its fixed-point
+// numeric inverse, sampled with linear interpolation. Copied op-for-op from opend2d crates/d2d
+// `color_context.rs` (verified byte-exact vs WARP — `cms-01/02`); the forward curve is built with
+// `crt::pow` (ucrtbase) so its rounding matches the native LUT build.
+const SRGB_LUT_N: usize = 1024;
+
+fn srgb_lut_decode(x: f64) -> f64 {
+    if x <= 0.04045 {
+        x / 12.92
+    } else {
+        crt::pow((x + 0.055) / 1.055, 2.4)
+    }
+}
+
+/// `s_srgbLut`: `round(srgb_lut_decode(i/1023)·65535)`, the 1024-entry 16-bit forward (sRGB→linear).
+static SRGB_FORWARD: LazyLock<[u16; SRGB_LUT_N]> = LazyLock::new(|| {
+    std::array::from_fn(|i| {
+        let v = srgb_lut_decode(i as f64 / (SRGB_LUT_N - 1) as f64) * 65535.0;
+        (v + 0.5).floor().clamp(0.0, 65535.0) as u16
+    })
+});
+
+/// `ColorUtils::InvertCurve(s_srgbLut)`: linear→sRGB as the 16.16 fixed-point inverse of the forward.
+static SRGB_BACKWARD: LazyLock<[u16; SRGB_LUT_N]> = LazyLock::new(|| {
+    let src = &*SRGB_FORWARD;
+    let mut dst = [0u16; SRGB_LUT_N];
+    let (src_len, dst_len) = (SRGB_LUT_N as i64, SRGB_LUT_N as i64);
+    let target = |j: i64| (((dst_len - 1) / 2) + 65535 * j) / (dst_len - 1);
+    let mut j: i64 = 0;
+    let s0 = src[0] as i64;
+    let mut v = target(0);
+    while j < dst_len && v <= s0 {
+        dst[j as usize] = 0;
+        j += 1;
+        v = target(j);
+    }
+    for i in 1..src_len as usize {
+        let (prev, cur) = (src[i - 1] as i64, src[i] as i64);
+        while j < dst_len && v <= cur {
+            let mut out = ((i as i64 - 1) << 16) / (src_len - 1);
+            if cur != prev {
+                out += ((v - prev) << 16) / ((src_len - 1) * (cur - prev));
+                if out & 0x1_0000 != 0 {
+                    out = 0xFFFF;
+                }
+            }
+            dst[j as usize] = (out & 0xFFFF) as u16;
+            j += 1;
+            v = target(j);
+        }
+    }
+    while j < dst_len {
+        dst[j as usize] = 0xFFFF;
+        j += 1;
+    }
+    dst
+});
+
+/// Sample a 16-bit LUT as the shader does: clamp to [0,1], texel `x·1023`, linear interp, /65535.
+fn srgb_lut_sample(lut: &[u16; SRGB_LUT_N], x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    let p = x * (SRGB_LUT_N - 1) as f32;
+    let i0 = p.floor() as usize;
+    let f = p - i0 as f32;
+    let i1 = (i0 + 1).min(SRGB_LUT_N - 1);
+    (lut[i0] as f32 * (1.0 - f) + lut[i1] as f32 * f) / 65535.0
+}
+
+/// A node's 8bpc UNORM output buffer: round-ties-even·255, clamp, /255 (native intermediate store).
+fn sketch_quantize8(c: [f32; 4]) -> [f32; 4] {
+    c.map(|v| (v * 255.0).round_ties_even().clamp(0.0, 255.0) / 255.0)
+}
+
 /// §2.3 Sketch step 1: M = max(5, rne(πr²)), K = clamp(rne(f32(M)·0.01), 5, M).
 pub fn sketch_counts(radius: f64) -> (usize, usize) {
     let m = ((PI * (radius * radius)).round_ties_even() as usize).max(5);
@@ -1088,8 +1228,14 @@ fn sketch_offsets(r: f64, j: i32, k: usize) -> Vec<[f32; 2]> {
         .collect()
 }
 
-/// §2.3 Sketch, sRGB straight, Mirror bilinear taps: per iteration the P² estimate of each
-/// channel over the K taps; RGB estimates averaged in linear light (alpha as is), × f32(1/J).
+/// §2.3 Sketch = genuine `PdnSketchBlurEffect` → `MedianApproximationEffect` (AlphaMode=Straight,
+/// EdgeMode=Mirror, document sRGB, RandomSeed=0, RandomOffset=0, SampleCountPercent=0.01). Per
+/// iteration j: K WARP fixed-point bilinear taps of the 8bpc Mirror border at pixel+offset, the P²
+/// (`P2QuantileEstimatorEffect` ps_5_0) estimate of each channel, quantised to the P2 node's 8bpc
+/// buffer; a ColorManagement(sRGB→scRGB, straight) LUT on rgb (alpha kept), quantised to the CM
+/// node's 8bpc buffer. The N linear results are summed by Composite(Plus, Float32), divided by N,
+/// then ColorManagement(scRGB→sRGB, straight). Everything is STRAIGHT alpha (no premultiply node).
+/// Verified byte-exact vs the genuine graph on opend2d's executor (pdngpu-sketchblurgraph).
 fn sketch_effect(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
     let r = num(v, "radius");
     if r <= 0.0 {
@@ -1099,24 +1245,36 @@ fn sketch_effect(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurfac
     let iters = (num(v, "smoothness") as i32).max(1);
     let k = sketch_counts(r).1;
     let offsets: Vec<Vec<[f32; 2]>> = (0..iters).map(|j| sketch_offsets(r, j, k)).collect();
-    let inv = (1.0 / iters as f64) as f32;
+    let n = iters as f32;
     EffectSurface::from_fn(src.w, src.h, |x, y| {
         let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
         let mut sum = [0.0f32; 4];
         for offs in &offsets {
             let taps: Vec<[f32; 4]> = offs
                 .iter()
-                .map(|o| src.bilinear(px + o[0], py + o[1], Edge::Mirror))
+                .map(|o| src.bilinear_q8(px + o[0], py + o[1], Edge::Mirror))
                 .collect();
-            for (c, s) in sum.iter_mut().enumerate() {
-                let e = p2(taps.iter().map(|t| t[c]), p);
-                *s += if c < 3 { srgb_to_linear_f32(e) } else { e };
+            // P² median per channel → P2 node 8bpc output buffer.
+            let e = sketch_quantize8(std::array::from_fn(|c| p2(taps.iter().map(|t| t[c]), p)));
+            // ColorManagement sRGB→scRGB (straight): LUT on rgb, alpha kept → CM node 8bpc buffer.
+            let lin = sketch_quantize8([
+                srgb_lut_sample(&SRGB_FORWARD, e[0]),
+                srgb_lut_sample(&SRGB_FORWARD, e[1]),
+                srgb_lut_sample(&SRGB_FORWARD, e[2]),
+                e[3],
+            ]);
+            for (s, l) in sum.iter_mut().zip(lin) {
+                *s += l;
             }
         }
-        std::array::from_fn(|c| {
-            let a = sum[c] * inv;
-            if c < 3 { linear_to_srgb_f32(a) } else { a }
-        })
+        // WeightedAverage: Σ / (float)N (Float32), then ColorManagement scRGB→sRGB (straight).
+        let avg: [f32; 4] = std::array::from_fn(|c| sum[c] / n);
+        [
+            srgb_lut_sample(&SRGB_BACKWARD, avg[0]),
+            srgb_lut_sample(&SRGB_BACKWARD, avg[1]),
+            srgb_lut_sample(&SRGB_BACKWARD, avg[2]),
+            avg[3],
+        ]
     })
 }
 
@@ -1326,7 +1484,9 @@ mod tests {
         })
     }
 
-    /// effects-1.md §5 Task 39: Q4, γ = 1, radius 2 → centre linear 0.508209² → sRGB 139.
+    /// Q4 is GaussianBlurEffect2's HighQuality (its own §2.3 convolution, Mirror edges), radius 2
+    /// (σ=2/3), in linear light: centre weight 0.508² → sRGB 139 (d2d's GaussianBlur, the Q1–3 path,
+    /// has centre 0.598² → 163).
     #[test]
     fn gaussian_white_dot() {
         let out = run("blurEffect", json!({"radius": 2, "quality": 4}), &dot());
@@ -1339,15 +1499,34 @@ mod tests {
 
     #[test]
     fn flat_images_stay_flat() {
-        flat_is_identity("blurEffect", json!({"radius": 6, "gamma": 1.0}), 1);
+        // blurEffect and bokehEffect blur an 8bpc premultiplied-linear node (genuine's ConvertGamma
+        // output), which crushes a dark translucent channel (premul(linear(10),160/255)·255 = 0.485
+        // → 0) — so they are NOT identity-preserving there. sketchBlurEffect is the same family: its
+        // genuine graph runs each P² median through ColorManagement(sRGB→scRGB)→8bpc→(scRGB→sRGB), and
+        // that round-trip shifts dark straight channels ([30,90,10,160] → [28,90,13,160], byte-exact
+        // vs the genuine MedianApproximation graph). The invariant they DO keep is flat → uniform (a
+        // uniform input gives the same value at every pixel).
+        for p in [[128u8, 64, 200, 255], [30, 90, 10, 160]] {
+            for (id, values) in [
+                ("blurEffect", json!({"radius": 6})),
+                ("bokehEffect", json!({"radius": 5})),
+                ("sketchBlurEffect", json!({"radius": 4})),
+            ] {
+                let out = run(id, values.clone(), &solid(40, 30, p));
+                let first = px(&out, 0, 0);
+                for y in 0..30 {
+                    for x in 0..40 {
+                        assert_eq!(px(&out, x, y), first, "{id} not uniform at ({x},{y})");
+                    }
+                }
+            }
+        }
         flat_is_identity("squareBlurEffect", json!({}), 1);
-        flat_is_identity("bokehEffect", json!({"radius": 5}), 1);
         flat_is_identity("motionBlurEffect", json!({}), 1);
         flat_is_identity("radialBlurEffect", json!({"angle": 30}), 2);
         flat_is_identity("zoomBlurEffect", json!({}), 2);
         flat_is_identity("fragmentEffect", json!({}), 2);
         flat_is_identity("surfaceBlurEffect", json!({}), 0);
-        flat_is_identity("sketchBlurEffect", json!({"radius": 4}), 1);
         for q in 1..=9 {
             flat_is_identity("medianBlurEffect", json!({"radius": 3, "quality": q}), 1);
         }
@@ -1368,14 +1547,6 @@ mod tests {
         assert_eq!(sample_count(2.0), 128);
         assert_eq!(zoom_weight_multiplier(2.0), 24.0);
         assert_eq!(bokeh_len(25.0), 51);
-        let f = fragment_offsets(4, 8.0, 0.0);
-        let want = [[-8.0, 0.0], [0.0, 8.0], [8.0, 0.0], [0.0, -8.0]];
-        assert!(
-            f.iter()
-                .zip(want)
-                .all(|(a, b)| (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5),
-            "{f:?}"
-        );
     }
 
     /// Surface Blur weight: λ = 0.96/T; v 0.5, s 0.6, T 0.15 → w 0.36.
@@ -1445,7 +1616,7 @@ mod tests {
 
     // ---- Task 39 additions: vectors re-derived from effects-1.md §2.3 / App. B–C. ----
 
-    use crate::pixel::gamma::{linear_to_srgb8, quantize};
+    use crate::pixel::gamma::quantize;
 
     /// A w×h test pattern with distinct values per channel.
     fn pattern(w: u32, h: u32) -> ImageData {
@@ -1459,14 +1630,14 @@ mod tests {
         })
     }
 
-    /// §2.3 Gaussian steps 1–6, from the doc's w₀ = 0.508208994 (centre tap) and w₁:
-    /// - white column over 50 %-alpha black, γ = 2 (gamma 1): colour w₀, α = w₀ + (1 − w₀)·a with
-    ///   a = 128/255, c = √(w₀/α) → 233.70, α → 192.54 (without the boost: 214);
-    /// - the same over 50 %-alpha grey 128 (linear g), γ = 1: (w₀ + (1 − w₀)·g·a)/α → 223.76
-    ///   (blurring straight colour: 233 with the unpremultiply, 206 without);
-    /// - Mirror edges (F2): a white column at x = 0 gives w₀ + w₁ → 222.62 (Clamp: 225).
+    /// Gaussian Blur at radius 2, BorderMode.Hard, premultiplied in linear light.
+    /// Values are the default quality's HighQuality convolution (GaussianBlurEffect2's own kernel,
+    /// Hard border = Mirror edges) in the engine's Float32 graph.
+    /// - white column over 50 %-alpha black, γ boost 1.0 (premultiply + boost + clamp);
+    /// - the same over 50 %-alpha grey 128, no boost;
+    /// - the Hard border's Mirror edge: a white column at x = 0.
     #[test]
-    fn gaussian_premultiplies_boosts_and_mirrors() {
+    fn gaussian_premultiplies_boosts_and_clamps() {
         let img = from_fn(9, 9, |x, _| if x == 4 { [255; 4] } else { [0, 0, 0, 128] });
         let out = run("blurEffect", json!({"radius": 2, "gamma": 1.0}), &img);
         assert_eq!(px(&out, 4, 4), [234, 234, 234, 193]);
@@ -1510,7 +1681,13 @@ mod tests {
         for (got, want) in p[..3].iter().zip([0.5, 0.25, 0.125]) {
             assert!((got - want).abs() < 1e-5, "{p:?}: {got} != {want}");
         }
-        assert!((hard.at(0, 0)[3] - 0.25).abs() < 1e-5);
+        // The input stays float (genuine's Float32 context; an 8bpc one would quantise α to 64/255),
+        // so the flat DC keeps α = 0.25 and the rgb ratios stay exact.
+        assert!(
+            (hard.at(0, 0)[3] - 0.25).abs() < 1e-4,
+            "hard α = {}",
+            hard.at(0, 0)[3]
+        );
         assert_eq!(bokeh_with_edge(&src, 0.0, 10, 0.0, Edge::Transparent), src);
     }
 
@@ -1676,7 +1853,9 @@ mod tests {
                 0,
             )
         };
-        let grey = |l: f64| linear_to_srgb8(l as f32);
+        // Motion blur is sRGB-premultiplied (genuine ConvertAlpha only, no ConvertColorSpace), so a
+        // white/black mix averages the sRGB values directly — the weighted fraction quantizes as-is.
+        let grey = |l: f64| quantize(l as f32);
         assert_eq!(at0("clamp"), [255; 4]);
         let m = grey((w[0] + w[1]) / total);
         assert!(
@@ -1707,15 +1886,18 @@ mod tests {
             json!({"fragments": 2, "distance": 2}),
             &img,
         );
+        // sRGB-premul, /N with Clamp (genuine coverage ≡ N): the two taps land on white and the
+        // clamped black edge, so (4,2)/(0,2) average to mid-grey — byte-exact vs the WARP shader.
         assert_eq!(
             [px(&out, 4, 2), px(&out, 0, 2), px(&out, 2, 2)],
-            [[255; 4], [255; 4], [0, 0, 0, 255]]
+            [[128, 128, 128, 255], [128, 128, 128, 255], [0, 0, 0, 255]]
         );
     }
 
-    /// §2.3 Radial, re-derived in Python (f32, ideal bilinear, F10): q 1 (N 64), angle 30 about
-    /// the centre of a 20×20 black | white step at x = 10. Sweeping ±A instead of ±A/2 gives
-    /// 216/152/175; degrees used as radians give 188/187/188.
+    /// §2.3 Radial: q 1 (N 64), angle 30 about the centre of a 20×20 black | white step at x = 10.
+    /// Byte-exact vs genuine 5.1.12 RadialBlur (sRGB-premul, WARP `bilinear_q8`/`sincos`, Clamp and
+    /// ÷N): the values below are the genuine WARP results from the shader-float oracle (0/400 diff),
+    /// and were a Python ideal-bilinear approximation (240/101/161) before.
     #[test]
     fn radial_blur_vector() {
         let img = from_fn(
@@ -1724,9 +1906,9 @@ mod tests {
             |x, _| if x >= 10 { [255; 4] } else { [0, 0, 0, 255] },
         );
         let out = run("radialBlurEffect", json!({"angle": 30, "quality": 1}), &img);
-        for ((x, y), want) in [((11, 2), 240), ((8, 17), 101), ((9, 3), 161)] {
+        for ((x, y), want) in [((11, 2), 222), ((8, 17), 33), ((9, 3), 90)] {
             let p = px(&out, x, y);
-            assert!(near(p, [want, want, want, 255], 2), "({x},{y}): {p:?}");
+            assert!(near(p, [want, want, want, 255], 1), "({x},{y}): {p:?}");
         }
     }
 
@@ -1748,7 +1930,10 @@ mod tests {
         }
     }
 
-    /// §2.3 Radial: c = (W/2, H/2)·(1 + offset) on the document; the pixel at c never moves.
+    /// §2.3 Radial: c = (W/2, H/2)·(1 + offset) on the document; the pixel at c never moves. Here c
+    /// lands on pixel (0, 6), so every tap samples it: the output is that pixel round-tripped through
+    /// sRGB-premultiply (ConvertAlpha), which shifts a semi-transparent channel by ≤1 (R 66→67 at
+    /// α 153) — a genuine premul effect does the same, so allow the tie rather than demand equality.
     #[test]
     fn radial_blur_turns_about_the_centre() {
         let img = pattern(10, 10);
@@ -1757,13 +1942,19 @@ mod tests {
             json!({"angle": 90, "centerX": -0.9, "centerY": 0.3}),
             &img,
         );
-        assert_eq!(px(&fixed, 0, 6), px(&img, 0, 6));
+        assert!(
+            near(px(&fixed, 0, 6), px(&img, 0, 6), 1),
+            "{:?}",
+            px(&fixed, 0, 6)
+        );
         let moved = run("radialBlurEffect", json!({"angle": 90}), &img);
         assert_ne!(px(&moved, 0, 6), px(&img, 0, 6));
     }
 
-    /// §2.3 Zoom on a black→white step at x = 15 (row through c), re-derived in Python (f64):
-    /// k = 2 samples c + (p − c)/s, s ∈ [1, 2], weights 24·(2 − s)²; k = ½ reaches outward.
+    /// §2.3 Zoom on a black→white step at x = 15 (row through c): samples c + (p − c)/s, s ∈ [1, 2]
+    /// (k = 2) with weights ∝ (2 − s)², k = ½ reaches outward. Byte-exact vs genuine 5.1.12 ZoomBlur
+    /// (sRGB-premul, WARP `bilinear_q8`/`pow`): verified 3072/3072 RGB vs the shader float oracle +
+    /// unpremultiply, so the values below are the genuine WARP results (were a Python-f64 approximation).
     #[test]
     fn zoom_blur_direction_and_weights() {
         let img = from_fn(
@@ -1775,14 +1966,8 @@ mod tests {
             let out = run("zoomBlurEffect", json!({"distance": k}), &img);
             [13, 14, 15].map(|x| px(&out, x, 1)[0])
         };
-        let [a, b, c] = row(2.0);
-        assert!(a == 0 && b == 0 && c.abs_diff(144) <= 2, "{:?}", [a, b, c]);
-        let [a, b, c] = row(0.5);
-        assert!(
-            a.abs_diff(77) <= 2 && b.abs_diff(195) <= 2 && c == 255,
-            "{:?}",
-            [a, b, c]
-        );
+        assert_eq!(row(2.0), [0, 0, 70]);
+        assert_eq!(row(0.5), [19, 138, 255]);
     }
 
     /// §2.3 Median: Fast (B > 6) brackets over the square, Accurate over the circle; p ≥ 1 is the
@@ -2040,8 +2225,9 @@ mod tests {
         );
     }
 
-    /// §2.3 Sketch Blur end to end against an independent Python port (App. C Random and P², F2
-    /// Mirror bilinear, linear-light average): r 20 (M 1257, K 13), p 0.3, J 2.
+    /// §2.3 Sketch Blur end to end, verified byte-exact vs the genuine `MedianApproximationEffect`
+    /// graph on opend2d's executor (== WARP; pdngpu-sketchblurgraph): r 20 (M 1257, K 13), p 0.3,
+    /// J 2 — K>5 exercises the full P² `AddValueAfter5th` adjust loop and the p<0.5 branch.
     #[test]
     fn sketch_blur_matches_reference() {
         assert_eq!(sketch_counts(20.0), (1257, 13));

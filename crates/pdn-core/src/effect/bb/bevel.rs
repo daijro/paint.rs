@@ -575,7 +575,7 @@ mod tests {
             for size in [(1, 1), (3, 2), (40, 30)] {
                 let zero = EffectSurface::from_fn(size.0, size.1, |_, _| [0.0, 0.0, 0.0, 1.0]);
                 let out = super::relief(&zero, 5.0, hard, 315.0);
-                assert!(out.px.iter().all(|p| p[0] == 0.5));
+                assert!(out.px.iter().all(|p| (p[0] - 0.5).abs() < 1e-6));
             }
             let h = |a| {
                 EffectSurface::from_fn(40, 30, |x, _| {
@@ -585,8 +585,10 @@ mod tests {
             };
             let opaque = super::relief(&h(1.0), 5.0, hard, 315.0);
             let partial = super::relief(&h(0.5), 5.0, hard, 315.0);
+            // Equal to within one 8-bit step: the relief quantises the softened height to 8 bits
+            // (Behaviour 3), and the half-alpha copy's alpha rounds on its own.
             for (a, b) in opaque.px.iter().zip(&partial.px) {
-                assert!((a[0] - b[0]).abs() < 1e-5, "{hard}: {a:?} {b:?}");
+                assert!((a[0] - b[0]).abs() < 1.0 / 255.0, "{hard}: {a:?} {b:?}");
             }
         }
     }
@@ -866,7 +868,7 @@ mod tests {
             [v, v, v, 1.0]
         });
         let r = super::relief(&h, 0.0, false, 0.0);
-        assert!(r.px.iter().all(|p| p[0] == 0.5));
+        assert!(r.px.iter().all(|p| (p[0] - 0.5).abs() < 1e-6), "{:?}", r.px);
     }
     /// Behaviour 6 truncates the original double Strength before narrowing shadow alpha to float.
     #[test]

@@ -545,17 +545,22 @@ pub fn paint_dropdown(
     }
     if let Some(r) = parts.label {
         let p = painter.with_clip_rect(snap(&painter, r).intersect(painter.clip_rect()));
-        // A field's text at its `padding-left`; a toolbar face's centred in its text box (§8.2).
-        let x = if face.field {
-            r.min.x + face.label_padding
+        // A field's text at its `padding-left`, a long one shrunk to fit (at most to 3/4, with the
+        // same padding before the arrow) in the same line box; a toolbar face's centred in its
+        // text box (§8.2).
+        let (x, size) = if face.field {
+            let x = r.min.x + face.label_padding;
+            let room = r.max.x - x - face.label_padding;
+            (x, text::fit_size(face.label, room, TOOL_FONT_SIZE))
         } else {
-            r.min.x + (r.width() - text::css_width(face.label, TOOL_FONT_SIZE)) / 2.0
+            let w = text::css_width(face.label, TOOL_FONT_SIZE);
+            (r.min.x + (r.width() - w) / 2.0, TOOL_FONT_SIZE)
         };
         text::draw(
             &p,
             Pos2::new(x, r.min.y),
             face.label,
-            spec(),
+            FontSpec::new(size).line_height(spec().resolved_line_height(ppp)),
             theme.pdn_text,
         );
     }

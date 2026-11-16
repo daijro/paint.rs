@@ -1550,10 +1550,6 @@ impl<K: BrushKind> Tool for BrushTool<K> {
     /// Escape take the transacted rows (Escape cancels a stroke, Enter ends, commits and
     /// deselects, and in Idle both deselect).
     fn on_key_press(&mut self, app: &mut AppWorkspace, key: &KeyPress) -> bool {
-        // ponytail: ruling R85 — painting-tools-1.md §8.4's arrow keys (the OS cursor moves by
-        // ⌈zoom ratio × speed⌉ px and the stroke follows) are skipped: it is a Tool-level feature
-        // that applies when idle too, and the wasm build cannot warp the OS cursor; add it with a
-        // native cursor-warp path if wanted.
         if K::BRUSH
             && let Some(changed) = size_key(app, K::TOOL, key, self.is_drawing())
         {

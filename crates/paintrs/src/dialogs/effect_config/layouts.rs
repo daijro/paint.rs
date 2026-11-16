@@ -92,13 +92,20 @@ fn generic_row_height(c: &Control, line: f32) -> Option<f32> {
     let label = line + EFFECT_LABEL_PADDING + 1.0 + EFFECT_ROW_GAP;
     match c {
         Control::Range { .. } => Some(label + EFFECT_LINE_HEIGHT),
-        Control::Select { .. } => Some(label + EFFECT_SELECT_HEIGHT),
+        Control::Select { .. } | Control::List { .. } | Control::Text { .. } => {
+            Some(label + EFFECT_SELECT_HEIGHT)
+        }
+        Control::Button { .. } => Some(EFFECT_SELECT_HEIGHT),
         Control::Checkbox { .. } => Some(EFFECT_CHECKBOX.2),
         Control::Color { .. } => Some(line + EFFECT_ROW_GAP + COLOR_INPUT.1),
+        Control::PluginGrid { .. } => Some(PLUGIN_GRID_HEIGHT),
+        // The editor, then its channels' check boxes.
+        Control::PluginCurve { .. } => {
+            Some(PLUGIN_CURVE_SIZE + EFFECT_ROW_GAP + CHECKBOX_SIZE + 2.0 * CHECKBOX_MARGIN.0)
+        }
         // BB5 lays out the plugin kinds.
         Control::Curve { .. }
         | Control::Value { .. }
-        | Control::Text { .. }
         | Control::Label { .. }
         | Control::LayerSelect { .. }
         | Control::FontSelect { .. }
@@ -106,6 +113,12 @@ fn generic_row_height(c: &Control, line: f32) -> Option<f32> {
         | Control::Pan { .. } => None,
     }
 }
+
+/// A plug-in window's displacement grid over the image: at most this tall.
+const PLUGIN_GRID_HEIGHT: f32 = 300.0;
+
+/// A plug-in window's curve editor: one pixel per step of a 256-entry curve.
+const PLUGIN_CURVE_SIZE: f32 = 258.0;
 
 /// Chromium's `input[type=color]`: 50×27.
 const COLOR_INPUT: (f32, f32) = (50.0, 27.0);
@@ -232,7 +245,7 @@ pub(crate) fn label_lines(label: &str) -> Vec<&str> {
 }
 
 /// A plugin control's accessible name: its label's text, else its key.
-fn accessible_name<'a>(label: &'a str, key: &'a str) -> &'a str {
+pub(super) fn accessible_name<'a>(label: &'a str, key: &'a str) -> &'a str {
     Some(label.trim()).filter(|n| !n.is_empty()).unwrap_or(key)
 }
 
@@ -247,8 +260,14 @@ fn header_label(c: &Control) -> &'static str {
         | Control::LayerSelect { label, .. }
         | Control::FontSelect { label, .. }
         | Control::File { label, .. }
+        | Control::List { label, .. }
         | Control::Pan { label, .. } => label,
-        Control::Checkbox { .. } | Control::Curve { .. } | Control::Value { .. } => "",
+        Control::Checkbox { .. }
+        | Control::Curve { .. }
+        | Control::PluginCurve { .. }
+        | Control::PluginGrid { .. }
+        | Control::Value { .. }
+        | Control::Button { .. } => "",
     }
 }
 
@@ -293,6 +312,8 @@ fn body_height(c: &Control, t: &RowText, line: f32, ppp: f32) -> f32 {
     match c {
         Control::Range { .. } => EFFECT_LINE_HEIGHT,
         Control::Select { .. }
+        | Control::List { .. }
+        | Control::Button { .. }
         | Control::LayerSelect { .. }
         | Control::FontSelect { .. }
         | Control::Text {
@@ -307,6 +328,10 @@ fn body_height(c: &Control, t: &RowText, line: f32, ppp: f32) -> f32 {
         Control::File { .. } if t.error.is_empty() => EFFECT_SELECT_HEIGHT,
         Control::File { .. } => EFFECT_SELECT_HEIGHT + EFFECT_ROW_GAP + t.error.len() as f32 * line,
         Control::Pan { .. } => EFFECT_PAN_SIZE.1 + 2.0,
+        Control::PluginCurve { .. } => {
+            PLUGIN_CURVE_SIZE + EFFECT_ROW_GAP + CHECKBOX_SIZE + 2.0 * CHECKBOX_MARGIN.0
+        }
+        Control::PluginGrid { .. } => PLUGIN_GRID_HEIGHT,
         Control::Curve { .. } | Control::Value { .. } => 0.0,
     }
 }
@@ -679,7 +704,10 @@ impl EffectConfigDialog {
                 continue;
             };
             let label_h = line + EFFECT_LABEL_PADDING + 1.0;
-            if let Control::Range { label, .. } | Control::Select { label, .. } = c
+            if let Control::Range { label, .. }
+            | Control::Select { label, .. }
+            | Control::List { label, .. }
+            | Control::Text { label, .. } = c
                 && !label.is_empty()
             {
                 text::draw(
@@ -694,7 +722,7 @@ impl EffectConfigDialog {
             let line_top = y + label_h + EFFECT_ROW_GAP;
             match c {
                 Control::Range { .. } => {
-                    let (key, _, rs) =
+                    let (key, label, rs) =
                         RangeSpec::of(c, self.session.as_ref().map_or("", |s| s.def.id))
                             .expect("a range");
                     let (range, number, reset) = range_rects(x0, w, line_top);
@@ -708,6 +736,7 @@ impl EffectConfigDialog {
                         ui,
                         &mut state,
                         key,
+                        accessible_name(label, key),
                         rs,
                         &mut self.values,
                         range,
@@ -749,6 +778,14 @@ impl EffectConfigDialog {
                         changed = Some(true);
                     }
                 }
+                Control::List { .. } => {
+                    let c = self.window_control(ui, c, Pos2::new(x0, line_top), w);
+                    changed = merge(changed, c);
+                }
+                Control::Button { .. } => {
+                    let c = self.window_control(ui, c, Pos2::new(x0, y), w);
+                    changed = merge(changed, c);
+                }
                 Control::Checkbox { key, label, .. } => {
                     let color = theme.menu_item_text;
                     let c = checkbox_line(ui, &mut self.values, key, label, x0, y, w, color, 1.0);
@@ -785,9 +822,39 @@ impl EffectConfigDialog {
                         changed = Some(true);
                     }
                 }
+                Control::PluginCurve { .. } | Control::PluginGrid { .. } => {
+                    let c = self.window_control(ui, c, Pos2::new(x0, y), w);
+                    changed = merge(changed, c);
+                }
+                Control::Text {
+                    key,
+                    label,
+                    max_len,
+                    ..
+                } => {
+                    // A plug-in's text (a string property, a text box of its own window): one line.
+                    let at = Rect::from_min_size(
+                        Pos2::new(x0, line_top),
+                        Vec2::new(w, EFFECT_SELECT_HEIGHT),
+                    );
+                    let mut s = bb::text(&self.values, key).to_string();
+                    let before = s.clone();
+                    let mut buffer = inputs::Utf16Text {
+                        text: &mut s,
+                        max_units: *max_len as usize,
+                    };
+                    let response = inputs::text_field(ui, ("text", *key), at, &mut buffer);
+                    initial_editor(ui, response.id);
+                    let name = accessible_name(label, key);
+                    ui.ctx()
+                        .accesskit_node_builder(response.id, |n| n.set_label(name));
+                    if s != before {
+                        self.values.insert((*key).into(), json!(s));
+                        changed = merge(changed, Some(false));
+                    }
+                }
                 Control::Curve { .. }
                 | Control::Value { .. }
-                | Control::Text { .. }
                 | Control::Label { .. }
                 | Control::LayerSelect { .. }
                 | Control::FontSelect { .. }
@@ -798,6 +865,71 @@ impl EffectConfigDialog {
         }
         self.put_slider_state(state);
         changed
+    }
+}
+
+impl EffectConfigDialog {
+    /// A plug-in's own window's list, button, curve or grid (kinds only such a window has) at `at` across `w`, in
+    /// the generic rows or the IndirectUI ones alike.
+    fn window_control(&mut self, ui: &mut Ui, c: &Control, at: Pos2, w: f32) -> Option<bool> {
+        let spec = FontSpec::new(DIALOG_FONT_SIZE);
+        match c {
+            Control::List {
+                key, label, items, ..
+            } => {
+                // A plug-in window's list (its buttons change its items): picked like a drop-down.
+                let shown = pdn_core::effect::list_items(&self.values, key, items);
+                let labels: Vec<&str> = shown.iter().map(String::as_str).collect();
+                let current = self.values.get(*key).and_then(Value::as_i64).unwrap_or(-1);
+                let look = SelectLook {
+                    native: true,
+                    pad_left: 0.0,
+                    font: spec,
+                };
+                let id = ui.scope_id().with(("select", *key));
+                let rect = Rect::from_min_size(at, Vec2::new(w, EFFECT_SELECT_HEIGHT));
+                let picked = current.max(0) as usize;
+                let i = (!labels.is_empty())
+                    .then(|| {
+                        select(
+                            ui,
+                            &mut self.open_select,
+                            id,
+                            rect,
+                            label,
+                            &labels,
+                            picked,
+                            look,
+                        )
+                    })
+                    .flatten()?;
+                self.values.insert((*key).into(), json!(i));
+                Some(true)
+            }
+            Control::Button { key, label } => {
+                let bw = crate::kit::window::dialog_button_width(ui.painter(), label, 75.0);
+                let rect = Rect::from_min_size(at, Vec2::new(bw.min(w), EFFECT_SELECT_HEIGHT));
+                let response = inputs::push_button(ui, ("button", *key), rect, label, true, false);
+                (inputs::button_activated(ui, &response) && self.press(key)).then_some(true)
+            }
+            Control::PluginCurve {
+                key,
+                max,
+                own,
+                by,
+                sets,
+                ..
+            } => {
+                let chans = pdn_core::effect::curve_channels(own, *by, sets, &self.values);
+                self.plugin_curve(ui, (key, *max), chans, at, PLUGIN_CURVE_SIZE)
+            }
+            Control::PluginGrid { key, .. } => {
+                let size = pdn_core::effect::grid_size(c, &self.controls(), &self.values);
+                let area = Rect::from_min_size(at, Vec2::new(w, PLUGIN_GRID_HEIGHT));
+                self.plugin_grid(ui, key, size, area)
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1079,7 +1211,7 @@ impl EffectConfigDialog {
         let mut changed = None;
         match c {
             Control::Range { .. } => {
-                let (key, _, mut rs) =
+                let (key, label, mut rs) =
                     RangeSpec::of(c, self.session.as_ref().map_or("", |s| s.def.id))?;
                 if let Some(d) = defaults.get(key).and_then(Value::as_f64) {
                     rs.default = d;
@@ -1097,8 +1229,11 @@ impl EffectConfigDialog {
                 style.native_step = true;
                 let values = &mut self.values;
                 let reset = cu.reset.then_some(reset);
+                // The header over it is what the user reads; else the control's own label.
+                let header = t.header.join(" ");
+                let name = accessible_name(&header, accessible_name(label, key));
                 changed = range_line(
-                    &mut row, state, key, rs, values, range, number, reset, track, style,
+                    &mut row, state, key, name, rs, values, range, number, reset, track, style,
                 );
             }
             Control::Select { label, choices, .. } => {
@@ -1326,6 +1461,7 @@ impl EffectConfigDialog {
                             &mut row,
                             state,
                             &axis_key,
+                            &format!("{name} {axis}"),
                             rs,
                             &mut axis_values,
                             range,
@@ -1351,6 +1487,14 @@ impl EffectConfigDialog {
                         changed = merge(changed, Some(false));
                     }
                 }
+            }
+            // A plug-in's own window's kinds, as the generic rows lay them out (a plug-in reading the clipboard comes
+            // here).
+            Control::Button { .. }
+            | Control::List { .. }
+            | Control::PluginCurve { .. }
+            | Control::PluginGrid { .. } => {
+                changed = self.window_control(&mut row, c, Pos2::new(x0, y), w);
             }
             Control::Value { .. } | Control::Curve { .. } => {}
         }

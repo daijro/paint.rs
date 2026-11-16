@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- System.Drawing.Common for the browser host, which has no GDI+ (README.md). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>System.Drawing.Common</AssemblyName>
+    <RootNamespace>System.Drawing</RootNamespace>
+    <AssemblyVersion>10.0.0.0</AssemblyVersion>
+    <FileVersion>10.0.0.0</FileVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <NoWarn>$(NoWarn);CS0114;CS0108;CS0660;CS0661;CS0659</NoWarn>
+    <!-- The package's identity, so assemblies built against the package bind to this one: public-signed with its public
+         key (PublicKey.snk holds only that key, read from the package's DLL), as .NET's own open-source builds are. -->
+    <AssemblyOriginatorKeyFile>PublicKey.snk</AssemblyOriginatorKeyFile>
+    <SignAssembly>true</SignAssembly>
+    <PublicSign>true</PublicSign>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="gen/**;check/**" />
+  </ItemGroup>
+</Project>

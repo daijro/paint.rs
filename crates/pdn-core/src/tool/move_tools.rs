@@ -844,7 +844,9 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         self.control.hit_test(p, &f, &bb, hw)
     }
 
-    /// Writes the handle list when it changed (each write redraws the overlays).
+    /// Writes the handle list when it changed (each write redraws the overlays). Move Selected
+    /// Pixels hides the selection outline while it moves the pixels (a translate drag or a nudge
+    /// burst, as `shift_trail_hint`), so they can be placed precisely.
     fn sync_handles(&mut self, app: &mut AppWorkspace) {
         let list = match (self.frame(app), Self::hair_width(app)) {
             (Some((f, bb)), Some((hw, u))) => {
@@ -853,9 +855,13 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
             }
             _ => vec![],
         };
+        let outline = !self.shift_trail_hint();
         let (Some(id), Some(ws)) = (self.handles, app.active_ws_mut()) else {
             return;
         };
+        if ws.selection_renderer().outline != outline {
+            ws.selection_renderer_mut().outline = outline;
+        }
         if matches!(ws.surface_box.renderer(id), Some(Renderer::Handles(h)) if *h == list) {
             return;
         }
@@ -1153,6 +1159,7 @@ impl<const PIXELS: bool> MoveToolBase<PIXELS> {
         }
         transacted::update(self, app, n);
         self.live = Some(Live::Nudge(app.now_ms));
+        self.sync_handles(app);
     }
 
     /// A nudge burst ends with its entry.
@@ -1549,7 +1556,8 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
         self.control = TransformHandles::default();
         let handles = self.handles.take();
         if let Some(ws) = app.active_ws_mut() {
-            ws.selection_renderer_mut().tinting = false;
+            let r = ws.selection_renderer_mut();
+            (r.tinting, r.outline) = (false, true);
             if let Some(id) = handles {
                 ws.surface_box.remove_renderer(id);
             }
@@ -1659,14 +1667,16 @@ impl<const PIXELS: bool> Tool for MoveToolBase<PIXELS> {
         true
     }
 
-    /// Arrow keys nudge by every held arrow (not during a drag); Enter and Escape commit and
-    /// deselect (§2.8).
+    /// Arrow keys nudge by every held arrow; with a canvas button down they move the pointer
+    /// instead (`AppWorkspace::keyboard_pointer`), so a drag follows them. Enter and Escape commit
+    /// and deselect (§2.8).
     fn on_key_press(&mut self, app: &mut AppWorkspace, key: &KeyPress) -> bool {
         if key.meta {
             return false;
         }
         let arrow = super::arrow_nudge(app, &key.key);
         match (arrow, key.key.as_str()) {
+            (Some(_), _) if app.canvas_buttons != 0 => false,
             (Some((dx, dy)), _) if !key.alt => {
                 if self.dragging().is_none() && (dx, dy) != (0.0, 0.0) {
                     let step = if key.ctrl { 10.0 } else { 1.0 };
@@ -2453,6 +2463,78 @@ mod tests {
     fn idle(app: &mut AppWorkspace) {
         let now = app.now_ms + NUDGE_COMMIT_MS + 1.0;
         app.on_frame(now);
+    }
+
+    /// An arrow moves both tools 1 image px at any zoom, a burst of three 3 px.
+    #[test]
+    fn an_arrow_nudges_1_image_px_at_any_zoom() {
+        for tool in [ToolType::Move, ToolType::MoveSelection] {
+            for zoom in [1.0, 3.0, 0.5] {
+                let mut app = red_square(tool);
+                app.active_ws_mut().unwrap().view.set_zoom_center(zoom);
+                let x = |app: &AppWorkspace| app.active_ws().unwrap().selection.get_bounds().x;
+                for step in 1..=3 {
+                    press(&mut app, "ArrowRight", false, false);
+                    assert_eq!(x(&app), 10.0 + step as f64, "{tool:?} at {zoom}");
+                }
+                idle(&mut app);
+                assert_eq!(x(&app), 13.0, "{tool:?} at {zoom}");
+                app.set_active_tool_from_type(ToolType::RectangleSelect);
+                assert_eq!(x(&app), 13.0, "{tool:?} at {zoom}, committed");
+                if tool == ToolType::Move {
+                    assert_eq!(red_x(&app, 11), [13, 14, 15, 16], "at {zoom}");
+                }
+            }
+        }
+    }
+
+    /// With no button down the arrows nudge and leave the pointer alone; with one down they move
+    /// the pointer (`AppWorkspace::keyboard_pointer`) and the drag follows it.
+    #[test]
+    fn arrows_during_a_drag_move_the_pointer() {
+        for tool in [ToolType::Move, ToolType::MoveSelection] {
+            let mut app = red_square(tool);
+            let x = |app: &AppWorkspace| app.active_ws().unwrap().selection.get_bounds().x;
+            press(&mut app, "ArrowRight", false, false);
+            idle(&mut app);
+            assert_eq!(x(&app), 11.0, "{tool:?}");
+            assert_eq!(app.pointer_offset, (0.0, 0.0), "{tool:?}");
+            // Away from the small square's handles: a translate.
+            move_to(&mut app, (40.5, 40.5));
+            let (px, py) = view(&app, (40.5, 40.5));
+            app.on_mouse_down(px, py, MouseButton::Left, &input(px, py));
+            for _ in 0..2 {
+                press(&mut app, "ArrowRight", false, false);
+                app.now_ms += 16.0;
+                let now = app.now_ms;
+                app.on_frame(now);
+            }
+            assert_eq!(app.pointer_offset, (2.0, 0.0), "{tool:?}");
+            app.on_mouse_up(px + 2.0, py, MouseButton::Left, &input(px + 2.0, py));
+            assert_eq!(x(&app), 13.0, "{tool:?}");
+        }
+    }
+
+    /// Move Selected Pixels hides the selection outline while it moves the pixels (a nudge burst,
+    /// a translate drag) and shows it again once the move ends; Move Selection keeps it.
+    #[test]
+    fn the_outline_hides_while_the_pixels_move() {
+        let outline = |app: &AppWorkspace| app.active_ws().unwrap().selection_renderer().outline;
+        for tool in [ToolType::Move, ToolType::MoveSelection] {
+            let mut app = red_square(tool);
+            let shown = tool == ToolType::MoveSelection;
+            press(&mut app, "ArrowRight", false, false);
+            assert_eq!(outline(&app), shown, "{tool:?} nudging");
+            idle(&mut app);
+            assert!(outline(&app), "{tool:?} after the burst");
+            let (x, y) = view(&app, (60.5, 45.5));
+            app.on_mouse_down(x, y, MouseButton::Left, &input(x, y));
+            move_to(&mut app, (70.5, 45.5));
+            assert_eq!(outline(&app), shown, "{tool:?} dragging");
+            let (x, y) = view(&app, (70.5, 45.5));
+            app.on_mouse_up(x, y, MouseButton::Left, &input(x, y));
+            assert!(outline(&app), "{tool:?} after the drag");
+        }
     }
 
     /// R227, R253: Shift+arrows stamp where the burst started and where each step lands, as the

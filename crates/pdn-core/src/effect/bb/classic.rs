@@ -9,11 +9,11 @@
 // approximation: Paint.NET 4.2's classic code paths, assumed unchanged in 5.x (artistic-oil-painting-plus.md Notes)
 
 use super::conventions::{
-    CLASSIC_BLUR_CLAMP_EDGES, CLASSIC_HSV_ROUND_TRIP, MEDIAN_RANK_BASE, PASTEL_HSV_FROM_BYTES,
-    PASTEL_VALUE_OFFSET,
+    CLASSIC_BLUR_CLAMP_EDGES, CLASSIC_HSV_ROUND_TRIP, PASTEL_HSV_FROM_BYTES, PASTEL_VALUE_OFFSET,
 };
 use crate::canvas::ImageData;
 use crate::document::layer::BlendMode;
+use crate::pixel::IntRect;
 use crate::pixel::Px;
 use crate::pixel::ops::compose;
 use crate::render::display::for_bands;
@@ -77,6 +77,75 @@ pub fn brightness_contrast(img: &ImageData, brightness: i32, contrast: i32) -> I
 // spec-question: Q20 Classic Gaussian blur edges
 pub fn gaussian_blur(img: &ImageData, r: u32) -> ImageData {
     tent_blur(img, r, CLASSIC_BLUR_CLAMP_EDGES)
+}
+
+/// Genuine legacy PaintDotNet `GaussianBlurEffect.OnRender` as PencilSketchEffect calls it internally:
+/// `16·(min(i,2r−i)+1)` tent row-weights, 2D separable convolution, out-of-bounds taps SKIPPED and
+/// renormalised by the in-bounds weight sum, colour premultiplied by `A+(A>>7)`, integer-truncated
+/// division (colour ÷ premult-weight, alpha ÷ plain-weight); an all-transparent window ⇒ 0. (Direct
+/// O(k²)/pixel — same sums as the genuine slide.) NB: a *standalone* GaussianBlurEffect via pdnhost
+/// renders through the GPU-superceded path and does not match this CPU OnRender; oracle via PencilSketch.
+pub fn gaussian_blur_legacy(img: &ImageData, r: u32, rois: &[IntRect]) -> ImageData {
+    if r == 0 {
+        return img.clone();
+    }
+    let (w, h) = (img.width as i64, img.height as i64);
+    let klen = 2 * r as i64 + 1;
+    let rad = r as i64;
+    let wt = |i: i64| 16 * (i.min(klen - 1 - i) + 1); // CreateGaussianBlurRow
+    let src = pixels(img);
+    by_rows(img.width, img.height, |y, row| {
+        let k = y as i64;
+        for x in 0..w {
+            let (mut n3, mut n4, mut n5, mut n6, mut n7, mut n8) = (0i64, 0, 0, 0, 0, 0);
+            for l in 0..klen {
+                let sx = x + l - rad;
+                if sx < 0 || sx >= w {
+                    continue; // genuine classic OnRender: OOB columns skipped (renormalised)
+                }
+                let (mut c7, mut c6, mut c5, mut c4, mut c3, mut c2) = (0i64, 0, 0, 0, 0, 0);
+                for m in 0..klen {
+                    let sy = k + m - rad;
+                    if sy < 0 || sy >= h {
+                        continue; // rows (inner m-loop) skip OOB at both top and bottom
+                    }
+                    let p = src[(sy * w + sx) as usize]; // [R,G,B,A]
+                    let (rr, gg, bb, aa) = (p[0] as i64, p[1] as i64, p[2] as i64, p[3] as i64);
+                    let wm = wt(m);
+                    c7 += wm; // plain weight
+                    c5 += wm * aa; // weighted alpha
+                    let wmp = wm * (aa + (aa >> 7)); // premultiplied-scaled weight
+                    c6 += wmp;
+                    c4 += wmp * bb;
+                    c3 += wmp * gg;
+                    c2 += wmp * rr;
+                }
+                let wl = wt(l);
+                n3 += wl * c7;
+                n4 += wl * c6;
+                n5 += wl * c5;
+                n6 += wl * c4;
+                n7 += wl * c3;
+                n8 += wl * c2;
+            }
+            // The genuine renderer computes each ROI rect's first column with a full double-loop that
+            // truncates, then SLIDES for the rest (which round half up). With tile/selection ROIs the
+            // first column sits at each rect's left; with no ROIs (whole-image / tests) only x==0 does.
+            let first_col = if rois.is_empty() {
+                x == 0
+            } else {
+                rois.iter()
+                    .any(|rr| rr.contains(x as i32, k as i32) && rr.x as i64 == x)
+            };
+            let half = if first_col { 0 } else { 1 };
+            let rnd = |num: i64, den: i64| ((num + half * (den / 2)) / den) as u8;
+            row[x as usize] = if n3 == 0 || n4 == 0 {
+                [0, 0, 0, 0]
+            } else {
+                [rnd(n8, n4), rnd(n7, n4), rnd(n6, n4), rnd(n5, n3)]
+            };
+        }
+    })
 }
 
 fn tent_blur(img: &ImageData, r: u32, clamp: bool) -> ImageData {
@@ -215,17 +284,20 @@ fn slide<S>(
     }
 }
 
-/// artistic-oil-painting-plus.md "Median" (common.md §5.9): per channel over the `disc_offsets(r)`
-/// window cut at the canvas, with n pixels and k = ⌊n·p/100⌋, one more than the k-th smallest
-/// value (capped at 255), or the smallest when k = 0. The spec's "alpha is exactly 255 when every
-/// window pixel is opaque" follows from the cap. Sliding 256-bin histograms.
-// quirk(bb): artistic-oil-painting-plus.md "Median" (+1)
-// spec-question: Q10 Classic Median "k-th smallest"
+/// Classic Median = genuine PDN `MedianEffect.Apply` = `GetPercentile(percentile/100)` over the
+/// `disc_offsets(r)` window: the genuine `percentile_filter`, NOT the old rank_filter "+1" rule
+/// (which gave median-of-constant = constant+1 — a bug vs PDN). Verified byte-exact via the
+/// SharpenEffect oracle (its GetPercentile component) against PDN 5.1.12.
 pub fn median(img: &ImageData, r: u32, percentile: u32) -> ImageData {
-    rank_filter(img, r, percentile, MEDIAN_RANK_BASE)
+    percentile_filter(img, r, percentile as f32 / 100.0)
 }
 
-fn rank_filter(img: &ImageData, r: u32, percentile: u32, base: usize) -> ImageData {
+/// Genuine `LocalHistogramEffectLegacy.GetPercentile(p)` over the `disc_offsets(r)` window (same
+/// window/area/edge-clamp): per channel, the first bin whose cumulative count reaches `⌊area·p⌋`
+/// (skipping leading empty bins; no +1). Alpha is 255 when every window pixel is opaque, else the
+/// same walk. This is SharpenEffect/MedianEffect's exact reference — distinct from `rank_filter`'s
+/// Classic-Median "+1" rule. `p` in [0,1].
+pub fn percentile_filter(img: &ImageData, r: u32, p: f32) -> ImageData {
     let disc = disc_offsets(r);
     let half: Vec<i32> = (-(r as i32)..=r as i32)
         .map(|dy| {
@@ -238,24 +310,30 @@ fn rank_filter(img: &ImageData, r: u32, percentile: u32, base: usize) -> ImageDa
         .collect();
     by_rows(img.width, img.height, |y, row| {
         let mut s = ([[0i32; 256]; 4], 0i32);
-        let add = |(hist, n): &mut ([[i32; 256]; 4], i32), p: Px, sign| {
-            (0..4).for_each(|c| hist[c][p[c] as usize] += sign);
+        let add = |(hist, n): &mut ([[i32; 256]; 4], i32), px: Px, sign| {
+            (0..4).for_each(|c| hist[c][px[c] as usize] += sign);
             *n += sign;
         };
         slide(img, y, &half, &mut s, add, |(hist, n), x| {
-            let n = *n as usize;
-            let k = n * percentile as usize / 100;
-            let target = (k + 1).saturating_sub(base).clamp(1, n);
+            let n = *n;
+            let num = (n as f32 * p) as i32; // (int)((float)area * percentile)
             row[x] = std::array::from_fn(|c| {
-                let mut seen = 0;
-                let v = hist[c]
-                    .iter()
-                    .position(|&m| {
-                        seen += m as usize;
-                        seen >= target
-                    })
-                    .unwrap_or(255) as u8;
-                if k >= 1 { v.saturating_add(1) } else { v }
+                if c == 3 && hist[3][255] == n {
+                    return 255; // alpha: 255 when every window pixel is opaque
+                }
+                let h = &hist[c];
+                let mut i = 0usize;
+                while i < 255 && h[i] == 0 {
+                    i += 1;
+                }
+                let mut acc = 0i32;
+                while i < 255 && acc < num {
+                    acc += h[i];
+                    if acc < num {
+                        i += 1;
+                    }
+                }
+                i as u8
             });
         });
     })
@@ -286,8 +364,8 @@ pub fn oil_painting(img: &ImageData, brush: u32, coarseness: u32) -> ImageData {
 /// intensity-desaturated input (bottom).
 // approximation: Paint.NET 4.2 Pencil Sketch alpha propagation is inferred from the
 // classic blur and Color Dodge path (artistic-pastel.md Notes / uncertainties).
-pub fn pencil_sketch(img: &ImageData, tip: u32, range: i32) -> ImageData {
-    let top = brightness_contrast(&gaussian_blur(img, tip), range, -range);
+pub fn pencil_sketch(img: &ImageData, tip: u32, range: i32, rois: &[IntRect]) -> ImageData {
+    let top = brightness_contrast(&gaussian_blur_legacy(img, tip, rois), range, -range);
     let data = pixels(img)
         .iter()
         .zip(pixels(&top))
@@ -335,7 +413,11 @@ pub fn pastel_recolour(p: Px) -> Px {
         (if h < 0.0 { h + 360.0 } else { h }, d / mx)
     };
     let h = 10.0 * (h / 10.0).round_ties_even() % 360.0;
-    let v = (p[0].max(p[1]).max(p[2]) as f64 / 255.0 / 3.0 + PASTEL_VALUE_OFFSET).min(1.0);
+    // Genuine OilPaintingPlus/Pastel recolour does V = max*100.0/300.0 + offset in exactly this f64
+    // op-order (outV *= 100; outV /= num3*10 with num3=30); v/3.0 is 1 ULP off and flips ±1 at the
+    // x*255 truncation boundary.
+    let v =
+        ((p[0].max(p[1]).max(p[2]) as f64 / 255.0) * 100.0 / 300.0 + PASTEL_VALUE_OFFSET).min(1.0);
     let [r, g, b] = hsv_to_unit_rgb(h, s, v).map(|x| (x * 255.0) as u8);
     [r, g, b, p[3]]
 }
@@ -529,14 +611,16 @@ mod tests {
     /// all-opaque window keeps alpha 255.
     #[test]
     fn classic_median_quirks() {
+        // genuine MedianEffect (GetPercentile, no +1): median of a constant window is the constant.
         assert_eq!(
             px(&median(&solid(9, 9, [100, 50, 254, 255]), 2, 50), 4, 4),
-            [101, 51, 255, 255]
+            [100, 50, 254, 255]
         );
         assert_eq!(
             px(&median(&solid(9, 9, [0, 0, 0, 0]), 2, 50), 4, 4),
-            [1, 1, 1, 1]
+            [0, 0, 0, 0]
         );
+        assert_eq!(disc_offsets(0), [(0, 0)]);
         assert_eq!(disc_offsets(1).len(), 9);
         assert_eq!(disc_offsets(2).len(), 21);
     }
@@ -595,14 +679,14 @@ mod tests {
         assert_eq!(px(&oil_painting(&two, 1, 50), 1, 0), [0, 0, 0, 255]);
         assert_eq!(
             px(
-                &pencil_sketch(&solid(9, 9, [128, 128, 128, 255]), 2, 0),
+                &pencil_sketch(&solid(9, 9, [128, 128, 128, 255]), 2, 0, &[]),
                 4,
                 4
             ),
             [255, 255, 255, 255]
         );
         assert_eq!(
-            px(&pencil_sketch(&solid(9, 9, [0, 0, 0, 0]), 2, 0), 4, 4),
+            px(&pencil_sketch(&solid(9, 9, [0, 0, 0, 0]), 2, 0, &[]), 4, 4),
             [0, 0, 0, 0]
         );
     }
@@ -726,15 +810,13 @@ mod tests {
             let m = median(&img, r, p);
             for (x, y) in (0..h).flat_map(|y| (0..w).map(move |x| (x, y))) {
                 let win = window(x, y, &disc_offsets(r));
-                let k = win.len() * p as usize / 100;
+                // genuine GetPercentile: num = (int)(area·p/100); the value whose cumulative count
+                // reaches num (= v[num-1] on the sorted window), smallest when num == 0. No +1.
+                let k = (win.len() as f32 * (p as f32 / 100.0)) as usize;
                 let want: Px = std::array::from_fn(|c| {
                     let mut v: Vec<u8> = win.iter().map(|q| q[c]).collect();
                     v.sort();
-                    if k == 0 {
-                        v[0]
-                    } else {
-                        v[k - 1].saturating_add(1)
-                    }
+                    if k == 0 { v[0] } else { v[k - 1] }
                 });
                 assert_eq!(px(&m, x, y), want, "median r {r} p {p} at ({x}, {y})");
             }
@@ -761,20 +843,6 @@ mod tests {
         }
     }
 
-    /// Q10's other reading (`MEDIAN_RANK_BASE` 0) takes v[k] + 1, and k = n then clamps to the
-    /// largest value.
-    #[test]
-    fn classic_median_rank_conventions() {
-        let ramp = from_fn(3, 3, |x, y| {
-            let v = (10 * (3 * y + x)) as u8;
-            [v, v, v, 255]
-        });
-        assert_eq!(px(&rank_filter(&ramp, 1, 50, 1), 1, 1)[0], 31);
-        assert_eq!(px(&rank_filter(&ramp, 1, 50, 0), 1, 1)[0], 41);
-        assert_eq!(px(&rank_filter(&ramp, 1, 100, 0), 1, 1)[0], 81);
-        assert_eq!(disc_offsets(0), [(0, 0)]);
-    }
-
     /// Ties in the oil painting's buckets go to the lowest bucket; the bucket rounds I·c/255 to
     /// nearest (I 91 at c 7 is 2.498 → bucket 2, joining grey 60 against grey 100).
     #[test]
@@ -797,9 +865,9 @@ mod tests {
     /// (black gives an all-white sketch, so no pencil).
     #[test]
     fn pencil_sketch_of_flat_areas() {
-        let s = pencil_sketch(&solid(9, 9, [129, 129, 129, 255]), 3, 6);
+        let s = pencil_sketch(&solid(9, 9, [129, 129, 129, 255]), 3, 6, &[]);
         assert_eq!(px(&s, 4, 4), [245, 245, 245, 255]);
-        let s = pencil_sketch(&solid(9, 9, [0, 0, 0, 255]), 2, 0);
+        let s = pencil_sketch(&solid(9, 9, [0, 0, 0, 255]), 2, 0, &[]);
         assert!(s.data.chunks(4).all(|p| p == [255; 4]));
     }
 
@@ -808,7 +876,7 @@ mod tests {
     #[test]
     fn pencil_sketch_draws_edges() {
         let half = from_fn(16, 4, |x, _| if x < 8 { [0, 0, 0, 255] } else { [255; 4] });
-        let s = pencil_sketch(&half, 2, 0);
+        let s = pencil_sketch(&half, 2, 0, &[]);
         let row: Vec<u8> = (0..16).map(|x| px(&s, x, 2)[0]).collect();
         let want: Vec<u8> = (0..16)
             .map(|x| if x == 6 || x == 7 { 0 } else { 255 })
@@ -822,7 +890,9 @@ mod tests {
     fn pastel_recolour_ties_and_wrap() {
         assert_eq!(pastel_recolour([252, 105, 0, 255]), [255, 84, 0, 255]);
         assert_eq!(pastel_recolour([255, 0, 10, 255]), [255, 0, 0, 255]);
-        assert_eq!(pastel_recolour([0, 77, 132, 255]), [0, 165, 248, 255]);
+        // A 5° hue tie (20.5): genuine EvanRGBtoHSV works in c/255, so round_ties_even lands on 210°
+        // not 200° — byte-oracle'd against genuine OilPaintingPlus/Pastel (PASTEL_HSV_FROM_BYTES=false).
+        assert_eq!(pastel_recolour([0, 77, 132, 255]), [0, 124, 248, 255]);
         // A negative hue is wrapped into 0…360 before the sector maths (#080506: −20° → 340°;
         // sector −1 instead would give blue 155).
         assert_eq!(pastel_recolour([8, 5, 6, 255]), [206, 129, 154, 255]);
@@ -837,7 +907,7 @@ mod tests {
                 gaussian_blur(&img, 7),
                 median(&img, 7, 50),
                 oil_painting(&img, 7, 50),
-                pencil_sketch(&img, 7, 20),
+                pencil_sketch(&img, 7, 20, &[]),
                 brightness_contrast(&img, -100, 100),
             ] {
                 assert_eq!(

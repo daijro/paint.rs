@@ -42,6 +42,37 @@ impl Mask {
         }
     }
 
+    /// Per-row runs of nonzero coverage, in layer coords — the bi-level selection coverage genuine
+    /// renders over (`Selection.GetCachedClippingMaskBiLevelCoverageScans`): a pixel is in it iff any
+    /// sub-sample is covered (alpha > 0), i.e. genuine's `UnscaleRectBy4` of the 4× scans. These are
+    /// the effect's render scans — fed to the square-tile schedule so ROI-dependent effects truncate
+    /// at each tile/run left exactly as the real app does under a selection.
+    pub fn coverage_scans(&self) -> Vec<IntRect> {
+        let w = self.rect.w as usize;
+        let mut out = vec![];
+        for row in 0..self.rect.h as i32 {
+            let base = row as usize * w;
+            let mut x = 0usize;
+            while x < w {
+                if self.data[base + x] != 0 {
+                    let start = x;
+                    while x < w && self.data[base + x] != 0 {
+                        x += 1;
+                    }
+                    out.push(IntRect::new(
+                        self.rect.x + start as i32,
+                        self.rect.y + row,
+                        (x - start) as u32,
+                        1,
+                    ));
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        out
+    }
+
     /// 0 outside `rect`.
     pub fn get(&self, x: i32, y: i32) -> u8 {
         if !self.rect.contains(x, y) {

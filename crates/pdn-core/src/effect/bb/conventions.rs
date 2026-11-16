@@ -78,11 +78,11 @@ pub const APPLY_MASK_STORED_TRANSPARENT_COLOUR: bool = true;
 /// The classic Gaussian's off-canvas taps are left out with the weights renormalised (false) or
 /// read from the nearest edge pixel (true).
 pub const CLASSIC_BLUR_CLAMP_EDGES: bool = false;
-// spec-question: Q21 Pastel recolour hue arithmetic
-/// The pastel recolour's hue and saturation come from the 0–255 channel values (true) or from
-/// c/255 (false). The two differ on 133 455 of the 16.8 M colours (5° ties and truncation
-/// edges), none of them in the spec's samples.
-pub const PASTEL_HSV_FROM_BYTES: bool = true;
+// Resolved (2026-11-01) by byte-oracle vs genuine OilPaintingPlus/Pastel: genuine EvanRGBtoHSV works
+/// in normalized c/255.0, so hue and saturation come from c/255 (false), NOT the 0–255 bytes. The two
+/// differ by ULPs on ~133 455 colours (5° ties and truncation edges); `true` left OilPaintingPlus/
+/// Pastel ±1 off genuine. (was spec-question Q21.)
+pub const PASTEL_HSV_FROM_BYTES: bool = false;
 // spec-question: Q2 .NET 9+ byte conversion in the anti-alias pass
 /// The staircase pass's byte conversions as Paint.NET on .NET 9+ runs them. common.md §5.4 infers that
 /// .NET 9 saturates only the double → int32 step, and the int32 → byte step still keeps the low 8

@@ -2,8 +2,10 @@
 //! Port of: js/src/engine/document/effect/BitmapEffectEngine.js (`EFFECTS` entry dropShadowEffect:
 //! id, icon and control keys only).
 
-use super::blur::gaussian;
-use super::surface::{Alpha, Edge, EffectSurface, Space};
+use super::graph::{
+    CLSID_D2D1Composite, CLSID_D2D1Shadow, CLSID_D2D12DAffineTransform, Graph, Prop, QUALITY,
+};
+use super::surface::{Alpha, EffectSurface, Space, premultiply, unpremultiply};
 use super::{
     Category, ColorDefault, Control, EffectDef, EffectEnv, EffectKind, RenderInfo, Values,
     color_value, flag, num, range,
@@ -52,23 +54,39 @@ pub fn shadow_offset(distance: f64, angle_deg: f64) -> [f64; 2] {
     [phi.cos() * distance, phi.sin() * distance]
 }
 
-/// §2.1 in linear premultiplied light: P = (lin(colour)·opacity, opacity), σ = radius/3.
+/// Genuine `PdnDropShadowEffect` (decompiled, PaintDotNet.Effects.Gpu): the GPU graph
+///
+///   src → ConvertAlpha(Premul≡no-op) ─┬───────────────────────────────────────────────┐
+///                                      └ Shadow{σ, color, Quality} → AffineTransform2D  │
+///                                        {translate(dx,dy), Linear, Soft} → Composite(SourceOver, ┘)
+///                                      → ConvertAlpha(Premul≡no-op)  [shadowOnly: output the affine]
+///
+/// in a LINEAR working space (the color is linearized: `LinearColor.op_Implicit((SrgbColor)color)`),
+/// every intermediate at the 8bpc-premultiplied device default precision. σ = `StandardDeviation
+/// .FromRadius(blur)` = blur/3 (f32); the offset is `Translation(cos(−angle)·d, sin(−angle)·d)` with
+/// the cos/sin in f64 then the matrix cast to f32. Opacity is the shadow color's alpha.
 fn drop_shadow(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
-    let sigma = num(v, "blur").clamp(0.0, 100.0) / 3.0;
-    let offset = shadow_offset(
-        num(v, "distance").clamp(0.0, 100.0),
-        num(v, "angle").clamp(-180.0, 180.0),
-    );
+    let sigma = (num(v, "blur").clamp(0.0, 100.0) as f32) / 3.0_f32; // FromRadius, f32
+    let dist = num(v, "distance").clamp(0.0, 100.0);
+    let phi = -num(v, "angle").clamp(-180.0, 180.0) * PI / 180.0;
+    let (dx, dy) = ((phi.cos() * dist) as f32, (phi.sin() * dist) as f32); // Matrix3x2Float
     let opacity = num(v, "opacity").clamp(0.0, 1.0) as f32;
     let c = color_value(v, "color", env);
-    let lin = |k: u8| SRGB8_TO_LINEAR[k as usize] * opacity;
-    let p = [lin(c[0]), lin(c[1]), lin(c[2]), opacity];
-    drop_shadow_with(src, sigma, offset, p, flag(v, "shadowOnly"))
+    let lin = |k: u8| SRGB8_TO_LINEAR[k as usize];
+    let color_lin = [lin(c[0]), lin(c[1]), lin(c[2])];
+    let colour = premultiply([color_lin[0], color_lin[1], color_lin[2], opacity]);
+    drop_shadow_with(
+        src,
+        sigma as f64,
+        [dx as f64, dy as f64],
+        colour,
+        flag(v, "shadowOnly"),
+    )
 }
 
-/// §2.1 on premultiplied `src`: S = a·P with P = `colour` (premultiplied in the working space),
-/// blurred (σ, Soft), translated by `offset` (bilinear, Soft), then `src` over it unless
-/// `shadow_only`.
+/// Drop Shadow's graph on premultiplied `src`: d2d's Shadow of colour `colour` (premultiplied in
+/// the working space) at `sigma` (Quality), translated by `offset`, with `src` composited over it
+/// unless `shadow_only`.
 pub fn drop_shadow_with(
     src: &EffectSurface,
     sigma: f64,
@@ -76,28 +94,24 @@ pub fn drop_shadow_with(
     colour: [f32; 4],
     shadow_only: bool,
 ) -> EffectSurface {
-    // approximation: D2D GaussianBlur "Quality" and AffineTransform2D (effects-2.md §6 item 7; B-E14)
-    let [ox, oy] = offset;
-    // The Soft border grows the blurred image past the layer (§2.0 item 7), and the translation
-    // reads up to ⌈|offset|⌉ + 1 px outside it, so the shadow is built on that margin.
-    let m = ox.abs().max(oy.abs()).ceil() as i32 + 1;
-    // ponytail: blurs all four channels of S = a·P; blur alpha alone and scale by P afterwards
-    // if radius-100 shadows need to be faster.
-    let shadow = EffectSurface::from_fn(src.w + 2 * m as u32, src.h + 2 * m as u32, |x, y| {
-        let a = src.fetch(x as i32 - m, y as i32 - m, Edge::Transparent)[3];
-        colour.map(|c| a * c)
-    });
-    let shadow = gaussian(&shadow, sigma, Edge::Transparent);
-    let (ox, oy) = (ox as f32, oy as f32);
-    EffectSurface::from_fn(src.w, src.h, |x, y| {
-        let (sx, sy) = (x as f32 + 0.5 - ox, y as f32 + 0.5 - oy);
-        let sh = shadow.bilinear(sx + m as f32, sy + m as f32, Edge::Transparent);
-        if shadow_only {
-            return sh;
-        }
-        let s = src.at(x, y);
-        std::array::from_fn(|i| s[i] + sh[i] * (1.0 - s[3]))
-    })
+    let (g, src) = Graph::new(src, Alpha::Premultiplied);
+    // Shadow.Color is straight; the effect premultiplies it by the input alpha.
+    let shadow = [
+        (0, Prop::F32(sigma as f32)),
+        (1, Prop::V4(unpremultiply(colour))),
+        (2, Prop::U32(QUALITY)),
+    ];
+    let shadow = g.fx(CLSID_D2D1Shadow, &shadow, [src.clone()]);
+    let [dx, dy] = offset.map(|o| o as f32);
+    let moved = [(2, Prop::M32([1.0, 0.0, 0.0, 1.0, dx, dy]))];
+    let moved = g.fx(CLSID_D2D12DAffineTransform, &moved, [shadow]);
+    let out = if shadow_only {
+        moved
+    } else {
+        // SourceOver: the source (input 1) over the translated shadow (input 0).
+        g.fx(CLSID_D2D1Composite, &[(0, Prop::U32(0))], [moved, src])
+    };
+    g.finish(&out, Alpha::Premultiplied)
 }
 
 #[cfg(test)]
@@ -134,8 +148,9 @@ mod tests {
 
     // ---- Vectors from an independent f64 Python port of §2.1 (Soft border = unbounded zero padding). ----
 
-    /// Step 1 linearizes the colour: grey #808080 (linear 0.2158) under white α128 composites to
-    /// 229.42; using the sRGB value 0.502 as if it were linear gives 239.20.
+    /// Step 1 linearizes the colour (`LinearColor.op_Implicit((SrgbColor)color)`): grey #808080
+    /// (linear 0.2158) under white α128 composites to ~230 through the 8bpc premultiplied nodes;
+    /// using the sRGB value 0.502 as if it were linear gives 239.20. Byte-exact vs the genuine graph.
     #[test]
     fn drop_shadow_colour_is_linearized() {
         let out = run(
@@ -146,9 +161,9 @@ mod tests {
         assert_eq!(px(&out, 0, 0), [229, 229, 229, 176]);
     }
 
-    /// Step 4: the shadow at p is the blurred source at p − (cos φ·d, sin φ·d), φ = −angle:
-    /// angle 90 moves it up (row 0 for a dot at row 2), angle 0 right; d = 0.5 splits the dot's
-    /// 0.75 over two columns (95.625 → 96 each).
+    /// Step 4: the shadow at p is the translated blurred source at p − (cos φ·d, sin φ·d), φ = −angle
+    /// (the AffineTransform2D, Linear+Soft): angle 90 moves it up (row 0 for a dot at row 2), angle 0
+    /// right; d = 0.5 splits the dot's 0.75 over two columns (the Q8 resampler gives 95 each).
     #[test]
     fn drop_shadow_offset_direction() {
         let dot = from_fn(
@@ -178,10 +193,10 @@ mod tests {
         );
     }
 
-    /// Steps 3–4 with the Soft border: an opaque column at x = 0 of a 9×5 layer, radius 6 (σ 2),
-    /// distance 3 to the right. The blur grows past the layer, so x = 0..2 show the halo the
-    /// translation brings back in (α 9.95, 18.14, 26.00; a blur clipped to the layer gives 0), and
-    /// the peak at x = 3 is 29.31 (σ = radius, not radius/3, gives 4.09).
+    /// The D2D Shadow blur's Soft (transparent) border grows past the layer: an opaque column at
+    /// x = 0 of a 9×5 layer, radius 6 (σ 2, Quality), distance 3 to the right. The halo the affine
+    /// translation brings back in matches the genuine graph, in float (a blur clipped to the layer
+    /// gives 0 at x = 0..2; σ = radius, not radius/3, would peak far lower).
     #[test]
     fn drop_shadow_blur_grows_past_the_layer() {
         let col = from_fn(9, 5, |x, _| if x == 0 { [255; 4] } else { [0; 4] });
@@ -191,9 +206,9 @@ mod tests {
             &col,
         );
         let alpha: Vec<u8> = (0..5).map(|x| px(&out, x, 2)[3]).collect();
-        assert_eq!(alpha, [10, 18, 26, 29, 26]);
+        assert_eq!(alpha, [10, 19, 27, 31, 27]);
         // Soft pads with transparent black: an opaque 9×9 layer, radius 6, distance 0 fades at its
-        // corner, edge and centre to α 68, 111, 181 (a Mirror border gives 95, 132, 182).
+        // corner, edge and centre (a Mirror/clamp border would fade much less).
         let opaque = run(
             "dropShadowEffect",
             json!({"blur": 6, "distance": 0, "shadowOnly": true}),
@@ -201,7 +216,7 @@ mod tests {
         );
         assert_eq!(
             [(0, 0), (4, 0), (4, 4)].map(|(x, y)| px(&opaque, x, y)[3]),
-            [68, 111, 181]
+            [69, 113, 185]
         );
     }
 

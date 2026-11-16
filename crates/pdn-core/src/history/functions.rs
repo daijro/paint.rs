@@ -227,13 +227,14 @@ pub fn invert_selection(
 
 /// The Overwrite blend of `color` through the clipping mask over the active layer (§2.4: an
 /// anti-aliased edge is attenuated once): a Bitmap memento of the selection's integer bounds ∩ the
-/// document, or `None` for an empty selection or no layer.
+/// document, or `None` for an empty selection, no layer, or (with `skip_unchanged`) no pixel changed.
 fn blend_selection(
     target: &mut UndoTarget,
     color: Px,
     quality: SelectionQuality,
     name: &str,
     icon: &str,
+    skip_unchanged: bool,
 ) -> Option<HistoryMemento> {
     if target.selection.is_empty() {
         return None;
@@ -260,12 +261,18 @@ fn blend_selection(
     let surface = &mut d.layers.get_at_mut(index)?.surface;
     let w = surface.width() as usize;
     let data = surface.data_mut();
+    let mut changed = false;
     for y in r.y..r.bottom() {
         for x in r.x..r.right() {
             let i = (y as usize * w + x as usize) * 4;
             let p: Px = data[i..i + 4].try_into().expect("4 bytes");
-            data[i..i + 4].copy_from_slice(&ops::blend(p, color, mask.get(x, y)));
+            let q = ops::blend(p, color, mask.get(x, y));
+            changed |= q != p;
+            data[i..i + 4].copy_from_slice(&q);
         }
+    }
+    if skip_unchanged && !changed {
+        return None;
     }
     d.invalidate(Some(vec![rect]));
     Some(memento)
@@ -284,41 +291,47 @@ pub fn fill_selection(
         quality,
         &i18n::t("menu.edit.fillSelection.text"),
         "assets/icons/menu_edit_fill_selection_icon.png",
+        false,
     )
 }
 
-/// §2.6 Erase Selection: the fill with (0, 0, 0, 0) (edge α′ = FS(255 − m, α), colour kept), then
-/// deselect; one compound of the Bitmap and Selection mementos, "Erase Selection" (the Selection
-/// memento alone when no pixel lies under the selection). Nothing on an empty selection.
+/// §2.6 Erase Selection: the fill with (0, 0, 0, 0) (edge α′ = FS(255 − m, α), colour kept), one
+/// Bitmap memento named "Erase Selection". Paint.NET deselects afterwards; paint.rs keeps the
+/// selection (owner request), so the outline stays for the next command and undo only restores
+/// pixels. Nothing on an empty selection, or when no pixel changes (none under it, or all already
+/// clear).
 pub fn erase_selection(
     target: &mut UndoTarget,
     quality: SelectionQuality,
 ) -> Option<HistoryMemento> {
+    blend_selection(
+        target,
+        [0, 0, 0, 0],
+        quality,
+        &i18n::t("eraseSelectionAction.name"),
+        "assets/icons/menu_edit_erase_selection_icon.png",
+        true,
+    )
+}
+
+/// selection-and-move.md §2.6 "Cut": the erase, then deselect, as Paint.NET's Cut does; one
+/// compound named "Cut" of the Bitmap and Selection mementos (the Selection memento alone when no
+/// pixel lies under the selection). No entry on an empty selection. The caller copies first
+/// (`action::run`).
+pub fn cut(target: &mut UndoTarget, quality: SelectionQuality) -> Option<HistoryMemento> {
     if target.selection.is_empty() {
         return None;
     }
-    let name = i18n::t("eraseSelectionAction.name");
-    let icon = "assets/icons/menu_edit_erase_selection_icon.png";
+    let name = i18n::t("cutAction.name");
+    let icon = "assets/icons/menu_edit_cut_icon.png";
     let selection =
         HistoryMemento::new(&name, icon, MementoKind::Selection(target.selection.save()));
-    let bitmap = blend_selection(target, [0, 0, 0, 0], quality, &name, icon);
+    let erase = erase_selection(target, quality);
     target.selection.reset();
-    Some(match bitmap {
-        Some(bitmap) => {
-            HistoryMemento::new(&name, icon, MementoKind::Compound(vec![bitmap, selection]))
-        }
-        None => selection,
-    })
-}
-
-/// selection-and-move.md §2.6 "Cut": Erase Selection wrapped in a compound named "Cut"; no entry
-/// on an empty selection. The caller copies first (`action::run`).
-pub fn cut(target: &mut UndoTarget, quality: SelectionQuality) -> Option<HistoryMemento> {
-    let erase = erase_selection(target, quality)?;
     Some(HistoryMemento::new(
-        &i18n::t("cutAction.name"),
-        "assets/icons/menu_edit_cut_icon.png",
-        MementoKind::Compound(vec![erase]),
+        &name,
+        icon,
+        MementoKind::Compound(erase.into_iter().chain([selection]).collect()),
     ))
 }
 

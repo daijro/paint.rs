@@ -575,6 +575,7 @@ impl WarpDialog {
             ui,
             &mut self.slider,
             key,
+            label,
             range,
             &mut self.values,
             bar,

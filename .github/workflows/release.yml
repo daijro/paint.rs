@@ -36,11 +36,11 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS on Apple Silicon (arm64 .tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage, .deb and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS on Apple Silicon (arm64 .tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
 
           The plain x86-64 downloads run on any x86-64 CPU. The -avx2 ones are faster but need AVX2 (most Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If unsure, take the plain one.
 
-          The Linux .AppImage is the whole app in one file: make it executable (chmod +x) and run it. It needs FUSE, which most desktops have. Without FUSE, run it with --appimage-extract-and-run. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later); on Alpine 3.22 or later and other musl systems take the -musl tarball, which needs libstdc++ (apk add libstdc++). The FreeBSD tarball runs on FreeBSD 14.4 or later with an X11 or Wayland desktop.
+          The Linux .AppImage is the whole app in one file: make it executable (chmod +x) and run it. It needs FUSE, which most desktops have. Without FUSE, run it with --appimage-extract-and-run. On Debian, Ubuntu and their derivatives, install the .deb with sudo apt install ./<the .deb file>, which also adds the launcher entry. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later); on Alpine 3.22 or later and other musl systems take the -musl tarball, which needs libstdc++ (apk add libstdc++). The FreeBSD tarball runs on FreeBSD 14.4 or later with an X11 or Wayland desktop.
 
           The macOS and Windows builds are unsigned and not notarized: macOS Gatekeeper and Windows SmartScreen will warn on first launch."
 
@@ -86,13 +86,33 @@ jobs:
       - name: Install native build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake clang pkg-config meson ninja-build nasm libxkbcommon-dev libwayland-dev libgtk-3-dev python3.11
+          sudo apt-get install -y build-essential cmake clang pkg-config meson ninja-build nasm libxkbcommon-dev libwayland-dev libgtk-3-dev python3.11 \
+            autoconf automake libtool libcairo2-dev libpango1.0-dev libpng-dev libfontconfig1-dev
       - name: Build dav1d
         run: sh scripts/ci/build-dav1d.sh "$RUNNER_TEMP"
+      # The .NET plugin host's GDI+ (libgdiplus and System.Drawing.Common 6.0), which publish.sh stages.
+      - name: Build GDI+
+        run: sh scripts/ci/build-gdiplus.sh "$RUNNER_TEMP"
+      # opend2d's Direct2D/DirectWrite/WIC drop-ins, which publish.sh builds and ships beside the host.
+      - name: Fetch opend2d
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs
         env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
+      # The .NET plugin host (PdnBridge + the replacement assemblies), self-contained for this RID,
+      # into $DIST/pdn beside the binary; paintrs finds it there (platform/plugins.rs::bridge_dir).
+      # package-tarball.sh tars the whole $DIST, so publishing before it includes pdn/.
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        # .NET 11: the plugin host's runtime (Paint.NET 5.2 plugins target net11). 'preview' until 11.0 is GA.
+        with: {dotnet-version: '11.0.x', dotnet-quality: 'preview'}
+      # publish.sh writes pdn/notices/ with Python 3.11 (tomllib); the runner's python3 is 3.10.
+      - name: Publish the .NET plugin host
+        env: {PYTHON: python3.11}
+        run: |
+          mkdir -p "$DIST"
+          rid=$([ '${{ matrix.arch }}' = x86_64 ] && echo x64 || echo arm64)
+          sh pdn-host/bridge/publish.sh "$DIST/pdn" "linux-$rid"
       # scripts/linux-install-desktop.sh in it adds the launcher entry and the Wayland taskbar icon. The
       # notices script needs Python 3.11 (tomllib); the runner's python3 is 3.10.
       - name: Package the tarball
@@ -108,6 +128,7 @@ jobs:
           mkdir -p AppDir/usr/bin "$share/applications" "$share/icons/hicolor/scalable/apps" \
             "$share/icons/hicolor/512x512@2/apps" "$share/mime/packages" "$share/doc/paint.rs" "$share/paint.rs"
           cp target/dist/paintrs AppDir/usr/bin/
+          cp -R "$DIST/pdn" AppDir/usr/bin/   # the .NET plugin host, beside the binary
           ln -s usr/bin/paintrs AppDir/AppRun
           cp packaging/linux/paint-rs.desktop AppDir/
           cp packaging/linux/paint-rs.desktop "$share/applications/"
@@ -145,6 +166,11 @@ jobs:
             --runtime-file "$RUNNER_TEMP/runtime" AppDir "$DIST.AppImage"
       - name: Upload the AppImage
         run: gh release upload "$TAG" "$DIST.AppImage" --clobber --repo "$GITHUB_REPOSITORY"
+      # The AppDir's files again, installed under /usr, for Debian, Ubuntu and their derivatives.
+      - name: Make and upload the .deb
+        run: |
+          sh scripts/ci/package-deb.sh AppDir "$DIST.deb"
+          gh release upload "$TAG" "$DIST.deb" --clobber --repo "$GITHUB_REPOSITORY"
 
   windows:
     name: windows ${{ matrix.arch }}${{ matrix.suffix }}
@@ -161,12 +187,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        # .NET 11: the plugin host's runtime (Paint.NET 5.2 plugins target net11). 'preview' until 11.0 is GA.
+        with: {dotnet-version: '11.0.x', dotnet-quality: 'preview'}
       - name: Install Rust
         run: rustup toolchain install 1.99.1 --profile minimal --target ${{ matrix.target }}
       - name: Install native dav1d and pkgconf
         shell: pwsh
+        # dav1d from scripts/ci/vcpkg-ports: vcpkg's 1.5.4 plus upstream's fix for MSVC 19.52 (the Arm runner's).
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install dav1d:${{ matrix.triplet }} pkgconf:${{ matrix.triplet }}
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install --overlay-ports="$env:GITHUB_WORKSPACE/scripts/ci/vcpkg-ports" dav1d:${{ matrix.triplet }} pkgconf:${{ matrix.triplet }}
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}"
           "PKG_CONFIG=$prefix/tools/pkgconf/pkgconf.exe" >> $env:GITHUB_ENV
@@ -182,6 +216,15 @@ jobs:
           $dir = "paint.rs-$env:TAG-windows-${{ matrix.arch }}${{ matrix.suffix }}"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target/${{ matrix.target }}/dist/paintrs.exe, LICENSE, LICENSE.md, NOTICE.md $dir
+          # The .NET plugin host, self-contained for this RID, into $dir/pdn beside paintrs.exe.
+          $rid = if ('${{ matrix.arch }}' -eq 'x86_64') { 'win-x64' } else { 'win-arm64' }
+          dotnet publish pdn-host/bridge/PdnBridge.csproj -c Release -m:1 --disable-build-servers -nodeReuse:false `
+            -r $rid --self-contained true -p:PublishTrimmed=false -o "$dir/pdn"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Its licence notices (the .NET runtime, the NuGet packages) into pdn/notices/. Windows ships
+          # no opend2d or GDI+: the host uses the system's Direct2D, DirectWrite and GDI+.
+          python pdn-host/bridge/collect-notices.py "$dir/pdn" --strict
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/bin/*dav1d*.dll" $dir
           New-Item -ItemType Directory "$dir/assets" | Out-Null
           Copy-Item -Recurse assets/font, assets/fonts "$dir/assets"
@@ -221,14 +264,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        # .NET 11: the plugin host's runtime (Paint.NET 5.2 plugins target net11). 'preview' until 11.0 is GA.
+        with: {dotnet-version: '11.0.x', dotnet-quality: 'preview'}
       - name: Install native build tools and Rust
         run: |
           test "$(uname -m)" = '${{ matrix.arch }}'
-          brew install meson ninja nasm pkgconf cmake
+          brew install meson ninja nasm pkgconf cmake autoconf automake libtool cairo pango dylibbundler
           rustup toolchain install 1.99.1 --profile minimal --target '${{ matrix.target }}'
       # R244: dav1d is linked statically, as on Linux. Homebrew's libdav1d.dylib would not be in the bundle.
       - name: Build dav1d
         run: sh scripts/ci/build-dav1d.sh "$RUNNER_TEMP"
+      # The .NET plugin host's GDI+ (libgdiplus and System.Drawing.Common 6.0), which publish.sh stages.
+      - name: Build GDI+
+        run: sh scripts/ci/build-gdiplus.sh "$RUNNER_TEMP"
+      - name: Fetch opend2d
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - run: cargo +1.99.1 build --locked --profile dist -p paintrs --target '${{ matrix.target }}'
         env: {RUSTFLAGS: '${{ matrix.rustflags }}'}
       - name: Package unsigned app and upload
@@ -237,6 +288,25 @@ jobs:
           dir="paint.rs-$TAG-macos-${{ matrix.arch }}${{ matrix.suffix }}"
           mkdir -p "$dir"
           sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/dist/paintrs' "$dir/paint.rs.app"
+          # The .NET plugin host, self-contained, beside the binary in the bundle.
+          pdn="$dir/paint.rs.app/Contents/MacOS/pdn"
+          sh pdn-host/bridge/publish.sh "$pdn" osx-${{ matrix.arch }}
+          # libgdiplus links Homebrew's cairo, pango and glib: carry them beside it, rewritten to
+          # @loader_path, so the bundle needs no Homebrew. They keep the runner's minimum macOS.
+          dylibbundler -of -b -x "$pdn/libgdiplus.dylib" -d "$pdn" -p @loader_path/ -s "$(brew --prefix)/lib"
+          if otool -L "$pdn"/*.dylib | grep -E '/opt/homebrew|/usr/local'; then
+            echo 'a plugin-host library above links one the bundle does not carry' >&2; exit 1; fi
+          # Their licences go with them: Homebrew keeps each formula's licence files in its keg.
+          for lib in "$pdn"/*.dylib; do
+            brewlib="$(brew --prefix)/lib/$(basename "$lib")"
+            [ -e "$brewlib" ] || continue   # not from Homebrew (opend2d, libgdiplus)
+            keg=$(cd "$(dirname "$(realpath "$brewlib")")/.." && pwd)   # Cellar/<formula>/<version>
+            notice="$pdn/notices/homebrew/$(basename "$(dirname "$keg")")-$(basename "$keg")"
+            mkdir -p "$notice"
+            find "$keg" -maxdepth 1 -type f \( -iname 'copying*' -o -iname 'licen[cs]e*' -o -iname 'notice*' -o -iname 'authors*' \) -exec cp {} "$notice/" \;
+            ls "$notice"/* >/dev/null 2>&1 || { echo "no licence file in $keg for $(basename "$lib")" >&2; exit 1; }
+            echo "- $(basename "$lib") (Homebrew $(basename "$(dirname "$keg")") $(basename "$keg"), in homebrew/)" >> "$pdn/notices/README.md"
+          done
           plutil -lint "$dir/paint.rs.app/Contents/Info.plist"
           lipo "$dir/paint.rs.app/Contents/MacOS/paintrs" -verify_arch '${{ matrix.arch }}'
           libs=$(otool -L "$dir/paint.rs.app/Contents/MacOS/paintrs")
@@ -261,6 +331,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install the cross toolchain and Rust
         run: |
           sudo apt-get update
@@ -293,8 +367,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Build and package in Alpine
-        run: docker run --rm -v "$PWD:/src" -w /src "$ALPINE_IMAGE" sh scripts/ci/alpine-build.sh "$DIST"
+        run: docker run --rm -v "$PWD:/src" -v "$OPEND2D_DIR:/opend2d" -w /src "$ALPINE_IMAGE" sh scripts/ci/alpine-build.sh "$DIST"
       - name: Upload
         run: gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
 
@@ -306,6 +384,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {ref: "${{ env.TAG }}", persist-credentials: false}
+      # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
+      - name: Fetch opend2d
+        shell: bash
+        run: sh scripts/ci/fetch-opend2d.sh "$RUNNER_TEMP"
       - name: Install trunk and wasm-opt
         run: |
           set -euo pipefail
@@ -313,6 +395,10 @@ jobs:
           cargo +1.99.1 install trunk --version 0.21.14 --locked
           curl -sSfL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz" | tar xz -C "$RUNNER_TEMP"
           echo "WASM_OPT=$RUNNER_TEMP/binaryen-${BINARYEN_VERSION}/bin/wasm-opt" >> "$GITHUB_ENV"
+          # TODO(web-plugin-host): the .NET browser-wasm relink of the plugin host
+          # (pdn-host/paintnet-gpu/build-wasm.sh) needs binaryen >= 118 ON the emscripten Sdk
+          # pack's bin/ (the pack ships 117, too old for Rust's LLVM feature flags). When that
+          # build is wired into this job, copy this binaryen (133) over the pack's wasm-opt first.
       - run: tools/web-dist.sh --zip
       - name: Upload
         run: gh release upload "$TAG" target/paintrs-web-*.zip --clobber --repo "$GITHUB_REPOSITORY"

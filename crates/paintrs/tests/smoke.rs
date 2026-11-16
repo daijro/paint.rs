@@ -438,6 +438,244 @@ fn shortcuts_dispatch_actions() {
     assert_eq!(layers(&harness), 1);
 }
 
+/// Space held makes a drag pan the view without painting, and the brush is back once Space is
+/// up. Holding H picks the Pan tool, and releasing it after a drag returns to the brush; a quick
+/// tap of H picks Pan and keeps it.
+#[test]
+fn held_space_and_pan_key_pan_then_restore_the_tool() {
+    use egui::Key;
+    use pdn_core::tool::types::ToolType;
+    let mut h = app_harness();
+    // A frame on a loaded machine can outlast the hold time: the tap below must stay a tap.
+    h.state_mut().clock = paintrs::Clock::Virtual(0.0);
+    let app = &mut h.state_mut().app;
+    app.set_active_tool_from_type(ToolType::PaintBrush);
+    app.active_ws_mut().unwrap().view.set_zoom_center(4.0);
+    h.run();
+    let scroll = |h: &Harness<'_, paintrs::PaintApp>| {
+        let v = &h.state().app.active_ws().unwrap().view;
+        (v.viewport_x, v.viewport_y)
+    };
+    let tool = |h: &Harness<'_, paintrs::PaintApp>| h.state().app.tool_type;
+    let entries =
+        |h: &Harness<'_, paintrs::PaintApp>| h.state().app.active_ws().unwrap().history.undo.len();
+    let (n, s0) = (entries(&h), scroll(&h));
+    h.key_down(Key::Space);
+    h.run();
+    assert!(h.state().app.pan_mode);
+    let mid = egui::pos2(640.0, 400.0);
+    drag(&mut h, mid, mid + egui::vec2(-40.0, -20.0), 2);
+    let s1 = scroll(&h);
+    assert_eq!((s1.0 - s0.0, s1.1 - s0.1), (40.0, 20.0));
+    h.key_up(Key::Space);
+    h.run();
+    assert!(!h.state().app.pan_mode);
+    assert_eq!((tool(&h), entries(&h)), (Some(ToolType::PaintBrush), n));
+    // Held H: Pan while down, the brush again once it is up.
+    h.key_down(Key::H);
+    h.run();
+    assert_eq!(tool(&h), Some(ToolType::Pan));
+    drag(&mut h, mid, mid + egui::vec2(30.0, 10.0), 2);
+    let s2 = scroll(&h);
+    assert_eq!((s2.0 - s1.0, s2.1 - s1.1), (-30.0, -10.0));
+    h.key_up(Key::H);
+    h.run();
+    assert_eq!((tool(&h), entries(&h)), (Some(ToolType::PaintBrush), n));
+    // A tap keeps Pan.
+    h.key_press(Key::H);
+    h.run();
+    assert_eq!(tool(&h), Some(ToolType::Pan));
+}
+
+/// Space while the Text tool edits types a space and starts no pan mode.
+#[test]
+fn space_types_in_the_text_tool() {
+    use egui::Key;
+    use pdn_core::tool::{text::TextTool, types::ToolType};
+    let mut h = app_harness();
+    h.state_mut().app.set_active_tool_from_type(ToolType::Text);
+    h.run();
+    click(&mut h, 640.0, 400.0);
+    let caret = |h: &mut Harness<'_, paintrs::PaintApp>| {
+        h.state_mut()
+            .app
+            .with_tool(|t, app| {
+                let t = t.as_any_mut().downcast_mut::<TextTool>().unwrap();
+                (t.is_editing(), t.caret_rect(app).x)
+            })
+            .unwrap()
+    };
+    for text in ["a", " "] {
+        let key = if text == " " { Key::Space } else { Key::A };
+        let before = caret(&mut h);
+        h.event(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.event(egui::Event::Text(text.into()));
+        h.run();
+        let after = caret(&mut h);
+        assert!(
+            after.0 && after.1 > before.1,
+            "{text:?}: {before:?} → {after:?}"
+        );
+    }
+    assert!(!h.state().app.pan_mode);
+    h.key_up(Key::Space);
+    h.run();
+}
+
+/// A finger's touch event, followed by the pointer events egui-winit emulates for the first one.
+fn finger(
+    h: &mut Harness<'_, paintrs::PaintApp>,
+    id: u64,
+    phase: egui::TouchPhase,
+    pos: egui::Pos2,
+) {
+    h.event(egui::Event::Touch {
+        device_id: egui::TouchDeviceId(1),
+        id: egui::TouchId(id),
+        phase,
+        pos,
+        force: None,
+    });
+    if id != 1 {
+        return;
+    }
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    match phase {
+        egui::TouchPhase::Start => {
+            h.event(egui::Event::PointerMoved(pos));
+            h.event(button(true));
+        }
+        egui::TouchPhase::Move => h.event(egui::Event::PointerMoved(pos)),
+        _ => {
+            h.event(button(false));
+            h.event(egui::Event::PointerGone);
+        }
+    }
+}
+
+/// One finger paints; a second landing mid-stroke cancels it, leaving no pixel and no history
+/// entry. Spreading the two fingers to twice their distance zooms 2x about their centre, as a
+/// trackpad pinch there does, and moving both pans the view with them.
+#[test]
+fn two_finger_pinch_zooms_and_cancels_the_stroke() {
+    use egui::{TouchPhase::*, pos2};
+    use pdn_core::tool::types::ToolType;
+    let view = |h: &Harness<'_, paintrs::PaintApp>| {
+        let v = &h.state().app.active_ws().unwrap().view;
+        (v.zoom, v.viewport_x, v.viewport_y)
+    };
+    let mut reference = app_harness();
+    reference.event(egui::Event::PointerMoved(pos2(640.0, 400.0)));
+    reference.run();
+    reference.event(egui::Event::Zoom(2.0));
+    reference.run();
+    let mut h = app_harness();
+    h.state_mut()
+        .app
+        .set_active_tool_from_type(ToolType::PaintBrush);
+    h.run();
+    let (white, n) = (
+        canvas_bytes(&h),
+        h.state().app.active_ws().unwrap().history.undo.len(),
+    );
+    let zoom = view(&h).0;
+    finger(&mut h, 1, Start, pos2(600.0, 400.0));
+    h.run();
+    finger(&mut h, 1, Move, pos2(620.0, 400.0));
+    h.run();
+    assert_ne!(canvas_bytes(&h), white, "the stroke paints");
+    finger(&mut h, 2, Start, pos2(660.0, 400.0));
+    h.run();
+    assert_eq!(canvas_bytes(&h), white, "the second finger cancels it");
+    assert_eq!(view(&h).0, zoom);
+    finger(&mut h, 1, Move, pos2(600.0, 400.0));
+    finger(&mut h, 2, Move, pos2(680.0, 400.0));
+    h.run();
+    // egui measures the spread in f32, and the view scrolls in whole px.
+    let near = |(z, x, y): (f64, f64, f64), (rz, rx, ry): (f64, f64, f64)| {
+        assert!(
+            (z - rz).abs() < 1e-6 && (x - rx).abs() <= 1.0 && (y - ry).abs() <= 1.0,
+            "{:?} vs {:?}",
+            (z, x, y),
+            (rz, rx, ry)
+        );
+    };
+    let (rz, rx, ry) = view(&reference);
+    assert_eq!(rz, zoom * 2.0);
+    near(view(&h), (rz, rx, ry));
+    // Both fingers moving pans with them.
+    finger(&mut h, 1, Move, pos2(630.0, 420.0));
+    finger(&mut h, 2, Move, pos2(710.0, 420.0));
+    h.run();
+    near(view(&h), (rz, rx - 30.0, ry - 20.0));
+    finger(&mut h, 2, End, pos2(710.0, 420.0));
+    h.run();
+    finger(&mut h, 1, End, pos2(630.0, 420.0));
+    h.run();
+    assert_eq!(canvas_bytes(&h), white);
+    assert_eq!(h.state().app.active_ws().unwrap().history.undo.len(), n);
+    // One finger draws again afterwards.
+    finger(&mut h, 1, Start, pos2(600.0, 400.0));
+    finger(&mut h, 1, Move, pos2(620.0, 400.0));
+    h.run();
+    finger(&mut h, 1, End, pos2(620.0, 400.0));
+    h.run();
+    assert_eq!(h.state().app.active_ws().unwrap().history.undo.len(), n + 1);
+}
+
+/// Delete (Erase Selection) clears the selected pixels and keeps the selection; a second Delete
+/// adds no entry, and one Ctrl+Z brings the pixels back with the selection still there.
+#[test]
+fn delete_erases_and_keeps_the_selection() {
+    use egui::{Key, Modifiers};
+    let mut h = app_harness();
+    let alpha = |h: &Harness<'_, paintrs::PaintApp>| {
+        h.state()
+            .app
+            .active_ws()
+            .unwrap()
+            .document
+            .layers
+            .get_at(0)
+            .unwrap()
+            .surface
+            .data()[3]
+    };
+    let selected = |h: &Harness<'_, paintrs::PaintApp>| {
+        !h.state().app.active_ws().unwrap().selection.is_empty()
+    };
+    h.key_press_modifiers(Modifiers::CTRL, Key::A);
+    h.run();
+    assert!(selected(&h) && alpha(&h) == 255);
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(selected(&h) && alpha(&h) == 0);
+    let entries = |h: &Harness<'_, paintrs::PaintApp>| {
+        let undo = &h.state().app.active_ws().unwrap().history.undo;
+        (undo.len(), undo.last().unwrap().name.clone())
+    };
+    let (n, name) = entries(&h);
+    assert_eq!(name, "Erase Selection");
+    // Again on the cleared pixels: nothing changes, so no entry.
+    h.key_press(Key::Delete);
+    h.run();
+    assert_eq!(entries(&h).0, n);
+    h.key_press_modifiers(Modifiers::CTRL, Key::Z);
+    h.run();
+    assert!(selected(&h) && alpha(&h) == 255);
+}
+
 /// On a Mac Cmd is Ctrl (`pdn_modifiers`): Cmd+Shift+N adds a layer and Cmd+Z undoes it. A
 /// trackpad pinch (`Event::Zoom`) over the canvas zooms about the pointer.
 #[test]
@@ -3830,7 +4068,9 @@ fn focused_node(h: &Harness<'_, paintrs::PaintApp>) -> (String, String) {
     use egui_kittest::kittest::{NodeT, Queryable};
     let n = h.get_by(|n| n.is_focused());
     let n = n.accesskit_node();
-    (n.label().unwrap_or_default(), n.value().unwrap_or_default())
+    // A dialog slider by its key (its author id; its label is the text over it), anything else by its label.
+    let name = n.author_id().map(str::to_owned).or_else(|| n.label());
+    (name.unwrap_or_default(), n.value().unwrap_or_default())
 }
 
 /// Task 44 review round 1: Shift+Tab leaves a number field for the control before it (it was
@@ -3854,11 +4094,7 @@ fn shift_tab_leaves_number_fields() {
     assert_eq!(focused_node(&harness).0, "intensity");
     harness.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     harness.run_steps(3);
-    assert!(
-        harness
-            .get_by_role_and_label(egui::accesskit::Role::Slider, "intensity")
-            .is_focused()
-    );
+    assert!(harness.get_by(slider_key("intensity")).is_focused());
 }
 
 /// Task 44 review round 1: tabbing through a field the user did not edit changes nothing — its
@@ -4568,11 +4804,7 @@ fn plugin_dialog_tabs_rules_and_width() {
     assert!((rect.width() - 429.0).abs() < 0.5, "{}", rect.width());
     let strip = harness.get_by_label("Second").rect();
     assert!(selected(&harness, "First") && !selected(&harness, "Second"));
-    assert!(
-        harness
-            .query_by_role_and_label(Role::Slider, "amount")
-            .is_some()
-    );
+    assert!(harness.query_by(slider_key("amount")).is_some());
     assert!(harness.query_by_label("Words").is_none());
     // Gated is disabled until Flag is checked.
     harness.get_by_label("Gated").click();
@@ -4597,11 +4829,7 @@ fn plugin_dialog_tabs_rules_and_width() {
     harness.get_by_label("Second").click();
     probe_frames(&mut harness);
     assert!(selected(&harness, "Second"));
-    assert!(
-        harness
-            .query_by_role_and_label(Role::Slider, "amount")
-            .is_none()
-    );
+    assert!(harness.query_by(slider_key("amount")).is_none());
     assert!(harness.query_by_label("Words").is_some());
     assert_eq!(
         harness.state().shell.dialogs.top_rect(&harness.ctx),
@@ -4716,13 +4944,12 @@ fn plugin_text_layer_and_pan_rows() {
 /// and "Colour wheel … with alpha" (the pick keeps the colour's alpha).
 #[test]
 fn plugin_slider_wraps_without_reset_and_colour_keeps_alpha() {
-    use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     let mut harness = app_harness();
     harness.state_mut().app.primary_color =
         pdn_core::util::color::Color::new(0x10, 0x20, 0x30, 0x80);
     open_probe(&mut harness);
-    let slider = harness.get_by_role_and_label(Role::Slider, "amount").rect();
+    let slider = harness.get_by(slider_key("amount")).rect();
     // `range_rects`: the number box 8 px right of the slider's box (its 2-px margin, the 10-px
     // gap), 72 wide; the reset arrow 10 px after it, 24 wide.
     let number = egui::pos2(slider.max.x + 8.0 + 36.0, slider.center().y);
@@ -4731,7 +4958,7 @@ fn plugin_slider_wraps_without_reset_and_colour_keeps_alpha() {
     probe_frames(&mut harness);
     let reset = egui::pos2(slider.max.x + 8.0 + 72.0 + 10.0 + 12.0, slider.center().y);
     probe_click(&mut harness, reset.x, reset.y);
-    let radius = harness.get_by_role_and_label(Role::Slider, "radius").rect();
+    let radius = harness.get_by(slider_key("radius")).rect();
     probe_click(&mut harness, radius.max.x + 8.0 + 36.0, radius.center().y);
     harness.key_press(egui::Key::ArrowUp);
     probe_frames(&mut harness);
@@ -4757,7 +4984,6 @@ fn plugin_slider_wraps_without_reset_and_colour_keeps_alpha() {
 /// are drawn, a row without its header line has no rule, and a colour with alpha shows checks.
 #[test]
 fn plugin_dialog_pixels() {
-    use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     let mut harness = app_harness();
     harness.state_mut().app.primary_color =
@@ -4780,7 +5006,7 @@ fn plugin_dialog_pixels() {
         px(box_centre(gated)),
         "Gated is faded"
     );
-    let slider = harness.get_by_role_and_label(Role::Slider, "amount").rect();
+    let slider = harness.get_by(slider_key("amount")).rect();
     let [r, g, b] = px(egui::pos2(slider.min.x + 3.0, slider.center().y));
     assert!(
         r > 200 && g < 60 && b < 60,
@@ -6588,4 +6814,9 @@ fn a_magnetic_lasso_backlog_drains_without_input() {
         !harness.state_mut().app.tool_ticking(),
         "the backlog waits for input"
     );
+}
+
+/// A dialog slider by its value's key: its AccessKit author id (its label is the text a user reads).
+pub fn slider_key(key: &str) -> impl Fn(&egui_kittest::kittest::AccessKitNode<'_>) -> bool + '_ {
+    move |n| n.role() == egui::accesskit::Role::Slider && n.author_id() == Some(key)
 }

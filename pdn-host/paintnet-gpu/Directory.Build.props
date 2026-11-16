@@ -1,0 +1,13 @@
+<Project>
+  <!-- Shared build settings for the Paint.NET GPU-plugin host, its wrapper-surface replacement and
+       the in-tree test effect/host. -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- The BB worktree exposes .gitmodules as a device node; SourceLink's git query fails reading
+         it, so turn it off (we embed no SCM metadata). -->
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+  </PropertyGroup>
+</Project>

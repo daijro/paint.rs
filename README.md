@@ -164,12 +164,16 @@ angle.
 
 ## Installable plug-ins
 
-paint.rs runs [PhotoCraft](https://github.com/storytold/photocraft)'s sandboxed WebAssembly filter
-plug-ins and installs LightCraft looks (`.cube`, `.3dl`) and Camera Raw develop presets (`.xmp`).
-**Settings ▸ Plugins** installs files or browses the
-[ArtCraft Store](https://akkk09.github.io/artcraft-store/); installed items appear under
-**Effects ▸ Plugins** with a puzzle piece. [PLUGINS.md](PLUGINS.md) covers the sandbox and how to
-write a plug-in.
+paint.rs runs two kinds of plug-ins, on the desktop and in the browser:
+
+- **Paint.NET plug-ins**, the same `.dll` files that extend Paint.NET on Windows: effects and
+  adjustments, plug-ins with their own settings window, GPU effects and file formats.
+- **WebAssembly plug-ins**: PhotoCraft filters (`.wasm`), LightCraft looks (`.cube`, `.3dl`) and
+  Camera Raw develop presets (`.xmp`).
+
+Install a file, or a `.zip` of them, from **Settings ▸ Plugins** or by dropping it on the window. It
+loads right away, with no restart. [PLUGINS.md](PLUGINS.md) lists the packs tested, what does not run
+yet, and how to write a WebAssembly plug-in.
 
 ---
 

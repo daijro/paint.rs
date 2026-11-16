@@ -1613,7 +1613,7 @@ fn wand_origin_outside_the_image() {
 }
 
 /// selection-and-move.md §5 Task 26: Fill (black, white fill, m 128 → 128 grey); Erase
-/// ((10,20,30,200) at m 128 → (10,20,30,100)) deselects.
+/// ((10,20,30,200) at m 128 → (10,20,30,100)) keeps the selection.
 #[test]
 fn fill_and_erase_selection_are_overwrite_blends() {
     let mut app = fresh_doc(12, 4, None);
@@ -1645,7 +1645,7 @@ fn fill_and_erase_selection_are_overwrite_blends() {
             vec![10, 20, 30, 200]
         )
     );
-    assert!(app.active_ws().unwrap().selection.is_empty());
+    assert!(!app.active_ws().unwrap().selection.is_empty());
     assert_eq!(undo_names(&app).last().unwrap(), "Erase Selection");
 }
 
@@ -1925,8 +1925,8 @@ fn wand_global_settings_and_image_sampling() {
     assert_eq!(set(&app), [t, t, f, f, f, f, f, f, f, f]);
 }
 
-/// Fill Selection (Secondary Color) uses the secondary colour; Erase Selection undoes pixels and
-/// selection in one step.
+/// Fill Selection (Secondary Color) uses the secondary colour; Erase Selection keeps the selection,
+/// and undo and redo round-trip the pixels with the selection left as it was.
 #[test]
 fn fill_secondary_and_erase_undo() {
     let mut app = fresh_doc(4, 1, None);
@@ -1943,10 +1943,22 @@ fn fill_secondary_and_erase_undo() {
     assert_eq!(undo_names(&app).last().unwrap(), "Fill Selection");
     let before = layer_bytes(&app, None);
     pdn_core::action::perform(&mut app, "menu.edit.eraseSelection");
-    assert!(app.active_ws().unwrap().selection.is_empty());
+    let erased = [[255; 4], [0; 4], [0; 4], [255; 4]].concat();
+    assert_eq!(layer_bytes(&app, None), erased);
+    assert_eq!(selection_mask(&app, 4, 1), [0, 255, 255, 0]);
     assert!(app.undo());
     assert_eq!(layer_bytes(&app, None), before);
     assert_eq!(selection_mask(&app, 4, 1), [0, 255, 255, 0]);
+    assert!(app.redo());
+    assert_eq!(layer_bytes(&app, None), erased);
+    assert_eq!(selection_mask(&app, 4, 1), [0, 255, 255, 0]);
+    // A second Delete changes no pixel, so it adds no entry.
+    let n = undo_names(&app).len();
+    pdn_core::action::perform(&mut app, "menu.edit.eraseSelection");
+    assert_eq!(undo_names(&app).len(), n);
+    // The kept selection serves the next command: Fill Selection fills the same pixels.
+    pdn_core::action::perform(&mut app, "menu.edit.fillSelectionSecondary");
+    assert_eq!(layer_bytes(&app, None), before);
 }
 
 /// §2.7 step 4 with a partial base: outside the image Union, Exclude and Xor keep the base,
@@ -2179,20 +2191,26 @@ fn wand_square_handle_hits_as_a_circle() {
     assert_eq!(undo_names(&app)[n..], ["Finish Magic Wand", "Magic Wand"]);
 }
 
-/// §2.6 Erase deselects even when the selection lies wholly off the canvas (no pixels change):
-/// the Selection memento alone, "Erase Selection".
+/// Erase on a selection wholly off the canvas changes nothing, so it keeps the selection and adds
+/// no entry; Cut there still deselects, as one "Cut" entry undo reverts.
 #[test]
-fn erase_off_canvas_selection_deselects() {
+fn erase_off_canvas_selection_is_a_no_op() {
     let mut app = fresh_doc(10, 10, None);
     let ws = app.active_ws_mut().unwrap();
     ws.selection
         .set_continuation(&Rectangle::new(20.0, 20.0, 5.0, 5.0), CombineMode::Replace);
     ws.selection.commit_continuation();
     let pixels = layer_bytes(&app, None);
+    let n = undo_names(&app).len();
     pdn_core::action::perform(&mut app, "menu.edit.eraseSelection");
-    assert!(app.active_ws().unwrap().selection.is_empty());
-    assert_eq!(undo_names(&app).last().unwrap(), "Erase Selection");
+    assert!(!app.active_ws().unwrap().selection.is_empty());
+    assert_eq!(undo_names(&app).len(), n);
     assert_eq!(layer_bytes(&app, None), pixels);
+    let quality = pdn_core::pixel::mask::SelectionQuality::HighQuality;
+    let ws = app.active_ws_mut().unwrap();
+    ws.execute_function(|t| pdn_core::history::functions::cut(t, quality));
+    assert!(app.active_ws().unwrap().selection.is_empty());
+    assert_eq!(undo_names(&app).last().unwrap(), "Cut");
     assert!(app.undo());
     assert!(!app.active_ws().unwrap().selection.is_empty());
 }
@@ -8648,4 +8666,218 @@ fn fade_commits_an_open_gradient_first() {
     assert_eq!(perform(&mut app, "menu.edit.fade"), ActionOutcome::Done);
     assert!(!app.active_ws().unwrap().can_fade());
     assert_eq!(undo_names(&app).last().unwrap(), "Gradient");
+}
+
+/// The canvas point of document pixel (x, y)'s centre.
+fn pixel_centre(app: &AppWorkspace, x: f64, y: f64) -> (f64, f64) {
+    let p = app
+        .active_ws()
+        .unwrap()
+        .view
+        .to_screen_position(Point::new(x + 0.5, y + 0.5));
+    (p.x, p.y)
+}
+
+/// Paint.NET's keyboard pointer: with the button held, each arrow moves the Pencil's point one
+/// image pixel at 100 % and 400 %, at either display scale, and the stroke follows it.
+#[test]
+fn arrows_move_the_pointer_one_image_px_at_any_zoom() {
+    for ppp in [1.0, 2.0] {
+        for zoom in [1.0, 4.0] {
+            let mut app = fresh_doc(40, 30, None);
+            let view = &mut app.active_ws_mut().unwrap().view;
+            view.set_pixels_per_point(ppp);
+            view.set_zoom_center(zoom);
+            let (x, y) = pixel_centre(&app, 10.0, 10.0);
+            drive_tool(
+                &mut app,
+                ToolType::Pencil,
+                &[
+                    Ev::Move(x, y),
+                    Ev::Down(x, y, Left),
+                    Ev::Key("ArrowRight"),
+                    Ev::Key("ArrowRight"),
+                    Ev::Key("ArrowDown"),
+                ],
+            );
+            let step = zoom / ppp;
+            assert_eq!(app.pointer_offset, (2.0 * step, step), "{ppp}x at {zoom}");
+            // The canvas adds the offset to the release too.
+            let (ux, uy) = (x + 2.0 * step, y + step);
+            drive_tool(&mut app, ToolType::Pencil, &[Ev::Up(ux, uy, Left)]);
+            let b = layer_bytes(&app, None);
+            let inked: Vec<_> = (0..30)
+                .flat_map(|y| (0..40).map(move |x| (x, y)))
+                .filter(|&(x, y)| px_at(&b, 40, x, y) != [255; 4])
+                .collect();
+            assert_eq!(
+                inked,
+                [(10, 10), (11, 10), (12, 10), (12, 11)],
+                "{ppp}x at {zoom}"
+            );
+        }
+    }
+}
+
+/// Quick repeats (16 ms apart here) move 1 px until the 16th; then every 4th adds 1. A press
+/// 250 ms after the last, or another key, starts again at 1. Modified arrows don't move the
+/// pointer, nor do arrows with no button down and the pointer off the canvas.
+#[test]
+fn quick_arrow_repeats_speed_up_after_the_16th() {
+    let mut app = fresh_doc(400, 300, None);
+    let pencil = ToolType::Pencil;
+    drive_tool(
+        &mut app,
+        pencil,
+        &[Ev::Move(100.5, 100.5), Ev::Down(100.5, 100.5, Left)],
+    );
+    let key = |app: &mut AppWorkspace, ev: Ev| {
+        let before = app.pointer_offset;
+        drive_tool(app, pencil, &[ev]);
+        (
+            app.pointer_offset.0 - before.0,
+            app.pointer_offset.1 - before.1,
+        )
+    };
+    let steps: Vec<f64> = (0..21)
+        .map(|_| key(&mut app, Ev::Key("ArrowRight")).0)
+        .collect();
+    let mut want = vec![1.0; 16];
+    want.extend([2.0, 2.0, 2.0, 2.0, 3.0]);
+    assert_eq!(steps, want);
+    assert_eq!(key(&mut app, Ev::Key("ArrowRight")).0, 3.0);
+    // Another key, then the first again.
+    assert_eq!(key(&mut app, Ev::Key("ArrowDown")), (0.0, 1.0));
+    assert_eq!(key(&mut app, Ev::Key("ArrowRight")), (1.0, 0.0));
+    // A slow press.
+    for _ in 0..20 {
+        key(&mut app, Ev::Key("ArrowRight"));
+    }
+    drive_tool(&mut app, pencil, &[Ev::Wait(250.0)]);
+    assert_eq!(key(&mut app, Ev::Key("ArrowLeft")), (-1.0, 0.0));
+    for modified in ["Shift+ArrowLeft", "Ctrl+ArrowLeft", "Alt+ArrowLeft"] {
+        assert_eq!(key(&mut app, Ev::Key(modified)), (0.0, 0.0), "{modified}");
+    }
+    let (x, y) = app.last_mouse;
+    drive_tool(&mut app, pencil, &[Ev::Up(x, y, Left)]);
+    // No button: only while the pointer is over the canvas.
+    assert_eq!(key(&mut app, Ev::Key("ArrowUp")), (0.0, 0.0));
+    app.zoom_anchor = Some((x, y));
+    assert_eq!(key(&mut app, Ev::Key("ArrowUp")), (0.0, -1.0));
+    assert_eq!(app.last_mouse, (x, y - 1.0));
+}
+
+/// Space with no button down is pan mode: an arrow scrolls the view 10 px, Ctrl+arrow 100, and
+/// the pointer stays. Space pressed during a stroke isn't.
+#[test]
+fn space_pan_mode_arrows_scroll_the_view() {
+    let mut app = fresh_doc(400, 300, None);
+    app.active_ws_mut().unwrap().view.set_zoom_center(4.0);
+    app.zoom_anchor = Some((50.0, 50.0));
+    let brush = ToolType::PaintBrush;
+    let x = |app: &AppWorkspace| app.active_ws().unwrap().view.viewport_x;
+    let x0 = x(&app);
+    drive_tool(&mut app, brush, &[Ev::Key("Space"), Ev::Key("ArrowRight")]);
+    assert_eq!(x(&app), x0 + 10.0);
+    drive_tool(&mut app, brush, &[Ev::Key("Ctrl+ArrowRight")]);
+    assert_eq!(x(&app), x0 + 110.0);
+    drive_tool(&mut app, brush, &[Ev::Key("ArrowLeft")]);
+    assert_eq!(x(&app), x0 + 100.0);
+    assert_eq!(app.pointer_offset, (0.0, 0.0));
+    // Space up (the UI clears it), then Space during a stroke.
+    app.pan_mode = false;
+    drive_tool(
+        &mut app,
+        brush,
+        &[
+            Ev::Move(50.0, 50.0),
+            Ev::Down(50.0, 50.0, Left),
+            Ev::Key("Space"),
+            Ev::Key("ArrowRight"),
+        ],
+    );
+    assert!(!app.pan_mode);
+    assert_eq!(x(&app), x0 + 100.0);
+    assert_eq!(app.pointer_offset, (4.0, 0.0));
+}
+
+/// The Pan tool's key (H): a tap picks Pan and keeps it; held for `SPRING_HOLD_MS` it returns to
+/// the previous tool on release; released mid-drag, the switch waits for the button. A press in
+/// Space's pan mode drags the view and never reaches the tool.
+#[test]
+fn held_pan_key_returns_to_the_previous_tool() {
+    use pdn_core::action::{ShortcutRegistry, dispatch_key};
+    use pdn_core::app::SPRING_HOLD_MS;
+    let mut app = fresh_doc(400, 300, None);
+    app.active_ws_mut().unwrap().view.set_zoom_center(4.0);
+    let reg = ShortcutRegistry::load(None);
+    let brush = ToolType::PaintBrush;
+    let h = |app: &mut AppWorkspace, at: f64| {
+        app.now_ms = at;
+        dispatch_key(app, &reg, "H", false, false, false, false, at);
+    };
+    let mut at = 0.0;
+    for (held, button, back) in [
+        (SPRING_HOLD_MS - 1.0, false, false),
+        (SPRING_HOLD_MS, false, true),
+        (0.0, true, true),
+    ] {
+        drive_tool(&mut app, brush, &[]);
+        at += 10_000.0;
+        h(&mut app, at);
+        assert_eq!(app.tool_type, Some(ToolType::Pan));
+        if button {
+            drive_tool(&mut app, ToolType::Pan, &[Ev::Down(50.0, 50.0, Left)]);
+        }
+        app.now_ms = at + held;
+        app.on_key_up("h");
+        if button {
+            assert_eq!(app.tool_type, Some(ToolType::Pan));
+            drive_tool(&mut app, ToolType::Pan, &[Ev::Up(60.0, 50.0, Left)]);
+        }
+        let want = if back { brush } else { ToolType::Pan };
+        assert_eq!(app.tool_type, Some(want), "{held} {button}");
+    }
+    // Space's pan mode: the drag scrolls and the brush paints nothing.
+    drive_tool(&mut app, brush, &[]);
+    let x0 = app.active_ws().unwrap().view.viewport_x;
+    let n = undo_names(&app).len();
+    drive_tool(
+        &mut app,
+        brush,
+        &[
+            Ev::Move(50.0, 50.0),
+            Ev::Key("Space"),
+            Ev::Down(50.0, 50.0, Left),
+            Ev::Move(30.0, 50.0),
+            Ev::Up(30.0, 50.0, Left),
+        ],
+    );
+    app.on_key_up("Space");
+    assert!(!app.pan_mode);
+    assert_eq!(app.active_ws().unwrap().view.viewport_x, x0 + 20.0);
+    assert_eq!(undo_names(&app).len(), n);
+}
+
+/// A keyboard move carries the pen's pressure: the arrows' extension of a light pen stroke is
+/// as thin as the stroke, not full width.
+#[test]
+fn arrows_keep_a_pen_strokes_pressure() {
+    use pdn_core::testing::PenPhase;
+    let mut app = fresh_doc(40, 20, None);
+    for (k, v) in [("width", 9.into()), ("pressure", true.into())] {
+        app.tool_settings.set(ToolType::PaintBrush, k, v);
+    }
+    let mut events = vec![
+        Ev::Pen(PenPhase::Down, 5.0, 10.0, 0.3),
+        Ev::Pen(PenPhase::Move, 20.0, 10.0, 0.3),
+    ];
+    events.extend([Ev::Key("ArrowRight"); 10]);
+    events.push(Ev::Pen(PenPhase::Up, 30.0, 10.0, 0.3));
+    drive_tool(&mut app, ToolType::PaintBrush, &events);
+    assert_eq!(app.pointer_offset, (10.0, 0.0));
+    let b = layer_bytes(&app, None);
+    let height = |x| (0..20).filter(|&y| px_at(&b, 40, x, y) != [255; 4]).count();
+    assert!(height(12) < 9, "{}", height(12));
+    assert_eq!(height(26), height(12));
 }

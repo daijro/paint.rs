@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Proof that Paint.NET's genuine Direct2D interop mechanism (DllImport("d2d1") + member-function
+       vtable calls, no ComWrappers) binds to our portable libd2d1 on Linux .NET. No package or project
+       references: it reproduces TerraFX's net11 IL pattern on net10 and P/Invokes the built libd2d1. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>pdngpu-binding</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+  </PropertyGroup>
+</Project>

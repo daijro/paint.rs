@@ -11,6 +11,7 @@ mod gif;
 pub mod nrbf;
 pub mod ops;
 pub mod pdn;
+pub mod plugins;
 mod png;
 pub mod psd;
 pub mod tga;

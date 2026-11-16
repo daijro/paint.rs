@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The GPU-plugin host: load a plugin by reflection, drive its GpuImageEffect through the wrapper
+       surface (which renders via the opend2d native bridge), and byte-compare the output to a WARP
+       capture. References the ONE unified PaintDotNet assembly set (phase 5A-6) so the plugin's copies
+       of PaintDotNet.Direct2D1 / PaintDotNet.Effects.Gpu / ComputeSharp.D2D1 resolve to that identity. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>pdngpu-host</AssemblyName>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../paintnet/assemblies/Windows/Windows.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/Effects.Core/Effects.Core.csproj" />
+  </ItemGroup>
+</Project>

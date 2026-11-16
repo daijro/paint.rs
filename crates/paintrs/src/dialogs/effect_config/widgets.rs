@@ -729,12 +729,14 @@ pub(super) fn device_box(rect: Rect, ppp: f32) -> (Rect, usize, usize) {
 }
 
 /// A range row's line: the slider, the number and the reset button (`None`: hidden, a plugin's
-/// "no reset button"). Returns the change kind.
+/// "no reset button"). `name` is what a screen reader calls the slider (the text over it); `key`
+/// its value's key, which tests find it by (its AccessKit author id). Returns the change kind.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::dialogs) fn range_line(
     ui: &mut Ui,
     state: &mut SliderState,
     key: &str,
+    name: &str,
     spec: RangeSpec,
     values: &mut Values,
     range: Rect,
@@ -758,7 +760,8 @@ pub(in crate::dialogs) fn range_line(
     // R154: the value and the (possibly session-dynamic) limits the slider edits within.
     ui.ctx().accesskit_node_builder(id, |n| {
         n.set_role(egui::accesskit::Role::Slider);
-        n.set_label(key);
+        n.set_label(name);
+        n.set_author_id(key);
         n.set_numeric_value(numeric);
         n.set_min_numeric_value(spec.min);
         n.set_max_numeric_value(spec.max);

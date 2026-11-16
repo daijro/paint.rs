@@ -373,12 +373,22 @@ impl Files {
     }
     /// Reusable actual decode service for file flows and the From File effect (BB27).
     pub fn decode(&self, file: PickedFile) -> Pending<Result<PdnDocument, String>> {
+        self.decode_answered(file, vec![])
+    }
+    /// [`decode`](Self::decode), a plug-in FileType's windows taking `answers` (`PluginWindow`).
+    pub fn decode_answered(
+        &self,
+        file: PickedFile,
+        answers: Vec<serde_json::Value>,
+    ) -> Pending<Result<PdnDocument, String>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.system {
-                return super::native::background(move || decode_snapshot(&file));
+                return super::native::background(move || decode_snapshot(&file, &answers));
             }
-            self.memory_op("decode", move || Pending::ready(decode_snapshot(&file)))
+            self.memory_op("decode", move || {
+                Pending::ready(decode_snapshot(&file, &answers))
+            })
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -397,7 +407,7 @@ impl Files {
                     Ok(single_layer(image, dpi))
                 })
             } else {
-                Pending::ready(decode_snapshot(&file))
+                Pending::ready(decode_snapshot(&file, &answers))
             }
         }
     }
@@ -433,7 +443,10 @@ fn single_layer(image: pdn_core::canvas::ImageData, dpi: Option<f64>) -> PdnDocu
         header_xml: String::new(),
     }
 }
-fn decode_snapshot(file: &PickedFile) -> Result<PdnDocument, String> {
+fn decode_snapshot(
+    file: &PickedFile,
+    answers: &[serde_json::Value],
+) -> Result<PdnDocument, String> {
     let format = codecs::detect_format(&file.name, file.mime.as_deref(), &file.bytes)
         .or_else(|| (extension(&file.name) == "json").then_some("pdn"))
         .ok_or("Unsupported image format")?;
@@ -443,7 +456,12 @@ fn decode_snapshot(file: &PickedFile) -> Result<PdnDocument, String> {
     if format == "psd" {
         return pdn_core::io::psd::decode(&file.bytes).map_err(|e| e.to_string());
     }
-    let decoded = codecs::decode(format, &file.bytes).map_err(|e| e.to_string())?;
+    let decoded = if answers.is_empty() {
+        codecs::decode(format, &file.bytes)
+    } else {
+        pdn_core::io::plugins::open_answered(format, &file.bytes, answers)
+    }
+    .map_err(|e| e.to_string())?;
     Ok(single_layer(decoded.image, decoded.dpi))
 }
 pub fn message(title: &str, text: String) {
@@ -461,6 +479,19 @@ pub fn message(title: &str, text: String) {
 }
 
 pub const IMAGE_ACCEPT: &str = ".pdn,.png,.jpg,.jpeg,.jpe,.webp,.gif,.bmp,.tif,.tiff,.jxl,.avif,.heic,.heif,.dds,.tga,.jxr,.wdp,.wmp,.psd,.psb,.json";
+
+/// The Open picker filter: the built-in image extensions plus any contributed by installed
+/// FileType plugins.
+pub fn image_accept() -> String {
+    let mut s = IMAGE_ACCEPT.to_string();
+    for f in pdn_core::io::plugins::formats() {
+        for e in f.extensions {
+            s.push_str(",.");
+            s.push_str(e);
+        }
+    }
+    s
+}
 impl Files {
     /// Chooses retained sources before reading bytes, so accepted import commits its tool first.
     pub fn choose_open(
@@ -480,7 +511,7 @@ pub fn pick_images(
     settings: &mut AppSettings,
     changed: &mut bool,
 ) {
-    let op = Files::current().choose_open(true, IMAGE_ACCEPT);
+    let op = Files::current().choose_open(true, &image_accept());
     then(
         op,
         app,
@@ -597,62 +628,106 @@ fn next_file(
                     return;
                 }
             };
-            let op = Files::current().decode(source.clone());
-            then(
-                op,
-                app,
-                settings,
-                changed,
-                move |decoded, app, settings, changed| match decoded {
-                    Err(e) => load_error(
-                        batch,
-                        format!("Could not open \"{}\": {e}", source.name),
-                        app,
-                        settings,
-                        changed,
-                    ),
-                    Ok(data) => {
-                        if let Some(import) = &mut batch.import {
-                            if let Err(e) = import.add(app, &source.name, data.layers) {
-                                load_error(
-                                    batch,
-                                    format!("Could not import \"{}\": {e:?}", source.name),
-                                    app,
-                                    settings,
-                                    changed,
-                                );
-                                return;
-                            }
-                        } else {
-                            let document = data.to_document();
-                            let i = app.create_blank_document_in_new_workspace(
-                                document.width,
-                                document.height,
-                                document.resolution,
-                                false,
-                            );
-                            let ws = &mut app.documents[i];
-                            ws.set_document_and_active_layer(document, 0);
-                            ws.view.fit_viewport();
-                            let format = codecs::detect_format(
-                                &source.name,
-                                source.mime.as_deref(),
-                                &source.bytes,
-                            )
-                            .unwrap_or("pdn");
-                            ws.set_file_info(
-                                Some(source.name.clone()),
-                                source.path.as_ref().map(|p| p.to_string_lossy().into()),
-                                Some(format.into()),
-                                serde_json::Value::Null,
-                            );
-                            ws.set_dirty(false);
-                            Files::current().adopt_open(ws.id, &source, format);
-                        }
-                        next_file(batch, app, settings, changed);
+            decode_file(batch, source, vec![], app, settings, changed);
+        },
+    );
+}
+/// Decodes the read file and opens or imports it. A plug-in FileType that shows a window of its own while it opens
+/// (Midora's EMF) gets it in paint.rs's, as an effect's; the open then goes again with every answer so far
+/// (`PluginWindow`). Cancelling the window skips the file.
+fn decode_file(
+    mut batch: OpenBatch,
+    source: PickedFile,
+    answers: Vec<serde_json::Value>,
+    app: &mut AppWorkspace,
+    settings: &mut AppSettings,
+    changed: &mut bool,
+) {
+    let op = Files::current().decode_answered(source.clone(), answers.clone());
+    then(
+        op,
+        app,
+        settings,
+        changed,
+        move |decoded, app, settings, changed| match decoded {
+            Err(e) => match pdn_core::io::plugins::PluginWindow::from_error(&e) {
+                Some(window) => {
+                    let title = if window.title.is_empty() {
+                        source.name.clone()
+                    } else {
+                        window.title.clone()
+                    };
+                    let controls = window.controls.clone();
+                    crate::dialogs::open(Box::new(
+                        crate::dialogs::effect_config::EffectConfigDialog::for_window(
+                            title,
+                            controls,
+                            move |values, cx| {
+                                let changed = &mut cx.settings_changed;
+                                match values {
+                                    Some(values) => {
+                                        let mut answers = answers;
+                                        answers.push(window.answer(&values));
+                                        decode_file(
+                                            batch,
+                                            source,
+                                            answers,
+                                            cx.app,
+                                            cx.settings,
+                                            changed,
+                                        );
+                                    }
+                                    None => next_file(batch, cx.app, cx.settings, changed),
+                                }
+                            },
+                        ),
+                    ));
+                }
+                None => load_error(
+                    batch,
+                    format!("Could not open \"{}\": {e}", source.name),
+                    app,
+                    settings,
+                    changed,
+                ),
+            },
+            Ok(data) => {
+                if let Some(import) = &mut batch.import {
+                    if let Err(e) = import.add(app, &source.name, data.layers) {
+                        load_error(
+                            batch,
+                            format!("Could not import \"{}\": {e:?}", source.name),
+                            app,
+                            settings,
+                            changed,
+                        );
+                        return;
                     }
-                },
-            );
+                } else {
+                    let document = data.to_document();
+                    let i = app.create_blank_document_in_new_workspace(
+                        document.width,
+                        document.height,
+                        document.resolution,
+                        false,
+                    );
+                    let ws = &mut app.documents[i];
+                    ws.set_document_and_active_layer(document, 0);
+                    ws.view.fit_viewport();
+                    let format =
+                        codecs::detect_format(&source.name, source.mime.as_deref(), &source.bytes)
+                            .unwrap_or("pdn");
+                    ws.set_file_info(
+                        Some(source.name.clone()),
+                        source.path.as_ref().map(|p| p.to_string_lossy().into()),
+                        Some(format.into()),
+                        serde_json::Value::Null,
+                    );
+                    ws.set_dirty(false);
+                    Files::current().adopt_open(ws.id, &source, format);
+                }
+                next_file(batch, app, settings, changed);
+            }
         },
     );
 }
@@ -792,20 +867,14 @@ pub fn show_drop_images(remaining: Vec<PickedFile>) -> DropImageChoice {
 
 /// R115: external choosers put the default first; in-app FORMATS remains canonical.
 pub fn chooser_formats(initial: &str) -> Vec<&'static crate::dialogs::save_image::FormatInfo> {
-    let formats = crate::dialogs::save_image::FORMATS;
-    formats
-        .iter()
+    let formats = crate::dialogs::save_image::formats;
+    formats()
         .filter(|f| f.id == initial && !matches!(f.id, "heic" | "jxr"))
-        .chain(
-            formats
-                .iter()
-                .filter(|f| f.id != initial && !matches!(f.id, "heic" | "jxr")),
-        )
+        .chain(formats().filter(|f| f.id != initial && !matches!(f.id, "heic" | "jxr")))
         .collect()
 }
 pub fn accepted_format(name: &str) -> Result<&'static str, String> {
-    crate::dialogs::save_image::FORMATS
-        .iter()
+    crate::dialogs::save_image::formats()
         .find(|f| {
             f.extensions
                 .iter()

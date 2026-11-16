@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- net11 twin of host/ for the DDS FileType plugin (DdsFileTypePlus.dll is net11-only).
+       Reuses the same host sources and references the already-built net10 replacement
+       assemblies by DLL (a net11 app loads net10 libraries); build with the net11 SDK
+       (~/.dotnet). The net10 host/ is untouched. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>pdnft-host11</AssemblyName>
+    <RootNamespace>PaintDotNet.FileTypeHost</RootNamespace>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../host/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="PaintDotNet.Primitives"><HintPath>../host/bin/Release/net10.0/PaintDotNet.Primitives.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.Fundamentals"><HintPath>../host/bin/Release/net10.0/PaintDotNet.Fundamentals.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.ComponentModel"><HintPath>../host/bin/Release/net10.0/PaintDotNet.ComponentModel.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.PropertySystem"><HintPath>../host/bin/Release/net10.0/PaintDotNet.PropertySystem.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.Core"><HintPath>../host/bin/Release/net10.0/PaintDotNet.Core.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.Windows"><HintPath>../host/bin/Release/net10.0/PaintDotNet.Windows.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.Windows.Core"><HintPath>../host/bin/Release/net10.0/PaintDotNet.Windows.Core.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.Windows.Framework"><HintPath>../host/bin/Release/net10.0/PaintDotNet.Windows.Framework.dll</HintPath></Reference>
+    <Reference Include="PaintDotNet.FileTypes"><HintPath>../host/bin/Release/net10.0/PaintDotNet.FileTypes.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>

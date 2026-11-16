@@ -4,7 +4,8 @@
 //! polarInversion, tileEffect and twistEffect: ids, icons and control keys only).
 //! Includes Crystalize's P0/P1.
 
-use super::blur::{box_fold, madd};
+use super::blur::madd;
+use super::graph::{CLSID_D2D1Morphology, Prop, one_node};
 use super::perlin::noise_at;
 use super::rng::{next_float, pcg, pixel_seed};
 use super::sample::{edge_map, rgss_offsets};
@@ -14,9 +15,8 @@ use super::{
     choice, flag, num, range,
 };
 use crate::pixel::IntRect;
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::TAU;
 
-const LINEAR_PM: RenderInfo = RenderInfo::new(Space::Linear, Alpha::Premultiplied);
 const SRGB_PM: RenderInfo = RenderInfo::new(Space::Srgb, Alpha::Premultiplied);
 const EDGES: &[(&str, &str)] = &[
     ("clamp", "Clamp"),
@@ -68,7 +68,7 @@ pub fn effects() -> Vec<EffectDef> {
                 edge("clamp"),
                 quality(8.0),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             bulge,
         ),
         distort(
@@ -79,7 +79,7 @@ pub fn effects() -> Vec<EffectDef> {
                 quality(5.0),
                 seed(),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             crystalize,
         ),
         distort(
@@ -94,7 +94,7 @@ pub fn effects() -> Vec<EffectDef> {
                 quality(8.0),
                 seed(),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             dents,
         ),
         distort(
@@ -107,7 +107,7 @@ pub fn effects() -> Vec<EffectDef> {
                 range("smoothness", "Smoothness", 1.0, 8.0, 2.0),
                 seed(),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             frosted_glass,
         ),
         distort(
@@ -163,7 +163,7 @@ pub fn effects() -> Vec<EffectDef> {
                     ],
                 },
             ],
-            LINEAR_PM,
+            SRGB_PM,
             pixelate,
         ),
         distort(
@@ -176,7 +176,7 @@ pub fn effects() -> Vec<EffectDef> {
                 edge("reflect"),
                 quality(8.0),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             polar_inversion,
         ),
         distort(
@@ -189,7 +189,7 @@ pub fn effects() -> Vec<EffectDef> {
                 edge("reflect"),
                 quality(8.0),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             tile_reflection,
         ),
         distort(
@@ -202,7 +202,7 @@ pub fn effects() -> Vec<EffectDef> {
                 pair("centerY", "Center Y", 2.0),
                 quality(8.0),
             ],
-            LINEAR_PM,
+            SRGB_PM,
             twist,
         ),
     ]
@@ -251,7 +251,7 @@ fn render_maps(
                 let (s, w) = map(k, p);
                 let (s, w2) = edge_map(s, size, edge);
                 let c = match filter {
-                    Filter::Bilinear => src.bilinear(s[0], s[1], edge),
+                    Filter::Bilinear => src.bilinear_q8(s[0], s[1], edge),
                     Filter::Point => src.point(s[0], s[1], edge),
                 };
                 madd(&mut group, w * w2, c);
@@ -293,6 +293,43 @@ pub(super) fn offset(v: &Values, keys: [&str; 2], lim: f64) -> [f64; 2] {
 pub fn bulge_scale(r_over_half_d: f32, strength: f32) -> f32 {
     let t = 1.0 - r_over_half_d;
     1.0 - strength * (t * t)
+}
+
+/// fxc's compiled `atan2(y, x)` expansion for `ps_5_0`, op-for-op from the PdnTwistSampleMap DXBC
+/// disasm (`fxc /dumpbin`): an atan minimax on the `min|·|/max|·|` ratio plus octant/quadrant fixups.
+/// WARP's `mad` is a separate `a*b+c` (two round-to-nearest-even steps, as the d2d-shader executor runs
+/// it), matched here with plain `*`/`+`. The constants are fxc-compiled Microsoft output, so this lives
+/// in pdn-core — opend2d's warpmath stays free of them (its executor already runs the compiled ops).
+/// Needed because the port's Rust `atan2` differs from this by ULPs, which cross Q8 sampling boundaries.
+pub(super) fn warp_atan2(y: f32, x: f32) -> f32 {
+    // disasm registers: r0.x = y (first arg), r0.y = x (second arg).
+    let z = x.abs().max(y.abs()); // max |r0.y|, |r0.x|
+    let z = 1.0 / z; // div 1.0 / max
+    let w = x.abs().min(y.abs()); // min |r0.y|, |r0.x|
+    let a = z * w; // ratio = min/max
+    let a2 = a * a;
+    // Exact WARP f32 coefficients (from the DXBC .rdata); decimal literals round 1 ULP off on three
+    // of them, which ties for the distorts but diverges at a fractal's chaotic escape boundary.
+    let mut p = a2 * f32::from_bits(0x3caa_ae5f) + (-0.085133);
+    p = a2 * p + 0.180141;
+    p = a2 * p + f32::from_bits(0xbea9_1d04);
+    let p = a2 * p + 0.999866;
+    // swap octant (|x| < |y|): π/2 − 2·(P·a); else 0 (bitwise-and with the lt mask).
+    let r1 = if x.abs() < y.abs() {
+        (p * a) * (-2.0) + f32::from_bits(0x3fc9_0fdb)
+    } else {
+        0.0
+    };
+    let mut rz = a * p + r1; // mad r0.z, a, P, r1
+    if x < 0.0 {
+        rz += f32::from_bits(0xc049_0fdb); // (x < 0) ? −π + rz
+    }
+    // negate iff max(x,y) ≥ 0 and min(x,y) < 0 (the movc).
+    if x.max(y) >= 0.0 && x.min(y) < 0.0 {
+        -rz
+    } else {
+        rz
+    }
 }
 
 /// §2.5 Bulge: u = p − c, x = |u|·(1/(D/2)); inside the circle s = c + u·bulge_scale(x, λ), else p.
@@ -337,12 +374,15 @@ pub fn crystalize_position(p: [f32; 2], cell: f32, seed32: u32) -> [f32; 2] {
     let inv = 1.0 / cell;
     let t = [p[0] * inv, p[1] * inv];
     let (bi, bj) = (t[0].trunc() as i32, t[1].trunc() as i32);
+    // Genuine multiplies the feature fraction by the folded f32 constant `r255 = 1/255` (`GetP1(..)·r255`
+    // in the shader), not an exact `/255` division — the two differ in the last bit, so match the mul.
+    const R255: f32 = 1.0 / 255.0;
     let feature = |i: i32, j: i32| {
         let h = ((seed32 ^ i as u32) & 255) as usize;
         let at = |table: &[u8; 256], k: u8| table[((k as u32 ^ j as u32) & 255) as usize] as f32;
         [
-            i as f32 + at(&P1, P0[h]) / 255.0,
-            j as f32 + at(&P0, P1[h]) / 255.0,
+            i as f32 + at(&P1, P0[h]) * R255,
+            j as f32 + at(&P0, P1[h]) * R255,
         ]
     };
     let d2 = |f: [f32; 2]| {
@@ -425,7 +465,12 @@ fn dents(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
             x = [x[0] + 499.0, x[1] + 506.0];
         }
         let a = theta * total;
-        ([p[0] + refr * -a.sin(), p[1] + refr * a.cos()], 1.0)
+        // Genuine runs two `sincos` ops: `sincos(+a).cos` and `sincos(−a).sin` (the sin shader negates
+        // its input, inst 115). `sin(−a)` is NOT bit-identical to `−sin(a)` (WARP sincos isn't exactly
+        // odd), and only the x-channel uses the sin, so mirror it exactly: refraction = (sin(−a), cos a).
+        let acos = warpmath::sincos(a).1;
+        let nsin = warpmath::sincos(-a).0;
+        ([p[0] + refr * nsin, p[1] + refr * acos], 1.0)
     })
 }
 
@@ -438,14 +483,19 @@ pub fn frosted_sample_count(smoothness: u32) -> u32 {
 /// draws φ = next·2π, then ρ = |a + next·(b − a)|^(1/e); s = p + ρ(cos φ, sin φ); the n maps are
 /// averaged as F4's samples.
 fn frosted_glass(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
-    let max = num(v, "maxRadius").clamp(0.0, 500.0);
-    let min = num(v, "minRadius").clamp(0.0, max);
-    let e = num(v, "diffusion").clamp(0.01, 3.0);
-    let (a, b, inv_e) = (min.powf(e) as f32, max.powf(e) as f32, (1.0 / e) as f32);
+    // Genuine clamps + the radius powers are all f32 MathF: num=clamp(MaxScatter,0,500),
+    // x=clamp(MinScatter,0,num), num2=clamp(Diffusion,0.01,3), minRadiusPow=MathF.Pow(x,num2),
+    // maxRadiusPow=MathF.Pow(num,num2), invPow=1/num2 — so mirror in f32 with crt::powf (== MathF.Pow).
+    let max = num(v, "maxRadius").clamp(0.0, 500.0) as f32;
+    let min = (num(v, "minRadius") as f32).clamp(0.0, max);
+    let e = num(v, "diffusion").clamp(0.01, 3.0) as f32;
+    let (a, b, inv_e) = (crt::powf(min, e), crt::powf(max, e), 1.0f32 / e);
     let n = frosted_sample_count(num(v, "smoothness").clamp(1.0, 8.0) as u32);
     let seed = num(v, "seed").clamp(0.0, 255.0) as u32;
-    // ponytail: Paint.NET's R_k is Random.Shared (effects-1.md §2.5); a fixed distinct value per
-    // map keeps the n maps distinct and the output deterministic.
+    // Genuine 5.1.12 (PdnFrostedGlassEffect) seeds each of the n passes with `Random.Shared.Next()` —
+    // NON-deterministic, so the multi-map output has no reproducible/oracle target (5.2 switched to
+    // `new Random(Seed)`; the oracle is 5.1.12). A fixed distinct value per map (pcg(k)) keeps the n
+    // maps distinct and the output deterministic; the per-map coord math still mirrors the shader.
     let seeds: Vec<u32> = (0..n)
         .map(|k| seed ^ (env.instance_seed ^ pcg(k)))
         .collect();
@@ -453,32 +503,27 @@ fn frosted_glass(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurf
     render_maps(src, n as usize, Edge::Mirror, Filter::Bilinear, |k, p| {
         let mut st = pixel_seed(seeds[k], p[0] as u32, p[1] as u32);
         let phi = next_float(&mut st) * tau;
-        let rho = (a + next_float(&mut st) * (b - a)).abs().powf(inv_e);
-        ([p[0] + rho * phi.cos(), p[1] + rho * phi.sin()], 1.0)
+        // genuine: `radius = pow(abs(radiusPow), invPow)` — WARP's pow (not Rust powf).
+        let rho = warpmath::pow((a + next_float(&mut st) * (b - a)).abs(), inv_e);
+        let (psin, pcos) = warpmath::sincos(phi); // per-pixel random angle → WARP sincos
+        ([p[0] + rho * pcos, p[1] + rho * psin], 1.0)
     })
 }
 
-/// B-E4 approximation of D2D Morphology on premultiplied sRGB.
+/// Genuine `MorphologyGpuEffect` (`WorkingSpace`): d2d's Morphology (Mode, Width, Height) on the
+/// premultiplied sRGB layer. Paint.NET's `MorphologyMode` is D2D's enum (Erode 0, Dilate 1).
 fn morphology(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    // approximation: D2D Morphology; mode semantics as documented in Paint.NET's enum ("Erode:
-    // maximum, Dilate: minimum"), centring and edges unverified (effects-1.md §2.5, §6 item 2; B-E4)
-    let w = num(v, "width").clamp(1.0, 100.0) as i32;
+    let w = num(v, "width").clamp(1.0, 100.0) as u32;
     let h = if flag(v, "linked") {
         w
     } else {
-        num(v, "height").clamp(1.0, 100.0) as i32
+        num(v, "height").clamp(1.0, 100.0) as u32
     };
-    let f = if choice(v, "mode") == "erode" {
-        f32::max
-    } else {
-        f32::min
-    };
-    box_fold(
+    let mode = u32::from(choice(v, "mode") != "erode");
+    one_node(
         src,
-        [-(w / 2), -(h / 2)],
-        [w - 1 - w / 2, h - 1 - h / 2],
-        Edge::Clamp,
-        f,
+        CLSID_D2D1Morphology,
+        &[(0, Prop::U32(mode)), (1, Prop::U32(w)), (2, Prop::U32(h))],
     )
 }
 
@@ -543,12 +588,17 @@ fn pixelate(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
     let scale_down = |q: [f32; 2]| {
         let s = [c[0] + (q[0] - c[0]) * z, c[1] + (q[1] - c[1]) * z];
         match down {
-            "bilinear" => src.bilinear(s[0], s[1], Edge::Clamp),
+            // Genuine scales via D2D AffineTransform2DEffect. Linear == WARP's MIN_MAG_MIP_LINEAR on the
+            // 8bpc source == `bilinear_q8` (proven byte-exact in the SampleMap apply); Nearest == `point`.
+            "bilinear" => src.bilinear_q8(s[0], s[1], Edge::Clamp),
             "nearestNeighbor" => src.point(s[0], s[1], Edge::Clamp),
-            // approximation: D2D 2DAffineTransform (B-E5)
+            // pending(opend2d): genuine's Cubic/HighQualityCubic are D2D AffineTransform2D WARP-JIT
+            // resamplers opend2d does not yet reproduce exactly (Cubic ≤1 LSB; HQ cubic fx-transform-11).
             "bicubic" | "bicubicHq" => filter4(s, catmull_rom, |i, j| src.fetch(i, j, Edge::Clamp)),
-            // approximation: D2D 2DAffineTransform (B-E5)
+            // pending(opend2d): genuine's Anisotropic resampler (aniso-04/05/06), not yet reproduced.
             "anisotropic" => box_mean(src, s, z),
+            // pending(opend2d): the DEFAULT is MultisampleLinear minification multisampling — a WARP-JIT
+            // kernel opend2d does not yet reproduce; this RGSS-4 is the interim approximation.
             _ => {
                 let (a, b) = (0.125 * z, 0.375 * z);
                 let mut acc = [0.0; 4];
@@ -610,15 +660,24 @@ fn polar_inversion(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSu
 /// §2.5 Tile Reflection: st = R(φ)(p − o), st′ = st + ι·tan(κ·st), s = o + R(φ)ᵀst′.
 fn tile_reflection(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
     let o = [src.w as f32 / 2.0, src.h as f32 / 2.0];
-    let phi = -num(v, "rotation").clamp(-180.0, 180.0).to_radians() as f32;
-    let (sin, cos) = (phi.sin(), phi.cos());
-    let kappa = (PI / num(v, "tile").clamp(1.0, 1600.0)) as f32;
-    let k = num(v, "curvature").clamp(-200.0, 200.0);
-    let iota = (k * k / 10.0 * k.signum()) as f32;
+    // Genuine builds the rotation with MathF (f32): `MathF.Sin(num·(float)π/180)`, num = −Angle. Match
+    // it with crt's ucrtbase sinf/cosf (Rust f32 sin differs by 1 ULP on some angles, e.g. 17°).
+    let rot = -num(v, "rotation").clamp(-180.0, 180.0) as f32;
+    let arg = rot * std::f32::consts::PI / 180.0;
+    let (sin, cos) = (crt::sinf(arg), crt::cosf(arg));
+    // Genuine computes both in f32: `scale = (float)π / tileSize`, `intensity = v·v/10·sign(v)`.
+    // Doing them in f64-then-cast shifts the last bit, so mirror the f32 op order exactly.
+    let kappa = std::f32::consts::PI / (num(v, "tile").clamp(1.0, 1600.0) as f32);
+    let k = num(v, "curvature").clamp(-200.0, 200.0) as f32;
+    let iota = k * k / 10.0 * k.signum();
     sample_map(src, quality(v, 8.0), edge(v), Filter::Bilinear, |p| {
         let d = [p[0] - o[0], p[1] - o[1]];
         let st = [d[0] * cos + d[1] * sin, -d[0] * sin + d[1] * cos];
-        let st = st.map(|t| t + iota * (t * kappa).tan());
+        // per-pixel `tan` → WARP sincos (HLSL tan lowers to sin/cos/div, which the shader runs as sincos).
+        let st = st.map(|t| {
+            let (s, c) = warpmath::sincos(t * kappa);
+            t + iota * (s / c)
+        });
         let back = [st[0] * cos - st[1] * sin, st[0] * sin + st[1] * cos];
         ([o[0] + back[0], o[1] + back[1]], 1.0)
     })
@@ -639,8 +698,11 @@ fn twist(src: &EffectSurface, v: &Values, env: &EffectEnv) -> EffectSurface {
         let u = [p[0] - c[0], p[1] - c[1]];
         let rho = (u[0] * u[0] + u[1] * u[1]).sqrt();
         let t = (1.0 - rho * inv_l * inv_r).clamp(0.0, 1.0);
-        let phi = u[1].atan2(u[0]) + t * t * t * tau * 0.01;
-        ([c[0] + rho * phi.cos(), c[1] + rho * phi.sin()], 1.0)
+        let phi = warp_atan2(u[1], u[0]) + t * t * t * tau * 0.01;
+        // WARP sincos (shared warpmath) + fxc's compiled atan2 (warp_atan2), mirroring the genuine
+        // PdnTwistSampleMap's `sincos`/`atan2` so the sampled coord matches WARP bit-for-bit.
+        let (sin, cos) = warpmath::sincos(phi);
+        ([c[0] + rho * cos, c[1] + rho * sin], 1.0)
     })
 }
 
@@ -786,10 +848,10 @@ mod tests {
         assert_eq!(
             at(&wrap),
             [
-                [0.824_999_9, 0.133_333_34, 0.5, 1.0],
-                [0.575, 0.133_333_34, 0.5, 1.0],
-                [0.074_999_99, 0.599_999_96, 0.5, 1.0],
-                [0.575, 0.599_999_96, 0.5, 1.0],
+                [0.822_549, 0.131_372_56, 0.501_960_8, 1.0],
+                [0.573_529_5, 0.131_372_56, 0.501_960_8, 1.0],
+                [0.073_529_415, 0.6, 0.501_960_8, 1.0],
+                [0.573_529_5, 0.6, 0.501_960_8, 1.0],
             ]
         );
         let transparent = sample_map(&src, 2, Edge::Transparent, Filter::Bilinear, shift(0.5));
@@ -797,9 +859,9 @@ mod tests {
             at(&transparent),
             [
                 [0.0; 4],
-                [0.287_5, 0.066_666_67, 0.25, 0.5],
-                [0.022_499_993, 0.299_999_98, 0.149_999_99, 0.299_999_98],
-                [0.172_499_98, 0.299_999_98, 0.149_999_99, 0.299_999_98],
+                [0.286_764_74, 0.065_686_28, 0.250_980_4, 0.5],
+                [0.022_009_801, 0.299_999_98, 0.150_588_24, 0.299_999_98],
+                [0.172_009_8, 0.299_999_98, 0.150_588_24, 0.299_999_98],
             ]
         );
         let point = sample_map(&src, 3, Edge::Mirror, Filter::Point, |p| {
@@ -830,7 +892,7 @@ mod tests {
         });
         assert_eq!(
             heavy.at(0, 0),
-            [932_067.8, 466_033.9, 1_864_135.6, 1_398_102.1]
+            [935_723.44, 467_861.72, 1_864_135.6, 1_396_274.6]
         );
     }
 
@@ -842,25 +904,27 @@ mod tests {
         let bulge = |edge: &str| json!({"amount": -3, "centerX": 0.9, "centerY": 0.9, "edge": edge, "quality": 2});
         let polar = |edge: &str| json!({"amount": 0.45, "offsetX": 0.25, "offsetY": -0.5, "edge": edge, "quality": 2});
         #[rustfmt::skip]
+        // Distorts sample the 8bpc sRGB source (genuine PdnDistortionEffect has no gamma conversion),
+        // with WARP's Q8 fixed-point bilinear — see effect/surface.rs::bilinear_q8.
         let cases = [
-            ("bulgeEffect", json!({"amount": 0.75, "centerX": 0.3, "centerY": -0.2, "quality": 2}), 0, (32576, 4605776), [4, 7, 0, 253], [124, 118, 164, 79]),
-            ("bulgeEffect", bulge("clamp"), 0, (32239, 4553640), [4, 7, 0, 253], [114, 124, 159, 72]),
-            ("bulgeEffect", bulge("wrap"), 0, (32744, 4432835), [66, 78, 6, 241], [114, 124, 159, 72]),
-            ("bulgeEffect", bulge("reflect"), 0, (32251, 4556349), [4, 7, 0, 253], [114, 124, 159, 72]),
-            ("bulgeEffect", bulge("transparent"), 0, (31229, 4385784), [4, 8, 0, 204], [114, 124, 159, 72]),
-            ("crystalizeEffect", json!({"cell": 3, "quality": 2, "seed": 5}), 3, (33069, 4558071), [75, 53, 46, 220], [171, 163, 71, 166]),
+            ("bulgeEffect", json!({"amount": 0.75, "centerX": 0.3, "centerY": -0.2, "quality": 2}), 0, (31605, 4467896), [3, 4, 0, 253], [121, 112, 153, 79]),
+            ("bulgeEffect", bulge("clamp"), 0, (31219, 4408569), [3, 4, 0, 253], [110, 118, 148, 71]),
+            ("bulgeEffect", bulge("wrap"), 0, (30055, 4099459), [18, 24, 1, 241], [110, 118, 148, 71]),
+            ("bulgeEffect", bulge("reflect"), 0, (31237, 4412692), [3, 4, 0, 253], [110, 118, 148, 71]),
+            ("bulgeEffect", bulge("transparent"), 0, (30197, 4240078), [3, 4, 0, 204], [110, 118, 148, 71]),
+            ("crystalizeEffect", json!({"cell": 3, "quality": 2, "seed": 5}), 3, (32034, 4431679), [73, 49, 42, 219], [170, 162, 65, 165]),
             // seed8 = (9 + 300) mod 256 = 53; det = 3.5 gives 4 octaves, the last at half weight.
-            ("dentsEffect", json!({"scale": 10, "refraction": 80, "detail": 25, "turbulence": 30, "angle": 50, "quality": 2, "seed": 9}), 300, (32406, 4586125), [4, 7, 0, 253], [114, 123, 159, 74]),
-            ("frostedGlassEffect", json!({"maxRadius": 4, "minRadius": 1, "diffusion": 1.5, "smoothness": 3, "seed": 7}), 0x1234, (33403, 4515995), [29, 44, 8, 240], [131, 127, 87, 193]),
-            ("polarInversion", polar("reflect"), 0, (33215, 4688633), [30, 20, 4, 243], [80, 168, 154, 197]),
-            ("polarInversion", polar("wrap"), 0, (34358, 4678414), [30, 20, 4, 243], [80, 168, 154, 197]),
-            ("tileEffect", json!({"rotation": 25, "tile": 6, "curvature": 3, "quality": 2}), 0, (33669, 4510489), [37, 90, 56, 202], [114, 124, 157, 102]),
-            ("tileEffect", json!({"rotation": -50, "tile": 4, "curvature": -6, "edge": "transparent", "quality": 1}), 0, (8075, 1183442), [149, 0, 0, 75], [0, 0, 0, 0]),
-            ("twistEffect", json!({"amount": 60, "size": 0.8, "centerX": 0.2, "centerY": -0.1, "quality": 3}), 0, (32572, 4605726), [4, 8, 0, 253], [149, 131, 158, 165]),
-            ("pixelateEffect", pix("multisampleBilinear", "nearestNeighbor"), 0, (33057, 4596888), [27, 62, 16, 239], [103, 177, 123, 178]),
-            ("pixelateEffect", pix("bilinear", "nearestNeighbor"), 0, (32865, 4564107), [20, 53, 11, 240], [102, 171, 177, 189]),
+            ("dentsEffect", json!({"scale": 10, "refraction": 80, "detail": 25, "turbulence": 30, "angle": 50, "quality": 2, "seed": 9}), 300, (31437, 4447689), [3, 4, 0, 253], [111, 118, 149, 74]),
+            ("frostedGlassEffect", json!({"maxRadius": 4, "minRadius": 1, "diffusion": 1.5, "smoothness": 3, "seed": 7}), 0x1234, (30704, 4172416), [25, 34, 7, 239], [128, 78, 58, 193]),
+            ("polarInversion", polar("reflect"), 0, (32038, 4535810), [28, 13, 4, 242], [79, 166, 146, 197]),
+            ("polarInversion", polar("wrap"), 0, (32143, 4462160), [28, 13, 4, 242], [79, 166, 146, 197]),
+            ("tileEffect", json!({"rotation": 25, "tile": 6, "curvature": 3, "quality": 2}), 0, (31153, 4194271), [25, 80, 29, 202], [111, 118, 147, 101]),
+            ("tileEffect", json!({"rotation": -50, "tile": 4, "curvature": -6, "edge": "transparent", "quality": 1}), 0, (7936, 1163702), [148, 0, 0, 75], [0, 0, 0, 0]),
+            ("twistEffect", json!({"amount": 60, "size": 0.8, "centerX": 0.2, "centerY": -0.1, "quality": 3}), 0, (31425, 4447861), [3, 4, 0, 253], [146, 123, 131, 165]),
+            ("pixelateEffect", pix("multisampleBilinear", "nearestNeighbor"), 0, (31023, 4336041), [20, 49, 12, 239], [99, 172, 95, 178]),
+            ("pixelateEffect", pix("bilinear", "nearestNeighbor"), 0, (31818, 4405806), [16, 49, 9, 240], [100, 169, 162, 189]),
             ("pixelateEffect", pix("nearestNeighbor", "nearestNeighbor"), 0, (32058, 4431204), [28, 40, 13, 238], [112, 160, 208, 187]),
-            ("pixelateEffect", pix("multisampleBilinear", "bilinear"), 0, (33556, 4639033), [23, 47, 8, 244], [117, 140, 106, 182]),
+            ("pixelateEffect", pix("multisampleBilinear", "bilinear"), 0, (30481, 4261396), [16, 28, 5, 244], [109, 115, 78, 182]),
         ];
         for (id, v, inst, want, p00, p43) in cases {
             let out = run_env(id, v.clone(), &scene(), &env(inst));
@@ -883,7 +947,7 @@ mod tests {
             ((0, -1), [8.5, 8.5], [12.860_785, 5.958_823_7]),
             ((1, 0), [71.5, 8.5], [77.896_08, 8.813_725]),
             ((0, 1), [16.5, 12.5], [20.766_666, 16.907_843]),
-            ((-1, -1), [67.5, 8.5], [63.496_08, 6.962_745]),
+            ((-1, -1), [67.5, 8.5], [63.496_08, 6.962_745_7]),
             ((1, 1), [191.5, 13.5], [196.107_85, 17.284_313]),
             ((-1, 1), [120.5, 12.5], [120.343_14, 17.221_57]),
             ((1, -1), [39.5, 8.5], [41.127_453, 6.209_804]),
@@ -905,11 +969,11 @@ mod tests {
             json!({"scale": 200, "refraction": 200, "detail": 50, "turbulence": 50, "quality": 1});
         let out = run("dentsEffect", v, &img);
         let want = [
-            ((0, 0), [92, 71, 182, 255]),
-            ((9, 0), [54, 33, 49, 255]),
-            ((15, 0), [205, 34, 196, 255]),
-            ((21, 30), [30, 108, 90, 255]),
-            ((37, 12), [232, 40, 132, 255]),
+            ((0, 0), [92, 70, 181, 255]),
+            ((9, 0), [53, 32, 48, 255]),
+            ((15, 0), [204, 34, 195, 255]),
+            ((21, 30), [29, 108, 89, 255]),
+            ((37, 12), [231, 40, 76, 255]),
         ];
         for ((x, y), p) in want {
             assert_eq!(px(&out, x, y), p, "({x}, {y})");
@@ -949,15 +1013,17 @@ mod tests {
             json!({"scaleDown": "anisotropic"}),
             &checker,
         );
+        // Averages a checker in sRGB (was linear 188 — the color-space bug): (255+0)/2 → 128.
         assert!(
-            out.data.chunks(4).all(|p| p == [188, 188, 188, 255]),
+            out.data.chunks(4).all(|p| p == [128, 128, 128, 255]),
             "{:?}",
             out.data
         );
     }
 
-    /// B-E4 approximation: per premultiplied sRGB channel, Erode = maximum and Dilate = minimum over
-    /// the offsets −⌊W/2⌋..W − 1 − ⌊W/2⌋ (and H), Clamp edges; `linked` makes H follow W.
+    /// d2d's Morphology (native-verified, fx-filters-06/07): per premultiplied sRGB channel, Erode =
+    /// minimum and Dilate = maximum over the offsets −⌊W/2⌋..W − 1 − ⌊W/2⌋ (and H), transparent
+    /// outside the layer; `linked` makes H follow W.
     #[test]
     fn morphology_rectangle_and_modes() {
         let dot = from_fn(9, 7, |x, y| {
@@ -977,20 +1043,17 @@ mod tests {
             ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
                 .collect::<Vec<_>>()
         };
-        let erode = run(
+        let dilate = run(
             "morphologyEffect",
-            json!({"mode": "erode", "width": 4, "height": 3, "linked": false}),
+            json!({"mode": "dilate", "width": 4, "height": 3, "linked": false}),
             &dot,
         );
-        assert_eq!(lit(&erode), rect(3..=6, 2..=4));
-        assert_eq!(px(&erode, 6, 4), [200, 100, 50, 255]);
-        let linked = run(
-            "morphologyEffect",
-            json!({"mode": "erode", "width": 4, "height": 1}),
-            &dot,
-        );
+        assert_eq!(lit(&dilate), rect(3..=6, 2..=4));
+        assert_eq!(px(&dilate, 6, 4), [200, 100, 50, 255]);
+        let linked = run("morphologyEffect", json!({"width": 4, "height": 1}), &dot);
         assert_eq!(lit(&linked), rect(3..=6, 2..=5));
-        assert!(lit(&run("morphologyEffect", json!({}), &dot)).is_empty());
+        let erode = |v| run("morphologyEffect", v, &dot);
+        assert!(lit(&erode(json!({"mode": "erode"}))).is_empty());
         let hole = from_fn(9, 7, |x, y| {
             if (x, y) == (4, 3) {
                 [0, 0, 0, 255]
@@ -998,33 +1061,30 @@ mod tests {
                 [200, 100, 50, 255]
             }
         });
-        let dilate = run(
+        let erode = run(
             "morphologyEffect",
-            json!({"width": 2, "height": 3, "linked": false}),
+            json!({"mode": "erode", "width": 2, "height": 3, "linked": false}),
             &hole,
         );
-        let dark: Vec<_> = rect(0..=8, 0..=6)
+        let dark: Vec<_> = rect(1..=8, 1..=5)
             .into_iter()
-            .filter(|&(x, y)| px(&dilate, x, y)[0] == 0)
+            .filter(|&(x, y)| px(&erode, x, y)[0] == 0)
             .collect();
         assert_eq!(dark, rect(4..=5, 2..=4));
-        // Clamp edges: a flat layer stays flat under the minimum (Transparent would darken the rim).
+        // Transparent outside: the minimum eats the rim the window reaches past (x 0, y 0 and 6).
+        let alpha = |pts: [(u32, u32); 3]| pts.map(|(x, y)| px(&erode, x, y)[3]);
+        assert_eq!(alpha([(0, 0), (0, 3), (0, 6)]), [0; 3]);
+        assert_eq!(alpha([(4, 0), (4, 6), (8, 3)]), [0, 0, 255]);
         let flat = solid(5, 4, [200, 100, 50, 255]);
-        assert_eq!(
-            run("morphologyEffect", json!({"width": 5}), &flat).data,
-            flat.data
-        );
+        let out = run("morphologyEffect", json!({"width": 5}), &flat);
+        assert_eq!(out.data, flat.data);
         // Premultiplied sRGB: max((255, 0, 0, α 0.2), (0, 0, 255, α 1)) = (0.2, 0, 1, 1) → (51, 0, 255).
         let pair = ImageData {
             width: 2,
             height: 1,
             data: vec![255, 0, 0, 51, 0, 0, 255, 255],
         };
-        let out = run(
-            "morphologyEffect",
-            json!({"mode": "erode", "width": 2}),
-            &pair,
-        );
+        let out = run("morphologyEffect", json!({"width": 2}), &pair);
         assert_eq!(px(&out, 1, 0), [51, 0, 255, 255]);
     }
 
@@ -1246,14 +1306,11 @@ mod tests {
             let EffectKind::Gpu(info, _) = d.kind else {
                 panic!("{id}")
             };
-            let space = if id == "morphologyEffect" {
-                Space::Srgb
-            } else {
-                Space::Linear
-            };
+            // All distorts sample the 8bpc sRGB source (genuine PdnDistortionEffect has no gamma),
+            // so every one is Srgb (was Linear for the SampleMap distorts — a color-space bug).
             assert_eq!(
                 (d.icon, info),
-                (icon, RenderInfo::new(space, Alpha::Premultiplied)),
+                (icon, RenderInfo::new(Space::Srgb, Alpha::Premultiplied)),
                 "{id}"
             );
         }

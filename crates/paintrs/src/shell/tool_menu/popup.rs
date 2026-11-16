@@ -805,12 +805,15 @@ fn font_menu(
         let x0 = row.min.x + bw + pad;
         let ppp = ui.ctx().pixels_per_point();
         let top = row.min.y + bw + (row_h - 2.0 * bw - spec().resolved_line_height(ppp)) / 2.0;
-        let name = ellipsize(label, label_w, TOOL_POPUP_FONT_SIZE);
+        // A long name shrinks to fit (at most to 3/4), then ellipsizes; centred in the same line box.
+        let size = text::fit_size(label, label_w, TOOL_POPUP_FONT_SIZE);
+        let name = ellipsize(label, label_w, size);
+        let name_spec = FontSpec::new(size).line_height(spec().resolved_line_height(ppp));
         let clip = painter.with_clip_rect(
             Rect::from_min_size(Pos2::new(x0, row.min.y), Vec2::new(label_w, row_h))
                 .intersect(painter.clip_rect()),
         );
-        text::draw(&clip, Pos2::new(x0, top), &name, spec(), theme.pdn_text);
+        text::draw(&clip, Pos2::new(x0, top), &name, name_spec, theme.pdn_text);
         let preview = Rect::from_min_size(
             Pos2::new(x0 + label_w + gap, row.min.y + (row_h - preview_size) / 2.0),
             Vec2::new(preview_w, preview_size),

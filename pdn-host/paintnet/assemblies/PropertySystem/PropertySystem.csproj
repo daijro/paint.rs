@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.PropertySystem</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Vector2Double/Vector3Double values of the vector properties. -->
+    <ProjectReference Include="../Primitives/Primitives.csproj" />
+    <ProjectReference Include="../Fundamentals/Fundamentals.csproj" />
+    <!-- ImageResource wraps a System.Drawing.Image. -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+  </ItemGroup>
+</Project>

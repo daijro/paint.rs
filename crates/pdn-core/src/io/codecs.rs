@@ -117,7 +117,11 @@ pub fn detect_format(file_name: &str, mime: Option<&str>, bytes: &[u8]) -> Optio
         "image/vnd.adobe.photoshop" | "image/x-photoshop" => Some("psd"),
         _ => None,
     };
-    by_ext.or_else(by_mime).or_else(|| magic(bytes))
+    // Built-ins first, then a plugin FileType's extension (never shadows a built-in).
+    by_ext
+        .or_else(by_mime)
+        .or_else(|| magic(bytes))
+        .or_else(|| ext.as_deref().and_then(super::plugins::format_for_ext))
 }
 
 /// The PNG/JPEG/GIF/BMP/TIFF/WebP/PDN3/PSD signature at the start of `bytes`.
@@ -154,6 +158,9 @@ pub(crate) fn decode_within(
     bytes: &[u8],
     budget: u64,
 ) -> Result<Decoded, CodecError> {
+    if super::plugins::is_plugin_format(format) {
+        return super::plugins::open(format, bytes);
+    }
     use image::ImageFormat as F;
     const WIC: [&str; 5] = ["png", "jpeg", "gif", "bmp", "tiff"];
     let format = match magic(bytes) {

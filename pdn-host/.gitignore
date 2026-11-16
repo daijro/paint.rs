@@ -1,0 +1,11 @@
+# .NET / Rust build output anywhere under pdn-host/ (defense-in-depth; the
+# per-host subdirs also ignore these).
+**/bin/
+**/obj/
+**/.build/
+**/.build-tmp/
+**/artifacts/
+**/target/
+*.so
+*.dll
+*.exe

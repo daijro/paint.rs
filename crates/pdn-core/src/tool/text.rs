@@ -2142,6 +2142,8 @@ impl TextTool {
         if !self.is_editing() {
             return false;
         }
+        // The arrows go on to move the pointer (`AppWorkspace::keyboard_pointer`): the text
+        // follows them.
         if self.drag.is_some() {
             return matches!(
                 k.key.as_str(),
@@ -2149,10 +2151,6 @@ impl TextTool {
                     | "Enter"
                     | "Backspace"
                     | "Delete"
-                    | "ArrowLeft"
-                    | "ArrowRight"
-                    | "ArrowUp"
-                    | "ArrowDown"
                     | "Home"
                     | "End"
                     | "PageUp"

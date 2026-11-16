@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Microsoft.Win32.Registry off Windows, for plugins: .NET's throws PlatformNotSupportedException there, and
+       plugins remember their last settings in HKEY_CURRENT_USER (Ed Harvey's). Not referenced by the bridge (the
+       framework ships an assembly of this name): publish.sh builds it into plugin-shims/, which the plugin load
+       context checks first. -->
+  <PropertyGroup>
+    <AssemblyName>Microsoft.Win32.Registry</AssemblyName>
+    <RootNamespace>Microsoft.Win32</RootNamespace>
+    <Version>10.0.0.0</Version>
+    <AssemblyVersion>10.0.0.0</AssemblyVersion>
+    <FileVersion>10.0.0.0</FileVersion>
+  </PropertyGroup>
+</Project>

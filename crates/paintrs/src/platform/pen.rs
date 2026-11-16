@@ -93,6 +93,9 @@ pub struct PenInput {
     pub enabled: bool,
     #[cfg(not(target_arch = "wasm32"))]
     contact: Option<(TouchDeviceId, TouchId)>,
+    /// Whether the contact's forced touches are a pen, asked once (`touch_type`).
+    #[cfg(not(target_arch = "wasm32"))]
+    contact_pen: Option<bool>,
     #[cfg(not(target_arch = "wasm32"))]
     paired: std::collections::VecDeque<(Pair, PointerMetadata)>,
     /// Where a tablet backend writes the pen (`platform::tablet`).
@@ -200,15 +203,11 @@ impl PenInput {
             {
                 let identity = (device_id, id);
                 if self.contact.is_none() {
-                    self.contact = Some(identity);
+                    (self.contact, self.contact_pen) = (Some(identity), None);
                 }
                 if self.contact == Some(identity) {
                     let metadata = PointerMetadata {
-                        pointer_type: if force.is_some() {
-                            PointerType::Pen
-                        } else {
-                            PointerType::Mouse
-                        },
+                        pointer_type: touch_type(force, &mut self.contact_pen, || touch_is_pen(id)),
                         pressure: force.map(f64::from),
                         time_ms: now,
                     };
@@ -288,9 +287,60 @@ impl PenInput {
     }
 }
 
+/// A touch contact's pointer type: with no force it acts as a mouse; with one it is a pen, or touch
+/// when `is_pen` (asked once per contact, into `pen`) says it is a finger that senses pressure.
+#[cfg(not(target_arch = "wasm32"))]
+fn touch_type(
+    force: Option<f32>,
+    pen: &mut Option<bool>,
+    is_pen: impl FnOnce() -> bool,
+) -> PointerType {
+    match force {
+        None => PointerType::Mouse,
+        Some(_) if *pen.get_or_insert_with(is_pen) => PointerType::Pen,
+        Some(_) => PointerType::Touch,
+    }
+}
+
+/// On Windows winit reports a pen and a pressure-sensing finger alike, as a touch with a force
+/// whose id is the Windows pointer id, so Windows says which it is. A pointer already gone (a
+/// quick tap seen a frame later) counts as a pen, as every forced touch did before.
+#[cfg(windows)]
+fn touch_is_pen(id: TouchId) -> bool {
+    use windows_sys::Win32::UI::{Input::Pointer::GetPointerType, WindowsAndMessaging::PT_PEN};
+    let mut kind = 0;
+    // SAFETY: `kind` is a valid out pointer for the call.
+    unsafe { GetPointerType(id.0 as u32, &mut kind) == 0 || kind == PT_PEN }
+}
+
+/// Elsewhere winit gives touches no force, so a forced touch is a pen's.
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
+fn touch_is_pen(_: TouchId) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A forced touch is a pen unless the platform says finger, asked once per contact; no force
+    /// is a mouse.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn touch_type_asks_once_whether_a_forced_touch_is_a_pen() {
+        let mut pen = None;
+        assert_eq!(
+            touch_type(None, &mut pen, || unreachable!()),
+            PointerType::Mouse
+        );
+        assert_eq!(
+            touch_type(Some(0.5), &mut pen, || false),
+            PointerType::Touch
+        );
+        assert_eq!(touch_type(Some(0.5), &mut pen, || true), PointerType::Touch);
+        let mut pen = None;
+        assert_eq!(touch_type(Some(0.5), &mut pen, || true), PointerType::Pen);
+    }
     #[test]
     fn pen_pressure_mapping_preserves_zero_and_rejects_missing_invalid_values() {
         use pdn_core::app::get_pointer_pressure as pressure;

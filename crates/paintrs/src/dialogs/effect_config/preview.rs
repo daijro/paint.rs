@@ -28,6 +28,13 @@ pub(super) struct SlicedSeam {
     started: web_time::Instant,
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(super) struct SlicedPlugin {
+    generation: u64,
+    slice: pdn_core::effect::session::PluginSlice,
+    started: web_time::Instant,
+}
+
 fn seam_warning(message: String) -> TaskDialogSpec {
     TaskDialogSpec {
         title: "Warning".into(),
@@ -61,6 +68,7 @@ impl EffectConfigDialog {
         #[cfg(target_arch = "wasm32")]
         {
             self.sliced_seam = None;
+            self.sliced_plugin = None;
         }
     }
 
@@ -268,6 +276,31 @@ impl EffectConfigDialog {
             self.job_cancel = None;
             self.accept_result(cx, result);
         }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(job) = &mut self.sliced_plugin {
+            use pdn_core::effect::session::PluginStatus;
+            let frame_start = web_time::Instant::now();
+            let result = loop {
+                match job.slice.step(1, self.job_cancel.as_deref()) {
+                    PluginStatus::Pending => {
+                        if frame_start.elapsed() >= std::time::Duration::from_millis(4) {
+                            ctx.request_repaint();
+                            return;
+                        }
+                    }
+                    PluginStatus::Complete(pixels, notice) => break Some((pixels, notice)),
+                    PluginStatus::Cancelled => break None,
+                }
+            };
+            let result = JobResult {
+                generation: job.generation,
+                result,
+                elapsed: job.started.elapsed().as_secs_f64() * 1000.0,
+            };
+            self.sliced_plugin = None;
+            self.job_cancel = None;
+            self.accept_result(cx, result);
+        }
         let Some(due) = self.due else {
             return;
         };
@@ -329,6 +362,15 @@ impl EffectConfigDialog {
                 self.sliced_seam = Some(SlicedSeam {
                     generation,
                     carver,
+                    started: web_time::Instant::now(),
+                });
+                ctx.request_repaint();
+            } else if let Some(slice) = session.plugin_slice(&values) {
+                // A real Paint.NET plugin effect renders in strips across frames, so Cancel and the
+                // progress bar work on the single-threaded runtime (the seam carver's contract).
+                self.sliced_plugin = Some(SlicedPlugin {
+                    generation,
+                    slice,
                     started: web_time::Instant::now(),
                 });
                 ctx.request_repaint();

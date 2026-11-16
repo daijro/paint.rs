@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The layer blend modes classic effects composite with (LayerBlendModeUtil, UserBlendOps). -->
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Data</AssemblyName>
+    <RootNamespace>PaintDotNet</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Core/Core.csproj" />
+    <!-- LayerBlendModeExtensions maps a blend mode to Paint.NET 5's MixMode. -->
+    <ProjectReference Include="../WindowsFramework/WindowsFramework.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PdnBridge" />
+    <InternalsVisibleTo Include="PaintNetWeb" />
+  </ItemGroup>
+</Project>

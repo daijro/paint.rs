@@ -581,6 +581,10 @@ impl eframe::App for PaintApp {
             use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp};
             [ArrowLeft, ArrowRight, ArrowUp, ArrowDown].map(|k| i.key_down(k))
         });
+        // Pan mode lasts while Space is held, through a release the canvas never saw.
+        if self.app.pan_mode && !ui.input(|i| i.key_down(egui::Key::Space)) {
+            self.app.on_key_up(" ");
+        }
         // Buttons held anywhere (a toolbar slider drag too): the transacted tools' settings
         // window and the generic Escape handler read them (painting-tools-2.md §7.4, §7.6).
         self.app.mouse_buttons = buttons;

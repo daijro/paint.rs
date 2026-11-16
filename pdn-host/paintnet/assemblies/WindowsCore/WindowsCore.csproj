@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Same-named extension classes exist in Windows/Windows.Framework, as in the genuine assemblies. -->
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
+    <AssemblyName>PaintDotNet.Windows.Core</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Primitives/Primitives.csproj" />
+    <ProjectReference Include="../Windows/Windows.csproj" />
+    <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PaintDotNet.Windows.Framework" />
+    <InternalsVisibleTo Include="PaintDotNet.Effects.Gpu" />
+    <InternalsVisibleTo Include="PdnBridge" />
+    <InternalsVisibleTo Include="PaintNetWeb" />
+  </ItemGroup>
+</Project>

@@ -591,6 +591,9 @@ impl AssetLibrary {
         if self.plugins.poll() {
             ctx.request_repaint();
         }
+        if let Some(text) = self.plugins.notice.take() {
+            super::files::message("Plug-ins", text);
+        }
         if self.plugins.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }

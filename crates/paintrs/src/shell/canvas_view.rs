@@ -4,7 +4,8 @@
 //! is cached; the overlays (selection layers) are drawn over copies of its rows as the texture
 //! pixels are written, and an ants frame alone rewrites just the outline spans.
 //! The canvas input: pointer routing to the tools and the middle-button pan, wheel scroll and
-//! Ctrl+wheel zoom, auto-scroll while dragging, and the tool cursor drawn over the canvas.
+//! Ctrl+wheel zoom, the two-finger pinch zoom and pan, auto-scroll while dragging, and the tool
+//! cursor drawn over the canvas.
 //! Port of: js/src/engine/AppView.js (`render`, `renderRulers`, `drawRuler`, the pointer and
 //! wheel listeners, `startAutoScroll`/`autoScrollIfNecessary`), css/layout.css (`#canvas`,
 //! `.editor-ruler*`)
@@ -55,9 +56,67 @@ struct RulerKey {
     highlight: Option<(f64, f64)>,
 }
 
+/// Canvas key presses, by the time of each key's first press. egui marks any press of a key it
+/// already holds as a repeat, so a platform that delivers one physical press twice (an input
+/// method forwarding a key it already passed on) looks like a held key; a "repeat" sooner after
+/// its press than any auto-repeat delay is that duplicate, and is dropped. Only the arrow keys,
+/// whose every press nudges: other keys (Ctrl+Tab focus cycling, shortcuts) are never throttled.
+#[derive(Default)]
+struct KeyPresses(std::collections::HashMap<egui::Key, f64>);
+
+/// Shorter than any OS auto-repeat delay (the lowest settings are about 100 ms).
+const MIN_REPEAT_DELAY_MS: f64 = 80.0;
+
+impl KeyPresses {
+    /// Whether `event`, at `now_ms`, reaches the canvas.
+    fn accept(&mut self, event: &Event, now_ms: f64) -> bool {
+        use egui::Key::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp};
+        if !matches!(
+            event,
+            Event::Key {
+                key: ArrowLeft | ArrowRight | ArrowUp | ArrowDown,
+                ..
+            }
+        ) {
+            return true;
+        }
+        match *event {
+            Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                ..
+            } => {
+                self.0.insert(key, now_ms);
+                true
+            }
+            Event::Key {
+                key,
+                pressed: true,
+                repeat: true,
+                ..
+            } => self
+                .0
+                .get(&key)
+                .is_none_or(|&first| now_ms - first >= MIN_REPEAT_DELAY_MS),
+            Event::Key {
+                key,
+                pressed: false,
+                ..
+            } => {
+                self.0.remove(&key);
+                true
+            }
+            _ => true,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct CanvasView {
     pub pen: crate::platform::PenInput,
+    /// The keys pressed on the canvas, to drop a doubled press.
+    key_presses: KeyPresses,
     /// The base kept between renders and the overlays drawn over it on the way to `pixels`; a
     /// frame redraws only what changed (Task 27r).
     canvas: CanvasPixels,
@@ -77,6 +136,9 @@ pub struct CanvasView {
     rulers: [Option<Ruler>; 2],
     /// The units box in the corner (the abbreviation is drawn as text each frame).
     corner: Option<Corner>,
+    /// A two-finger gesture began on the canvas and some finger is still down: it zooms and pans
+    /// the view, and the canvas takes no pointer input until every finger is up.
+    pinch: bool,
     /// All physical canvas buttons still held. Capture survives the first release (which
     /// ends brush/picker drags) until the last button is up, including three-button chords.
     buttons: u8,
@@ -833,19 +895,21 @@ impl CanvasView {
         let to_canvas = |p: Pos2| ((p.x - at.origin.x) as f64, (p.y - at.origin.y) as f64);
         let now = app.now_ms;
         let enabled = self.pen.enabled;
-        let sample = |p: Pos2, metadata: crate::platform::pen::PointerMetadata| {
-            let (x, y) = to_canvas(p);
-            PointerSample {
-                x,
-                y,
-                pressure: pdn_core::app::get_pointer_pressure(
-                    metadata.pointer_type,
-                    metadata.pressure,
-                    enabled,
-                ),
-                time_ms: metadata.time_ms,
-            }
-        };
+        // `offset`: where the arrow keys moved the pointer (`AppWorkspace::pointer_offset`).
+        let sample =
+            |p: Pos2, metadata: crate::platform::pen::PointerMetadata, offset: (f64, f64)| {
+                let (x, y) = to_canvas(p);
+                PointerSample {
+                    x: x + offset.0,
+                    y: y + offset.1,
+                    pressure: pdn_core::app::get_pointer_pressure(
+                        metadata.pointer_type,
+                        metadata.pressure,
+                        enabled,
+                    ),
+                    time_ms: metadata.time_ms,
+                }
+            };
         let input = |samples: Vec<PointerSample>, pointer_type| PointerInput {
             pointer_type,
             samples,
@@ -856,6 +920,32 @@ impl CanvasView {
         if was_over && app.zoom_anchor.is_none() {
             // The tools' `on_frame` sees the pointer leave (the brush outline hides) next frame.
             ui.ctx().request_repaint();
+        }
+        // Two fingers: a pinch zooms about its centre and moving them pans. A finger already
+        // drawing has its stroke cancelled, then released, so it leaves no mark. A pen stroke
+        // goes on through a second contact (a resting palm); a finger that senses pressure is
+        // touch, not a pen (`pen::touch_type`).
+        let (touch, touching) = ui.input(|i| (i.multi_touch(), i.any_touches()));
+        self.pinch &= touching;
+        let pen_stroke = self.buttons != 0 && self.pen.state.pointer_type == PointerType::Pen;
+        if let Some(t) = touch
+            && (self.pinch || (!pen_stroke && (self.buttons != 0 || over(t.center_pos))))
+        {
+            if !std::mem::replace(&mut self.pinch, true) {
+                app.cancel_gesture();
+                self.lose_capture(app);
+            }
+            let (cx, cy) = to_canvas(t.center_pos);
+            if let Some(ws) = app.active_ws_mut() {
+                let (v, d) = (&mut ws.view, t.translation_delta);
+                if !v.zoom_to_window && d != Vec2::ZERO {
+                    v.set_view_position(v.viewport_x - d.x as f64, v.viewport_y - d.y as f64);
+                }
+                // Two fingers on one spot give no finite ratio.
+                if t.zoom_delta.is_finite() && t.zoom_delta > 0.0 && t.zoom_delta != 1.0 {
+                    v.set_zoom(v.zoom * t.zoom_delta as f64, cx, cy);
+                }
+            }
         }
         let mut moves: Vec<PointerSample> = vec![];
         let mut move_type = PointerType::Mouse;
@@ -873,8 +963,21 @@ impl CanvasView {
         let final_buttons = app.mouse_buttons;
         for (index, event) in events.iter().cloned().enumerate() {
             let metadata = self.pen.metadata(index, &event, now);
+            let pointer = matches!(
+                event,
+                Event::PointerMoved(_)
+                    | Event::PointerButton { .. }
+                    | Event::MouseWheel { .. }
+                    | Event::Zoom(_)
+            );
+            if self.pinch && pointer {
+                continue;
+            }
             match event {
                 Event::Key { .. } | Event::Text(_) | Event::Paste(_) | Event::Ime(_) => {
+                    if !self.key_presses.accept(&event, app.now_ms) {
+                        continue;
+                    }
                     flush(&mut moves, move_type, app);
                     app.mouse_buttons = physical_buttons_at(&events, index, initial_buttons);
                     keyboard(index, &event, app);
@@ -886,11 +989,19 @@ impl CanvasView {
                     }
                     move_type = metadata.pointer_type;
                     self.pen.accept(metadata);
-                    moves.push(sample(p, metadata));
+                    // A real move with no button down takes the pointer back from the keys; a
+                    // press keeps their offset until it ends, as a moved OS cursor would.
+                    if self.buttons == 0 {
+                        app.pointer_offset = (0.0, 0.0);
+                    }
+                    moves.push(sample(p, metadata, app.pointer_offset));
                 }
                 Event::PointerButton { pos, .. } => {
                     flush(&mut moves, move_type, app);
-                    let packet = input(vec![sample(pos, metadata)], metadata.pointer_type);
+                    let packet = input(
+                        vec![sample(pos, metadata, app.pointer_offset)],
+                        metadata.pointer_type,
+                    );
                     if self.buttons != 0 || over(pos) {
                         self.pen.accept(metadata);
                     }
@@ -1111,6 +1222,27 @@ impl CanvasView {
             CursorRequest::Css(keyword) => ctx.set_cursor_icon(css_cursor(keyword)),
             CursorRequest::None => ctx.set_cursor_icon(CursorIcon::None),
             CursorRequest::Image(name) => {
+                // Moved by the arrow keys, the pointer is drawn where the tool has it: the OS
+                // cursor can't go there in a browser or on Wayland.
+                if app.pointer_offset != (0.0, 0.0)
+                    && let (Some(cursor), Some(p)) = (
+                        crate::assets::Assets::cursor(ctx, name),
+                        ctx.input(|i| i.pointer.hover_pos()),
+                    )
+                {
+                    ctx.set_cursor_icon(CursorIcon::None);
+                    let (ox, oy) = app.pointer_offset;
+                    let [hx, hy] = cursor.hotspot.map(|v| v as f32 / cursor.scale);
+                    let min = p + Vec2::new(ox as f32 - hx, oy as f32 - hy);
+                    ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, tool_cursor_id()))
+                        .image(
+                            cursor.texture.id(),
+                            Rect::from_min_size(min, cursor.texture.size_vec2() / cursor.scale),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    return;
+                }
                 // The crosshair shows where the bitmap can't (an unresolved cursor, a backend
                 // without bitmap cursors).
                 ctx.set_cursor_icon(CursorIcon::Crosshair);

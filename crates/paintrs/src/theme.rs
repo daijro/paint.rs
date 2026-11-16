@@ -707,9 +707,10 @@ pub const TOOL_SHAPE_INSET: Color32 = rgba(195, 228, 255, 0.28);
 /// `.tool-font-dropdown-menu { width: min(380px, 100vw - 12px); max-height: min(520px, 100vh -
 /// 130px) }`, `button { grid: minmax(105px, 155px) minmax(160px, 1fr); gap: 12px }` (patched
 /// 304/9.6/416/104, 124, 9.6), `.tool-font-dropdown-preview { font-size: 17px; line-height: 1 }`
-/// (unpatched: not a 125 % length).
-pub const TOOL_FONT_MENU: (f32, f32, f32, f32) = (304.0, 9.6, 416.0, 104.0);
-pub const TOOL_FONT_COLUMNS: (f32, f32, f32) = (124.0, 9.6, 17.0); // label max, gap, preview px
+/// (unpatched: not a 125 % length). The name column takes its unpatched 155 px maximum, and the menu
+/// 31 px more, so long family names fit (shrunk to at most 2/3) and the preview keeps its room.
+pub const TOOL_FONT_MENU: (f32, f32, f32, f32) = (335.0, 9.6, 416.0, 104.0);
+pub const TOOL_FONT_COLUMNS: (f32, f32, f32) = (155.0, 9.6, 17.0); // label max, gap, preview px
 pub const TOOL_FONT_PREVIEW_TEXT: &str = "The quick brown fox";
 
 // ---- Floating forms (css/window.css) ----

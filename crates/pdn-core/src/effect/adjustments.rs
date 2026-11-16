@@ -2,16 +2,17 @@
 //! Port of: js/src/engine/document/effect/BitmapEffectEngine.js (`DEFINITIONS` lines 19–153 and
 //! `levelsDefinition`: ids, icons, dialog layouts and control keys only).
 //! Paint.NET's inventory, working spaces and algorithms; histograms over selected pixels;
-//! approximations for the Direct2D-backed four.
+//! the Direct2D-backed ones as their d2d nodes.
 
-use super::sample::gaussian_kernel;
-use super::surface::{Alpha, Edge, EffectSurface, Space, luma, premultiply, unpremultiply};
+use super::graph::{
+    CLSID_D2D1Exposure, CLSID_D2D1HighlightsShadows, CLSID_D2D1TemperatureTint, Prop, one_node,
+};
+use super::surface::{Alpha, EffectSurface, Space, luma, premultiply, unpremultiply};
 use super::{
     Category, Control, DialogLayout, EffectDef, EffectEnv, EffectKind, GpuFn, RenderInfo, Values,
     choice, flag, num, range,
 };
 use crate::canvas::ImageData;
-use crate::pixel::gamma::{linear_to_srgb_f32, srgb_to_linear_f32};
 use crate::pixel::mask::Mask;
 use serde_json::{Value, json};
 
@@ -116,10 +117,13 @@ pub fn definitions() -> Vec<EffectDef> {
             "exposure_effect.png",
             vec![range("exposure", "Exposure", -200.0, 200.0, 0.0)],
             LINEAR_PM,
-            // approximation: D2D Exposure (§6 row 2, B-A2)
+            // Genuine ExposureGpuEffect: d2d's Exposure (ExposureValue = exposure/100), linear light.
             |s, v, _| {
-                let g = (num(v, "exposure") as f32 / 100.0).exp2();
-                map_px(s, |p| [p[0] * g, p[1] * g, p[2] * g, p[3]])
+                one_node(
+                    s,
+                    CLSID_D2D1Exposure,
+                    &[(0, Prop::F32(num(v, "exposure") as f32 / 100.0))],
+                )
             },
         ),
         adj(
@@ -579,57 +583,23 @@ pub fn hsl_adjust(
     hsl_to_rgb((h + hue).rem_euclid(1.0), sat * k, lum).map(|c| c + (target - c) * amount)
 }
 
-/// Unpremultiplied, linear-light RGB plus straight alpha.
-fn to_linear(p: [f32; 4]) -> [f32; 4] {
-    let u = unpremultiply(p);
-    [
-        srgb_to_linear_f32(u[0]),
-        srgb_to_linear_f32(u[1]),
-        srgb_to_linear_f32(u[2]),
-        u[3],
-    ]
-}
-
-fn from_linear(p: [f32; 4]) -> [f32; 4] {
-    premultiply([
-        linear_to_srgb_f32(p[0]),
-        linear_to_srgb_f32(p[1]),
-        linear_to_srgb_f32(p[2]),
-        p[3],
-    ])
-}
-
-// approximation: D2D HighlightsShadows (B-A3)
+/// Genuine HighlightsAndShadowsGpuEffect: d2d's HighlightsShadows (Highlights, Shadows, Clarity /100,
+/// InputGamma sRGB, MaskBlurRadius = radius) on the sRGB layer.
 fn highlights_shadows(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    let [h, s, c] = ["highlights", "shadows", "clarity"].map(|k| num(v, k) as f32 / 100.0);
-    if h == 0.0 && s == 0.0 && c == 0.0 {
-        return src.clone();
-    }
-    let lin = map_px(src, to_linear);
-    let y = map_px(&lin, |p| [luma(p[0], p[1], p[2]), 0.0, 0.0, 0.0]);
-    let m = y.convolve_hv(&gaussian_kernel(num(v, "radius")), Edge::Mirror);
-    EffectSurface::from_fn(src.w, src.h, |px, py| {
-        let (p, yv, mv) = (
-            lin.at(px, py),
-            y.at(px, py)[0],
-            m.at(px, py)[0].clamp(0.0, 1.0),
-        );
-        let g = (1.5 * (s * (1.0 - mv) * (1.0 - mv) + h * mv * mv)).exp2();
-        let f = |l: f32| l * g + c * (yv - mv) * 0.5;
-        from_linear([f(p[0]), f(p[1]), f(p[2]), p[3]])
-    })
+    let [h, s, c] =
+        ["highlights", "shadows", "clarity"].map(|k| Prop::F32(num(v, k) as f32 / 100.0));
+    let radius = Prop::F32(num(v, "radius") as f32);
+    one_node(
+        src,
+        CLSID_D2D1HighlightsShadows,
+        &[(0, h), (1, s), (2, c), (3, Prop::U32(1)), (4, radius)],
+    )
 }
 
+/// Genuine TemperatureAndTintGpuEffect: d2d's TemperatureTint (temperature, tint /100) on the sRGB layer.
 fn temperature_tint(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface {
-    let [t, n] = ["temperature", "tint"].map(|k| num(v, k) as f32 / 100.0);
-    if t == 0.0 && n == 0.0 {
-        return src.clone();
-    }
-    map_px(src, |p| {
-        let l = to_linear(p);
-        let [r, g, b] = temp_tint_linear([l[0], l[1], l[2]], t, n);
-        from_linear([r, g, b, l[3]])
-    })
+    let [t, n] = ["temperature", "tint"].map(|k| Prop::F32(num(v, k) as f32 / 100.0));
+    one_node(src, CLSID_D2D1TemperatureTint, &[(0, t), (1, n)])
 }
 
 /// The per-channel gain on linear-light RGB, temperature and tint on −1…1 (0, 0 = identity).
@@ -936,9 +906,10 @@ mod tests {
         }
     }
 
-    /// Highlights & Shadows and Temperature & Tint: identity at 0, direction tests only (§6 rows 3–4; B-A3, B-A4).
+    /// Highlights & Shadows and Temperature & Tint (d2d's native-verified nodes): identity at 0 and
+    /// their direction. Tint +100 greens by lowering red and blue (d2d/native), not by raising green.
     #[test]
-    fn d2d_placeholders_are_neutral_at_zero() {
+    fn d2d_adjustments_are_neutral_at_zero() {
         let img = crate::effect::test_util::from_fn(9, 9, |x, y| {
             [(x * 28) as u8, (y * 28) as u8, 128, 255]
         });
@@ -967,7 +938,7 @@ mod tests {
             json!({"tint": 100}),
             [128, 128, 128],
         );
-        assert!(green[1] > 128, "{green:?}");
+        assert!(green[1] > green[0] && green[1] > green[2], "{green:?}");
     }
 
     /// §2.9 Levels: each channel uses its own triple element.

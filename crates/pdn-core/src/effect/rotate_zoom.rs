@@ -2,13 +2,12 @@
 //! Port of: js/src/engine/document/effect/BitmapEffectEngine.js (`ROTATE_ZOOM`: id, action, icon,
 //! dialog and control keys, labels and steps only).
 
-use super::distort::{Filter, offset, sample_map};
+use super::distort::{Filter, sample_map};
 use super::surface::{Alpha, Edge, EffectSurface, Space};
 use super::{
     Category, Control, DialogLayout, EffectDef, EffectEnv, EffectKind, GPU_QUALITY, RenderInfo,
     Values, choice, num, range,
 };
-use std::f64::consts::PI;
 
 /// paintdotjs's `ROTATE_ZOOM` keys, labels and steps; Paint.NET's quality range 1–8 [Q*], control
 /// order and exponential zoom (R19, §2.16); choice order paintdotjs's (ruling R45).
@@ -45,7 +44,7 @@ pub fn definition() -> EffectDef {
             },
         ],
         kind: EffectKind::Gpu(
-            RenderInfo::new(Space::Linear, Alpha::Premultiplied),
+            RenderInfo::new(Space::Srgb, Alpha::Premultiplied),
             rotate_zoom,
         ),
         dialog: Some(DialogLayout::RotateZoom),
@@ -64,36 +63,50 @@ fn rotate_zoom(src: &EffectSurface, v: &Values, _: &EffectEnv) -> EffectSurface 
 /// pos = dsdx·mₓ + dsdy·m_y, weight [pos_z ≥ −r], src = pos_xy·r/(z(r + pos_z)) + c, with
 /// r = ½√(W² + H²) (the half diagonal).
 pub fn rotate_zoom_with(src: &EffectSurface, v: &Values) -> EffectSurface {
-    let deg = |k| num(v, k).clamp(-180.0, 180.0) * PI / 180.0;
-    let (a, d) = (deg("angle"), deg("rollDirection"));
-    let t = (num(v, "rollAmount").clamp(0.0, 90.0) / 90.0).asin();
-    let pan = offset(v, ["panX", "panY"], 10.0);
-    let z = num(v, "zoom").clamp(0.06, 16.0);
+    // Genuine (PdnRotateZoomSampleMap) builds the 3-D basis entirely in f32 with MathF, so mirror its
+    // op sequence through crt (ucrtbase-exact sinf/cosf/asinf) — f64-then-cast shifts the last bit (and
+    // diverges hugely at rollAmount=90, where tilt=π/2 and cos t→0).
+    let pi = std::f32::consts::PI;
+    let clampf = |k, lo, hi| num(v, k).clamp(lo, hi) as f32;
+    let angle = clampf("angle", -180.0, 180.0);
+    let roll_dir = clampf("rollDirection", -180.0, 180.0);
+    let roll_amt = clampf("rollAmount", 0.0, 90.0);
+    let (pan_x, pan_y) = (clampf("panX", -10.0, 10.0), clampf("panY", -10.0, 10.0));
+    let z = clampf("zoom", 0.06, 16.0);
     // quirk(pdn): effects-2.md §2.16 step 1 — the roll amount M is never tested.
-    let q = if a == 0.0 && d == 0.0 && pan == [0.0; 2] && z == 1.0 {
+    let q = if angle == 0.0 && roll_dir == 0.0 && pan_x == 0.0 && pan_y == 0.0 && z == 1.0 {
         1
     } else {
         num(v, "quality").clamp(1.0, 8.0) as u32
     };
-    let (pre, post) = (d, -d - a);
-    let map = |x: f64, y: f64| {
-        let sx = (x * pre.cos() + y * pre.sin()) / t.cos();
-        let sy = -x * pre.sin() + y * pre.cos();
-        let sz = sx * (-t).sin();
-        let sx = sx / t.cos();
-        [
-            sx * post.cos() + sy * post.sin(),
-            -sx * post.sin() + sy * post.cos(),
-            sz,
-        ]
-        .map(|c| c as f32)
+    // pre = D, post = −D − A, tilt = asin(M/90), all f32; NaN pre folds to a no-roll identity.
+    let (mut pre, mut num6) = (roll_dir * pi / 180.0, roll_amt);
+    if pre.is_nan() {
+        pre = 0.0;
+        num6 = 0.0;
+    }
+    let post = -pre - angle * pi / 180.0;
+    let tilt = crt::asinf(num6 / 90.0);
+    // genuine Transform(x, y): roll by `pre`, tilt (÷cos t, sz = ·sin(−t), ÷cos t again), turn by `post`.
+    let transform = |x: f32, y: f32| -> [f32; 3] {
+        let (c1, s1) = (crt::cosf(pre), crt::sinf(pre));
+        let (c2, s2) = (crt::cosf(-tilt), crt::sinf(-tilt));
+        let (c3, s3) = (crt::cosf(post), crt::sinf(post));
+        let mut sx = (x * c1 + y * s1) / c2;
+        let sy = -x * s1 + y * c1;
+        let sz = sx * s2;
+        sx /= c2;
+        [sx * c3 + sy * s3, -sx * s3 + sy * c3, sz]
     };
-    let (dsdx, dsdy) = (map(1.0, 0.0), map(0.0, 1.0));
-    let (w, h) = (src.w as f64, src.h as f64);
-    let half_diag = (0.5 * (w * w + h * h).sqrt()) as f32;
-    let c = [(w / 2.0) as f32, (h / 2.0) as f32];
-    let shift = [(pan[0] * w / 2.0) as f32, (pan[1] * h / 2.0) as f32];
-    let z = z as f32;
+    // startPos = T(0,0); dsd* are the basis deltas (the subtraction normalises ±0 as genuine does).
+    let start = transform(0.0, 0.0);
+    let (t10, t01) = (transform(1.0, 0.0), transform(0.0, 1.0));
+    let dsdx: [f32; 3] = std::array::from_fn(|i| t10[i] - start[i]);
+    let dsdy: [f32; 3] = std::array::from_fn(|i| t01[i] - start[i]);
+    let (w, h) = (src.w as f32, src.h as f32);
+    let half_diag = 0.5 * (w * w + h * h).sqrt(); // ½√(W²+H²); f32::sqrt == MathF.Sqrt
+    let c = [w / 2.0, h / 2.0];
+    let shift = [pan_x * w / 2.0, pan_y * h / 2.0];
     let edge = match choice(v, "tiling") {
         "wrap" => Edge::Wrap,
         "mirror" => Edge::Mirror,
@@ -105,7 +118,7 @@ pub fn rotate_zoom_with(src: &EffectSurface, v: &Values) -> EffectSurface {
     };
     sample_map(src, q, edge, filter, |p| {
         let m = [p[0] - shift[0] - c[0], p[1] - shift[1] - c[1]];
-        let pos: [f32; 3] = std::array::from_fn(|i| dsdx[i] * m[0] + dsdy[i] * m[1]);
+        let pos: [f32; 3] = std::array::from_fn(|i| start[i] + dsdx[i] * m[0] + dsdy[i] * m[1]);
         let weight = if pos[2] >= -half_diag { 1.0 } else { 0.0 };
         // r/(z(r + pos_z)) first: exactly 1/z at pos_z = 0 for z = 1 or a power of two.
         let k = half_diag / (z * (half_diag + pos[2]));
@@ -146,9 +159,19 @@ mod tests {
         // keeps the texel's colour at soft alpha (Python port: 206 at the corners, 230 at x = 0).
         // (0, 15) is a quantizer tie: α = 0.9·255 = 229.5 exactly, so GPU rounding could give 229
         // (doc §5 flags Julia's 182.48 the same way); the CPU round-half-up pin is 230.
+        // The interior point (q=2) and bilinear (q=1) samples agree to ≤1: genuine builds the 3-D
+        // basis with MathF, and `sinf(−π_f32) ≈ 8.7e-8` leaves the 180° map a few e-6 px off pixel-
+        // exact, so a coord that crosses a Q8 boundary blends ≤1/256 of a neighbour (an f32 fact, not
+        // an f64 one — the old f64 port's near-zero `sin(−π)` made these identical).
         for y in 1..29 {
             for x in 1..39 {
-                assert_eq!(px(&nn, x, y), px(&turned, x, y), "({x},{y})");
+                let (a, b) = (px(&nn, x, y), px(&turned, x, y));
+                for ch in 0..4 {
+                    assert!(
+                        (a[ch] as i16 - b[ch] as i16).abs() <= 1,
+                        "({x},{y}) ch{ch}: {a:?} vs {b:?}"
+                    );
+                }
             }
         }
         assert_eq!(px(&nn, 0, 0), [234, 5, 111, 206]);
@@ -161,13 +184,14 @@ mod tests {
         );
         assert_eq!(px(&pan, 9, 4)[3], 0);
         assert_eq!(px(&pan, 10, 4), px(&src, 0, 4));
-        // z = 2, q = 1 on a 4-wide column ramp: column 0 samples u = 0.75 between texels 0 and 1 (linear light).
+        // z = 2, q = 1 on a 4-wide column ramp: column 0 samples u = 0.75 between texels 0 and 1 in
+        // sRGB via WARP's Q8 fixed-point (distorts sample the 8bpc sRGB source), ⌊255·0.75⌋-ish → 191.
         let ramp = from_fn(4, 4, |x, _| {
             let v = [0u8, 255, 0, 0][x as usize];
             [v, v, v, 255]
         });
         let z = run("rotateZoomEffect", json!({"zoom": 2, "quality": 1}), &ramp);
-        assert_eq!(px(&z, 0, 0)[0], crate::pixel::gamma::linear_to_srgb8(0.75));
+        assert_eq!(px(&z, 0, 0)[0], 191);
     }
 
     #[test]
@@ -194,10 +218,10 @@ mod tests {
             &src,
         );
         for ((x, y), want) in [
-            ((5, 5), [47, 37, 32, 255]),
-            ((20, 15), [120, 136, 48, 255]),
+            ((5, 5), [46, 36, 31, 255]),
+            ((20, 15), [119, 136, 47, 255]),
             ((35, 25), [0, 0, 0, 0]),
-            ((2, 27), [11, 196, 40, 255]),
+            ((2, 27), [10, 195, 39, 255]),
         ] {
             assert_eq!(px(&roll, x, y), want, "({x},{y})");
         }
@@ -209,14 +233,14 @@ mod tests {
             )
         };
         assert_eq!(tilt(2).data, tilt(1).data);
-        assert_eq!(px(&tilt(1), 3, 15), [27, 134, 67, 255]);
+        assert_eq!(px(&tilt(1), 3, 15), [26, 134, 66, 255]);
         let turned = run(
             "rotateZoomEffect",
             json!({"rollAmount": 30, "rollDirection": 90, "quality": 3}),
             &src,
         );
-        assert_eq!(px(&turned, 3, 15), [17, 136, 44, 255]);
-        assert_eq!(px(&turned, 20, 2), [120, 23, 52, 255]);
+        assert_eq!(px(&turned, 3, 15), [17, 135, 43, 255]);
+        assert_eq!(px(&turned, 20, 2), [119, 22, 50, 255]);
     }
 
     /// Tiling at zoom 0.5, angle 30: None is transparent outside, Repeat wraps, Mirror reflects.
@@ -235,15 +259,15 @@ mod tests {
         };
         assert_eq!(
             at("transparent"),
-            [[0, 0, 0, 0], [0, 0, 0, 0], [119, 143, 61, 255]]
+            [[0, 0, 0, 0], [0, 0, 0, 0], [119, 142, 60, 255]]
         );
         assert_eq!(
             at("wrap"),
-            [[53, 39, 36, 255], [230, 222, 194, 255], [119, 143, 61, 255]]
+            [[10, 39, 7, 255], [224, 221, 188, 255], [119, 142, 60, 255]]
         );
         assert_eq!(
             at("mirror"),
-            [[0, 222, 0, 255], [234, 39, 171, 255], [119, 143, 61, 255]]
+            [[0, 221, 0, 255], [234, 39, 169, 255], [119, 142, 60, 255]]
         );
         let horizon = run(
             "rotateZoomEffect",
@@ -253,9 +277,9 @@ mod tests {
         assert_eq!(
             [20, 30, 32, 33, 39].map(|x| px(&horizon, x, 15)),
             [
-                [132, 135, 75, 255],
-                [59, 155, 169, 255],
-                [86, 12, 19, 255],
+                [131, 135, 75, 255],
+                [58, 154, 168, 255],
+                [85, 11, 17, 255],
                 [0, 0, 0, 0],
                 [0, 0, 0, 0]
             ]
@@ -272,7 +296,7 @@ mod tests {
         );
         assert_eq!(
             [(4, 4), (30, 20), (39, 0)].map(|(x, y)| px(&out, x, y)),
-            [[48, 76, 67, 255], [170, 81, 209, 255], [0, 0, 0, 0]]
+            [[47, 76, 67, 255], [169, 81, 170, 255], [0, 0, 0, 0]]
         );
     }
 }

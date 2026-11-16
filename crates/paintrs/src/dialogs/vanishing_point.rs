@@ -610,6 +610,7 @@ impl VanishingPointDialog {
             ui,
             &mut self.slider,
             WIDTH.0,
+            WIDTH.1,
             range_spec,
             &mut self.values,
             range,

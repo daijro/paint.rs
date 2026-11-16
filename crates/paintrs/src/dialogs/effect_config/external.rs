@@ -311,6 +311,15 @@ impl EffectConfigDialog {
                         let image = flat.get_image_data(0, 0, doc.width, doc.height);
                         break Ok((Some(Arc::new(image)), None));
                     }
+                    // A format whose FileType asks for its options in a window opens only by File ▸ Open.
+                    Some(Err(e))
+                        if pdn_core::io::plugins::PluginWindow::from_error(&e).is_some() =>
+                    {
+                        break Err(
+                            "This file's format asks for its options in a window of its own: open it with File ▸ Open."
+                                .into(),
+                        );
+                    }
                     Some(Err(e)) => break Err(e),
                 },
             }

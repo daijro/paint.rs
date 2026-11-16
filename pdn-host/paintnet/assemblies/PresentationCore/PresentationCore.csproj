@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The geometry plugins use from WPF's PresentationCore (toe_head2001's Radius Corners hit-tests an ellipse), for
+       hosts without WPF. publish.sh builds it into plugin-shims/ beside its WindowsBase. -->
+  <PropertyGroup>
+    <AssemblyName>PresentationCore</AssemblyName>
+    <RootNamespace>System.Windows.Media</RootNamespace>
+    <Version>4.0.0.0</Version>
+    <AssemblyVersion>4.0.0.0</AssemblyVersion>
+    <FileVersion>4.0.0.0</FileVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../WindowsBase/WindowsBase.csproj" />
+  </ItemGroup>
+</Project>

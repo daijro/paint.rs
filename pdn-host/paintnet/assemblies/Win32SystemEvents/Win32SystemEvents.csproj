@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Microsoft.Win32.SystemEvents off Windows: the package's build throws PlatformNotSupportedException there as
+       soon as a handler is added, and plug-ins' controls listen for colour and font changes (toe_head2001's
+       OptionBasedLibrary). .NET Framework's System facade forwards the type to this assembly in the host's own
+       context, so publish.sh puts this build in place of the package's, beside PdnBridge.dll. -->
+  <PropertyGroup>
+    <AssemblyName>Microsoft.Win32.SystemEvents</AssemblyName>
+    <RootNamespace>Microsoft.Win32</RootNamespace>
+    <Version>10.0.0.0</Version>
+    <AssemblyVersion>10.0.0.0</AssemblyVersion>
+    <FileVersion>10.0.0.0</FileVersion>
+  </PropertyGroup>
+</Project>

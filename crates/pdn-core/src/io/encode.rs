@@ -12,7 +12,7 @@
 
 use std::borrow::Cow;
 
-use super::codecs::{CodecError, invalid, unsupported};
+use super::codecs::{CodecError, invalid};
 use super::{bmp, gif, png, tga, tiff};
 use crate::canvas::ImageData;
 use crate::pixel::Px;
@@ -60,6 +60,8 @@ pub struct SaveOptions {
     pub rle: bool,
     /// Resolution written to PNG pHYs, the BMP header and the TIFF tags.
     pub dpi: f64,
+    /// A FileType plugin format's save options, by property name (its defaults where absent).
+    pub plugin: crate::effect::Values,
 }
 
 impl Default for SaveOptions {
@@ -74,6 +76,7 @@ impl Default for SaveOptions {
             interlaced: false,
             rle: true,
             dpi: 96.0,
+            plugin: crate::effect::Values::new(),
         }
     }
 }
@@ -372,7 +375,8 @@ pub fn encode(img: &ImageData, format: &str, options: &SaveOptions) -> Result<Ve
         "heic" => Err(CodecError::Unsupported(
             "NoEncodeDelegateForThisImageFormat `HEIC' @ error/constitute.c/WriteImage/1435".into(),
         )),
-        _ => Err(unsupported(format)),
+        // A FileType plugin's format, else unsupported (plugins::save returns that).
+        _ => super::plugins::save(format, img, &options.plugin),
     }
 }
 

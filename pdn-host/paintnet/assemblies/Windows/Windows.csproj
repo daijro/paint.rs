@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Windows</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Primitives/Primitives.csproj" />
+    <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+    <!-- ExtentPtr (ILookupTable3DFactory's table data). -->
+    <ProjectReference Include="../Fundamentals/Fundamentals.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The COM layer (Interop/*) is shared with the Direct2D wrappers built on it. -->
+    <InternalsVisibleTo Include="PaintDotNet.Windows.Core" />
+    <InternalsVisibleTo Include="PaintDotNet.Windows.Framework" />
+    <InternalsVisibleTo Include="PaintDotNet.Framework" />
+    <InternalsVisibleTo Include="PaintDotNet.Effects.Core" />
+    <InternalsVisibleTo Include="PaintDotNet.Effects.Gpu" />
+    <InternalsVisibleTo Include="PdnBridge" />
+    <InternalsVisibleTo Include="PaintNetWeb" />
+  </ItemGroup>
+</Project>

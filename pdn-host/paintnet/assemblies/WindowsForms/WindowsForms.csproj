@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A headless stand-in for System.Windows.Forms (Windows-only, absent here): just what effects
+       touch while rendering — e.g. SeamCarving reports "no more seams" through
+       Form.ActiveForm.Invoke(() => MessageBox.Show(...)) — and what Microsoft's chart control
+       (../WindowsFormsDataVisualization) needs to draw itself off-screen, and the controls a classic plugin's own settings
+       dialog builds (Controls.cs), which the host constructs without showing to get the dialog's settings. -->
+  <PropertyGroup>
+    <AssemblyName>System.Windows.Forms</AssemblyName>
+    <RootNamespace>System.Windows.Forms</RootNamespace>
+    <!-- >= every framework version plugins reference (4.0 for .NET Framework, 7.0+ for net7+). -->
+    <Version>10.0.0.0</Version>
+    <AssemblyVersion>10.0.0.0</AssemblyVersion>
+    <FileVersion>10.0.0.0</FileVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+    <ProjectReference Include="../WindowsFormsPrimitives/WindowsFormsPrimitives.csproj" />
+  </ItemGroup>
+</Project>

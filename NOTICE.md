@@ -269,3 +269,65 @@ license:
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 > THE SOFTWARE.
+
+Kaint (https://github.com/ssserch/Kaint, GPL-3.0, commit `c6e75230`), whose `src/pdnbridge`
+reimplements the classic Paint.NET plugin API on Mono — paint.rs's .NET plugin host follows its
+approach of hosting Paint.NET's classic built-in effects as managed code
+(`pdn-host/paintnet/assemblies/Effects.Legacy/`), and its IndirectUI `ControlInfo` model
+(`pdn-host/paintnet/assemblies/Core/IndirectUI.cs`) is adapted from Kaint's. Kaint's IndirectUI and
+built-in effects come from the Paint.NET 3.36 source (Copyright (C) dotPDN LLC, Rick Brewster,
+Tom Jackson, and contributors), which is licensed under the MIT License (with exceptions, in Kaint's
+`src/pdnbridge/License-PaintDotNet-3.36.txt`, for Paint.NET's logo, icon and resource assets and
+the GPC library, none of which paint.rs uses):
+
+> Paint.NET
+> Copyright (C) dotPDN LLC, Rick Brewster, Chris Crosetto, Tom Jackson, Michael Kelsey, Brandon
+> Ortiz, Craig Taylor, Chris Trevino, and Luke Walker.
+> Portions Copyright (C) Microsoft Corporation. All Rights Reserved.
+>
+> MIT License: http://www.opensource.org/licenses/mit-license.php
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+> and associated documentation files (the "Software"), to deal in the Software without
+> restriction, including without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+> Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+> NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Microsoft's chart control for Windows Forms, System.Windows.Forms.DataVisualization
+(https://github.com/dotnet/winforms-datavisualization, commit `022f396f`, MIT License), is vendored in
+`pdn-host/paintnet/assemblies/WindowsFormsDataVisualization/` (see its `PAINTRS-PATCH.md`) and built
+into the .NET plugin host, which draws charts with it for plugins that use it (BoltBait's Chart or Graph).
+It is third-party code, not Paint.NET code. Its license:
+
+> The MIT License (MIT)
+>
+> Copyright (c) .NET Foundation and Contributors
+>
+> All rights reserved.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.

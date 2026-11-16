@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Bind the stand-in to the unified replacement set so the browser proves it
+         resolves the real PaintDotNet types (ColorBgra/Surface) from bytes. -->
+    <ProjectReference Include="../../paintnet/assemblies/Core/Core.csproj" />
+  </ItemGroup>
+</Project>

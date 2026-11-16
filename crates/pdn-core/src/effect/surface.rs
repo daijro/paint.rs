@@ -123,6 +123,28 @@ impl EffectSurface {
         out
     }
 
+    /// The exact per-channel f32 values `to_rgba8` would quantize (unpremultiplied + converted to
+    /// sRGB), WITHOUT the final `·255` round. Lets a test prove a port↔genuine ±1 is a quantization
+    /// tie (`frac(v·255) ≈ 0.5`) rather than an arithmetic bug. RGBA, row-major.
+    pub fn prequant_f32(&self, space: Space, alpha: Alpha) -> Vec<f32> {
+        let w = self.w as usize;
+        let mut out = vec![0f32; self.px.len() * 4];
+        for (i, &px) in self.px.iter().enumerate() {
+            let mut p = px;
+            if alpha == Alpha::Premultiplied {
+                p = unpremultiply(p);
+            }
+            if space == Space::Linear {
+                for c in &mut p[..3] {
+                    *c = linear_to_srgb(*c as f64) as f32;
+                }
+            }
+            out[i * 4..i * 4 + 4].copy_from_slice(&p);
+        }
+        let _ = w;
+        out
+    }
+
     pub fn at(&self, x: u32, y: u32) -> [f32; 4] {
         self.px[y as usize * self.w as usize + x as usize]
     }
@@ -164,6 +186,22 @@ impl EffectSurface {
             }
         }
         out
+    }
+
+    /// WARP's effect LINEAR `sample` on an 8bpc **sRGB** source — the filter the genuine SampleMap/
+    /// distort apply (Sample1Input, MIN_MAG_MIP_LINEAR) runs on WARP, op-for-op as crates/d2d
+    /// `effects/sample.rs::sample_linear`. Per axis `q = ⌊(c−0.5)·256⌋`, lower texel `q >> 8`, 8-bit
+    /// weight `q & 0xff`; integer `value·128` lerp `top = ((b−a)·wx + (a<<8)) >> 1`, `res = top +
+    /// ((wy<<8)·(bot−top)) >> 16`, then `>> 7` (truncate) → byte/255. Corners are the source's UNORM8
+    /// bytes: `round(c·255)` recovers them because the sampled surface is an 8bpc sRGB layer
+    /// (`c = k/255`). Use ONLY on an sRGB 8bpc surface (the distorts sample the sRGB source, per
+    /// genuine PdnDistortionEffect which has no gamma conversion); generic float [`bilinear`] is for
+    /// f32-intermediate sampling (view, move, shadow, text).
+    pub fn bilinear_q8(&self, sx: f32, sy: f32, edge: Edge) -> [f32; 4] {
+        // d2d's effect-shader linear `sample` over this surface's 8bpc texels.
+        d2d::effects::sample::sample_linear(sx, sy, |x, y| {
+            self.fetch(x, y, edge).map(|c| (c * 255.0).round() as i32)
+        })
     }
 
     /// Nearest tap: texel (⌊sx⌋, ⌊sy⌋).

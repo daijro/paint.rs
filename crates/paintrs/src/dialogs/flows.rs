@@ -2,6 +2,7 @@
 //! ordering (save-and-close-flows §§2,7; document-ops-and-formats §2.6); paintdotjs
 //! DocumentIO supplies dialog copy. Task50 supplies destination selection and file writing.
 use super::{
+    effect_config::EffectConfigDialog,
     save_image::{SaveImageDialog, SaveSelection, find_format},
     task::{TaskChoice, TaskDialog, TaskDialogSpec, TaskImages},
 };
@@ -9,7 +10,7 @@ use pdn_core::{
     app::AppWorkspace,
     io::{
         encode::{self, SaveOptions},
-        pdn,
+        pdn, plugins,
     },
     settings::AppSettings,
     tool::ToolType,
@@ -135,6 +136,17 @@ pub(super) fn encode_document(
         .get_image_data(0, 0, ws.document.width, ws.document.height);
     encode::encode(&image, format, &options).map_err(|e| e.to_string())
 }
+/// An encode's error as the user reads it. A plug-in FileType's window (`PluginWindow`) shows only when the image
+/// is saved on its own, so a preview or a batch says so instead.
+pub(super) fn readable(error: String) -> String {
+    match plugins::PluginWindow::from_error(&error) {
+        Some(_) => {
+            "This format asks for its options in a window of its own when the image is saved."
+                .into()
+        }
+        None => error,
+    }
+}
 pub(super) fn option_values(options: &SaveOptions) -> Value {
     let mut value = json!({});
     if let Some(q) = options.quality {
@@ -142,6 +154,9 @@ pub(super) fn option_values(options: &SaveOptions) -> Value {
     }
     if let Some(c) = &options.chroma {
         value["subsampling"] = json!(c);
+    }
+    if !options.plugin.is_empty() {
+        value["properties"] = json!(options.plugin);
     }
     value
 }
@@ -248,49 +263,104 @@ fn finish_write(
             remembered[selection.format] = option_values(&selection.options);
             settings.set("fileTypes.saveOptions", remembered);
             *changed = true;
-            let bytes = match encode_document(app, plan.id, selection.format, &selection.options) {
-                Ok(b) => b,
-                Err(e) => {
-                    fail(plan, e, app, settings, changed, done);
-                    return;
-                }
-            };
-            let op = plan.target.borrow_mut().write_pending(SaveRequest {
-                workspace_id: plan.id,
-                destination: plan.destination.clone(),
-                bytes,
-            });
-            crate::platform::files::then(
-                op,
+            encode_and_write(plan, selection, vec![], app, settings, changed, done);
+        },
+    );
+}
+
+/// Encodes the image and writes it. A plug-in FileType that shows a window of its own while it saves (TechnoRobbo's
+/// Icons) gets it in paint.rs's, as an effect's; the save then goes again with every answer so far
+/// (`PluginWindow`). Cancelling the window cancels the save.
+fn encode_and_write(
+    plan: Plan,
+    selection: SaveSelection,
+    answers: Vec<Value>,
+    app: &mut AppWorkspace,
+    settings: &mut AppSettings,
+    changed: &mut bool,
+    done: Done,
+) {
+    // The answers go with this save only: the format's remembered options never answer a window.
+    let mut options = selection.options.clone();
+    if !answers.is_empty() {
+        options
+            .plugin
+            .insert(plugins::ANSWERS.into(), json!(answers));
+    }
+    let bytes = match encode_document(app, plan.id, selection.format, &options) {
+        Ok(b) => b,
+        Err(e) => {
+            if let Some(window) = plugins::PluginWindow::from_error(&e) {
+                let title = if window.title.is_empty() {
+                    find_format(selection.format).name.to_owned()
+                } else {
+                    window.title.clone()
+                };
+                let controls = window.controls.clone();
+                super::open(Box::new(EffectConfigDialog::for_window(
+                    title,
+                    controls,
+                    move |values, cx| match values {
+                        Some(values) => {
+                            let mut answers = answers;
+                            answers.push(window.answer(&values));
+                            let changed = &mut cx.settings_changed;
+                            encode_and_write(
+                                plan,
+                                selection,
+                                answers,
+                                cx.app,
+                                cx.settings,
+                                changed,
+                                done,
+                            );
+                        }
+                        None => {
+                            let changed = &mut cx.settings_changed;
+                            fail(plan, "Canceled".into(), cx.app, cx.settings, changed, done);
+                        }
+                    },
+                )));
+                return;
+            }
+            fail(plan, e, app, settings, changed, done);
+            return;
+        }
+    };
+    let op = plan.target.borrow_mut().write_pending(SaveRequest {
+        workspace_id: plan.id,
+        destination: plan.destination.clone(),
+        bytes,
+    });
+    crate::platform::files::then(
+        op,
+        app,
+        settings,
+        changed,
+        move |result, app, settings, changed| match result {
+            Ok(WriteOutcome::Written) if index(app, plan.id).is_some() => {
+                plan.target
+                    .borrow_mut()
+                    .committed(plan.id, &plan.destination);
+                let i = index(app, plan.id).unwrap();
+                app.documents[i].set_dirty(false);
+                done(true, app, settings, changed);
+            }
+            Ok(WriteOutcome::DownloadStarted) => {
+                plan.old.install(app, plan.id);
+                plan.target.borrow_mut().abandon(plan.id);
+                crate::platform::files::message("Download started","Your browser received the download. It cannot confirm that the file was saved, so the image stays open with its current unsaved state.".into());
+                done(false, app, settings, changed);
+            }
+            Ok(_) => fail(
+                plan,
+                "The image is no longer open.".into(),
                 app,
                 settings,
                 changed,
-                move |result, app, settings, changed| match result {
-                    Ok(WriteOutcome::Written) if index(app, plan.id).is_some() => {
-                        plan.target
-                            .borrow_mut()
-                            .committed(plan.id, &plan.destination);
-                        let i = index(app, plan.id).unwrap();
-                        app.documents[i].set_dirty(false);
-                        done(true, app, settings, changed);
-                    }
-                    Ok(WriteOutcome::DownloadStarted) => {
-                        plan.old.install(app, plan.id);
-                        plan.target.borrow_mut().abandon(plan.id);
-                        crate::platform::files::message("Download started","Your browser received the download. It cannot confirm that the file was saved, so the image stays open with its current unsaved state.".into());
-                        done(false, app, settings, changed);
-                    }
-                    Ok(_) => fail(
-                        plan,
-                        "The image is no longer open.".into(),
-                        app,
-                        settings,
-                        changed,
-                        done,
-                    ),
-                    Err(e) => fail(plan, e, app, settings, changed, done),
-                },
-            );
+                done,
+            ),
+            Err(e) => fail(plan, e, app, settings, changed, done),
         },
     );
 }
@@ -355,8 +425,7 @@ fn selected(
         return;
     }
 
-    let valid = super::save_image::FORMATS
-        .iter()
+    let valid = super::save_image::formats()
         .find(|f| f.id == plan.destination.format)
         .is_some_and(|f| {
             let matches = |name: &str| {
@@ -454,9 +523,7 @@ fn begin_save(
                 .or(old.name.as_deref())
                 .unwrap_or("")
                 .to_ascii_lowercase();
-            super::save_image::FORMATS
-                .iter()
-                .find(|f| f.extensions.iter().any(|e| name.ends_with(e)))
+            super::save_image::formats().find(|f| f.extensions.iter().any(|e| name.ends_with(e)))
         });
     let usable =
         known.filter(|f| !matches!(f.id, "heic" | "jxr") && (!layered || f.supports_layers));

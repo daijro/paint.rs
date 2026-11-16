@@ -366,6 +366,8 @@ pub mod fonts;
 pub mod asset_library;
 #[cfg(target_arch = "wasm32")]
 mod asset_web;
+#[cfg(target_arch = "wasm32")]
+mod plugin_web;
 pub mod plugins;
 
 #[cfg(not(target_arch = "wasm32"))]

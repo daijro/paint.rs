@@ -1,0 +1,20 @@
+[package]
+name = "pdn-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The desktop side of the Paint.NET plugin host: it starts CoreCLR through
+# hostfxr and calls the managed PdnBridge C ABI (see pdn-host/docs/pdn-bridge.md).
+# Native-only; on the web the Mono browser host implements the same protocol.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+libloading = "0.8"
+
+# Each thread that calls into .NET gets a larger alternate signal stack (native.rs signal_stack).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true

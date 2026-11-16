@@ -1571,6 +1571,15 @@ impl Shell {
                 }
                 if let egui::Event::Key {
                     key,
+                    pressed: false,
+                    ..
+                } = event
+                {
+                    app.on_key_up(crate::js_key(*key));
+                    return;
+                }
+                if let egui::Event::Key {
+                    key,
                     pressed: true,
                     modifiers: m,
                     ..
@@ -2085,6 +2094,97 @@ mod bb29_tests {
     }
 }
 
+/// Zooming out keeps the scroll offset in range and the image point under the cursor: the
+/// scrollbars are drawn with the frame's earlier scroll offset, which a zoom-out leaves beyond the
+/// new range, and that must not read as the user scrolling to the end.
+#[cfg(test)]
+mod zoom_scroll_tests {
+    use super::ShellLayout;
+    use egui::{Modifiers, PointerButton, Vec2};
+    use egui_kittest::Harness;
+    use pdn_core::action::FormId;
+    use pdn_core::tool::ToolType;
+    use pdn_core::util::geom::Point;
+
+    #[test]
+    fn zoom_out_at_the_bottom_right_keeps_the_anchor_and_the_scroll_range() {
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_max_steps(16)
+            .build_eframe(|cc| {
+                let mut app =
+                    crate::PaintApp::new_with_policy(cc, pdn_core::fonts::FontPolicy::Bundled);
+                app.clock = crate::Clock::Virtual(0.0);
+                app
+            });
+        h.run_steps(2);
+        let app = &mut h.state_mut().app;
+        app.set_active_tool_from_type(ToolType::Zoom);
+        let view = &mut app.active_ws_mut().unwrap().view;
+        view.set_zoom(8.0, 0.0, 0.0);
+        view.set_view_position(f64::MAX, f64::MAX);
+        h.run_steps(2);
+        let state = h.state();
+        let layout = ShellLayout::compute(h.ctx.content_rect(), state.shell.desktop, 0.0, 1);
+        let rects = state.shell.editor_rects(&layout, &state.app);
+        let cursor = rects.client.max - Vec2::splat(4.0);
+        let at = Point::new(
+            (cursor.x - rects.canvas.min.x) as f64,
+            (cursor.y - rects.canvas.min.y) as f64,
+        );
+        let under = |h: &Harness<crate::PaintApp>| {
+            let v = &h.state().app.active_ws().unwrap().view;
+            v.to_document_position(at, true)
+        };
+        // The floating forms sit over the canvas's right side; close those over the corner.
+        let state = h.state_mut();
+        for form in [
+            FormId::Tools,
+            FormId::History,
+            FormId::Layers,
+            FormId::Colors,
+        ] {
+            let w = state.shell.forms.window(form);
+            if w.visible && w.rect().expand(16.0).contains(cursor) {
+                state.shell.forms.toggle(form, &mut state.app);
+            }
+        }
+        h.run_steps(1);
+        let before = under(&h);
+        h.event(egui::Event::PointerMoved(cursor));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: cursor,
+                button: PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+        let v = &h.state().app.active_ws().unwrap().view;
+        assert_eq!(v.zoom, 6.0);
+        let (env_w, env_h) = v.environment_size();
+        assert!(
+            (0.0..=env_w - v.view_width).contains(&v.viewport_x),
+            "x {}",
+            v.viewport_x
+        );
+        assert!(
+            (0.0..=env_h - v.view_height).contains(&v.viewport_y),
+            "y {}",
+            v.viewport_y
+        );
+        let after = under(&h);
+        let slack = 1.0 / v.zoom;
+        assert!(
+            (after.x - before.x).abs() <= slack && (after.y - before.y).abs() <= slack,
+            "{before:?} -> {after:?}"
+        );
+    }
+}
+
 /// R248: with a selection, the arrows reach Move Selected Pixels and Move Selection through the
 /// canvas's key path after the tool is picked from the Tools window.
 #[cfg(test)]
@@ -2106,8 +2206,14 @@ mod arrow_nudge_tests {
     /// The app on its white image with a selected 4×4 red square at (10, 10), `tool` picked by a
     /// click on its Tools window button (Rectangle Select active before).
     fn picked(tool: ToolType) -> Harness<'static, crate::PaintApp> {
+        picked_at(tool, 1.0)
+    }
+
+    /// `picked` at display scale `ppp`.
+    fn picked_at(tool: ToolType, ppp: f32) -> Harness<'static, crate::PaintApp> {
         let mut h = Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
+            .with_pixels_per_point(ppp)
             .with_max_steps(16)
             .build_eframe(|cc| {
                 let mut app =
@@ -2213,9 +2319,13 @@ mod arrow_nudge_tests {
         assert_eq!(undo_len(&h), before + 1);
     }
 
-    /// ArrowRight held for `steps` key-downs: the press, then the auto-repeats, then the release.
+    /// ArrowRight held for `steps` key-downs: the press, then the auto-repeats (500 ms delay, then
+    /// 30 a second), then the release.
     fn hold(h: &mut Harness<'_, crate::PaintApp>, steps: usize) {
         for i in 0..steps {
+            if i > 0 {
+                h.state_mut().advance_clock(if i == 1 { 500 } else { 33 });
+            }
             h.event(egui::Event::Key {
                 key: Key::ArrowRight,
                 physical_key: None,
@@ -2269,6 +2379,7 @@ mod arrow_nudge_tests {
             };
             down(&mut h, Key::ArrowRight, false);
             down(&mut h, Key::ArrowDown, false);
+            h.state_mut().advance_clock(500);
             down(&mut h, Key::ArrowDown, true);
             h.key_up(Key::ArrowDown);
             h.key_up(Key::ArrowRight);
@@ -2277,6 +2388,101 @@ mod arrow_nudge_tests {
             let b = h.state().app.active_ws().unwrap().selection.get_bounds();
             assert_eq!((b.x, b.y), (13.0, 12.0), "{tool:?}");
             assert_eq!(undo_len(&h), before + 1, "{tool:?}");
+        }
+    }
+
+    /// One tap is 1 image px at any zoom and display scale, even when the platform delivers the
+    /// press twice (egui then reports the second as an immediate repeat).
+    #[test]
+    fn a_doubled_tap_nudges_1_px_at_any_zoom_and_scale() {
+        for tool in [ToolType::Move, ToolType::MoveSelection] {
+            for ppp in [1.0, 1.25, 2.0] {
+                for zoom in [0.92, 1.0, 4.0] {
+                    let mut h = picked_at(tool, ppp);
+                    h.state_mut()
+                        .app
+                        .active_ws_mut()
+                        .unwrap()
+                        .view
+                        .set_zoom(zoom, 0.0, 0.0);
+                    h.run_steps(2);
+                    for repeat in [false, true] {
+                        h.event(egui::Event::Key {
+                            key: Key::ArrowRight,
+                            physical_key: None,
+                            pressed: true,
+                            repeat,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    h.run_steps(1);
+                    h.key_up(Key::ArrowRight);
+                    h.run_steps(1);
+                    idle(&mut h);
+                    assert_eq!(selection_x(&h), 11.0, "{tool:?} at {ppp}x, zoom {zoom}");
+                }
+            }
+        }
+    }
+
+    /// Paint.NET's keyboard pointer through the canvas: with the button held each arrow extends
+    /// the Pencil's stroke 1 image px at 100 % and 400 %, and the tool cursor is drawn there; a
+    /// real move during the press goes on from that point; after the release the next real move
+    /// gives the pointer back.
+    #[test]
+    fn arrows_extend_a_held_stroke_one_image_px() {
+        use pdn_core::util::geom::Point;
+        for zoom in [1.0, 4.0] {
+            let mut h = picked(ToolType::Pencil);
+            let app = &mut h.state_mut().app;
+            pdn_core::action::perform(app, "menu.edit.deselect");
+            app.active_ws_mut().unwrap().view.set_zoom_center(zoom);
+            h.run_steps(2);
+            // The screen point of image pixel (x, y)'s centre.
+            let at = |h: &Harness<'_, crate::PaintApp>, x: f64, y: f64| {
+                let (origin, _) = h.state().shell.canvas_view.shown.unwrap();
+                let ws = h.state().app.active_ws().unwrap();
+                let p = ws.view.to_screen_position(Point::new(x + 0.5, y + 0.5));
+                origin + egui::vec2(p.x as f32, p.y as f32)
+            };
+            // The image pixel in the middle of the view.
+            let (origin, visible) = h.state().shell.canvas_view.shown.unwrap();
+            let c = visible.center() - origin;
+            let ws = h.state().app.active_ws().unwrap();
+            let c = ws
+                .view
+                .to_document_position(Point::new(c.x as f64, c.y as f64), false);
+            let (cx, cy) = (c.x, c.y);
+            h.hover_at(at(&h, cx, cy));
+            h.run_steps(1);
+            h.drag_at(at(&h, cx, cy));
+            h.run_steps(1);
+            arrow(&mut h, Modifiers::NONE);
+            arrow(&mut h, Modifiers::NONE);
+            assert_eq!(h.state().app.pointer_offset, (2.0 * zoom, 0.0), "at {zoom}");
+            assert_eq!(
+                h.output().platform_output.cursor_icon,
+                egui::CursorIcon::None,
+                "the cursor is drawn at the moved point, at {zoom}"
+            );
+            let below = at(&h, cx, cy + 1.0);
+            h.hover_at(below);
+            h.run_steps(1);
+            h.drop_at(below);
+            h.run_steps(2);
+            let ws = h.state().app.active_ws().unwrap();
+            let s = &ws.document.layers.get_at(0).unwrap().surface;
+            let (cx, cy) = (cx as u32, cy as u32);
+            let inked: Vec<_> = (cy - 3..cy + 4)
+                .flat_map(|y| (cx - 3..cx + 4).map(move |x| (x, y)))
+                .filter(|&(x, y)| s.pixel(x, y) != WHITE)
+                .map(|(x, y)| (x - cx, y - cy))
+                .collect();
+            assert_eq!(inked, [(0, 0), (1, 0), (2, 0), (2, 1)], "at {zoom}");
+            assert_eq!(h.state().app.pointer_offset, (2.0 * zoom, 0.0), "at {zoom}");
+            h.hover_at(below + egui::vec2(1.0, 0.0));
+            h.run_steps(1);
+            assert_eq!(h.state().app.pointer_offset, (0.0, 0.0), "at {zoom}");
         }
     }
 }

@@ -262,6 +262,7 @@ impl ContentAwareFillDialog {
             ui,
             &mut self.slider,
             "sampleSize",
+            "Sample area size (in pixels)",
             SAMPLE_SIZE,
             &mut self.values,
             range,

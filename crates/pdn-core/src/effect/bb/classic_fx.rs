@@ -1,7 +1,7 @@
 //! BB spec: effects/photo-sharpen-classic.md; effects/photo-sharpen-landscape.md;
 //! effects/stylize-edge-detect-classic.md; common.md §1–5.
 
-use super::classic::{gaussian_blur, hue_saturation, median};
+use super::classic::{gaussian_blur, hue_saturation, percentile_filter};
 use super::manifest::manifest;
 use super::pan;
 use super::ui::{ControlUi, Help, IndirectUi, TRACK_SATURATION, TRACK_WHITE_BLACK};
@@ -146,11 +146,15 @@ pub fn effects() -> Vec<EffectDef> {
 }
 
 fn sharpen(src: &ImageData, values: &Values, _: &EffectEnv) -> ImageData {
-    // spec-question: Q11 Legacy Sharpen's median uses the shared +1 convention.
-    let mut out = median(src, num(values, "amount").clamp(1.0, 20.0) as u32, 50);
-    for (m, &p) in out.data.iter_mut().zip(&src.data) {
-        // approximation: inferred clamp then truncate, including alpha (photo-sharpen-classic.md step 3).
-        *m = (p as f64 + 0.5 * (p as f64 - *m as f64)).clamp(0.0, 255.0) as u8;
+    // Genuine SharpenEffect.Apply = ColorBgra.Lerp(src, GetPercentile(0.5), -0.5f), per channel:
+    // ClampToByte((int)float.Lerp((int)src, (int)pct, -0.5f)). float.Lerp(a,b,t) = a*(1-t)+b*t in
+    // f32, then (int) truncates toward zero. GetPercentile is the genuine percentile (no +1), so use
+    // percentile_filter, NOT the Classic-Median rank_filter. Verified byte-exact vs PDN 5.1.12 oracle.
+    let pct = percentile_filter(src, num(values, "amount").clamp(1.0, 20.0) as u32, 0.5);
+    let mut out = ImageData::new(src.width, src.height);
+    for (o, (&s, &m)) in out.data.iter_mut().zip(src.data.iter().zip(&pct.data)) {
+        let lerp = s as f32 * 1.5f32 + m as f32 * -0.5f32; // float.Lerp(s, m, -0.5f)
+        *o = (lerp as i32).clamp(0, 255) as u8;
     }
     out
 }
@@ -581,7 +585,8 @@ mod tests {
                 1,
                 1
             ),
-            [127, 63, 0, 127]
+            // genuine SharpenEffect: solid ⇒ pct == src ⇒ Lerp(src,src,-0.5) == src (byte-exact vs PDN 5.1.12).
+            [128, 64, 0, 128]
         );
     }
     /// photo-sharpen-landscape.md steps 2–7: blurred alpha, saturation and ordered source-over.

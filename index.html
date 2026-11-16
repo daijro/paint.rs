@@ -43,7 +43,10 @@
                 const type = types[url.pathname.match(/\.(wasm|ttf|otf)$/)?.[1]];
                 if (!type) return fetchPlain(input, init);
                 url.pathname += ".gz";
-                const res = await fetchPlain(url, init);
+                // A subresource-integrity hash (the .NET plug-in host's loader sets one) is the plain
+                // file's, so the .gz is fetched without it; the plain-file fallback keeps it.
+                const { integrity, ...gz } = init ?? {};
+                const res = await fetchPlain(url, gz);
                 if (!res.ok || /html/.test(res.headers.get("content-type"))) return fetchPlain(input, init);
                 const gunzipped = /gzip/.test(res.headers.get("content-encoding"));
                 const body = gunzipped ? res.body : res.body.pipeThrough(new DecompressionStream("gzip"));
