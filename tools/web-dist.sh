@@ -1,7 +1,8 @@
 #!/bin/sh
 # The web release (README "Web"): the whole site in dist/.
-#   tools/web-dist.sh          trunk build --release, wasm-opt -O3, the notices, a gzip copy (`<file>.gz`)
-#                              beside every wasm, JS, HTML, TTF and OTF file, then --check
+#   tools/web-dist.sh          trunk build --release, wasm-opt -O3, the plug-in host with PDN_WEB_HOST set, the
+#                              notices, a gzip copy (`<file>.gz`) beside every wasm, JS, HTML, TTF and OTF file,
+#                              then --check
 #   tools/web-dist.sh --zip    the same, then the release zip: target/paintrs-web-<version>.zip (or under
 #                              $CARGO_TARGET_DIR), dist/ in one paintrs-web-<version>/ folder
 #   tools/web-dist.sh --check  no build: prints the size table, and fails when a budget is over, a .gz is
@@ -12,11 +13,12 @@ set -eu
 cd "$(dirname "$0")/.."
 
 # Budgets in bytes: the first measured build (2026-10-24: wasm 20,126,899 raw and 7,414,217 gzipped, JS 24,566
-# gzipped, first load 7,454,421) with about 10% headroom, ratcheted at 0.7.1 (2026-10-29), whose plug-in host
-# and store grew the wasm 6.7% over 0.6.1: wasm 22,594,161 raw and 8,212,037 gzipped, first load 8,254,118,
-# with about 5% headroom.
-WASM_RAW=23700000 WASM_GZ=8650000 JS_GZ=40000 FIRST_LOAD=8700000
+# gzipped, first load 7,454,421), ratcheted at 0.7.1 (2026-10-29: wasm 22,594,161 raw and 8,212,037 gzipped, first
+# load 8,254,118), then reset at 0.8.0 (2026-11-16) for the effects that now run on OpenD2D's Direct2D: wasm
+# 26,017,502 raw and 9,399,767 gzipped, first load 9,445,460, with about 3% headroom. The raw wasm's budget is
+# FILE_MAX itself, which is less than that headroom.
 FILE_MAX=26214400 # 25 MiB, Cloudflare's limit per file
+WASM_RAW=$FILE_MAX WASM_GZ=9690000 JS_GZ=40000 FIRST_LOAD=9730000
 # The binaryen release this was measured with; another one works, with a note.
 BINARYEN=version_133
 # Rust 1.99's default wasm32 features, plus SIMD (.cargo/config.toml). wasm-opt reads them from the module's
@@ -54,6 +56,13 @@ build() {
         # shellcheck disable=SC2086 # one flag per word
         "$wasm_opt" -O3 --strip-debug $FEATURES "$f" -o "$f"
     done
+    # The browser's Paint.NET plug-in host in dist/pdn/ (with its own notices), when PDN_WEB_HOST is set, as the
+    # release's web job sets it: it needs the .NET SDK's wasm-tools workload and OpenD2D's wasm drop-ins
+    # (pdn-host/paintnet-web/README.md). The page fetches it only once a plug-in is installed, so the budgets
+    # below leave it out of the first load; the per-file limit still applies to it.
+    if [ -n "${PDN_WEB_HOST:-}" ]; then
+        sh pdn-host/paintnet-web/stage.sh dist
+    fi
     # The licence notices, as CI's web job collects them.
     python3 scripts/ci/collect_notices.py dist/notices --kind web --metadata "$meta"
     # -n: no name or time inside, so the same file always gives the same bytes; -k keeps the file for clients and

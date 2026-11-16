@@ -19,7 +19,13 @@ export async function pdnBoot(textOutline, decodeImage, fontNames, fontFiles) {
   // so it works from `/` and from any sub-path, matching Trunk's relative public_url.
   const url = new URL("pdn/_framework/dotnet.js", document.baseURI).href;
   exportsPromise ??= (async () => {
-    const { dotnet } = await import(url);
+    let dotnet;
+    try {
+      ({ dotnet } = await import(url));
+    } catch (e) {
+      exportsPromise = null; // a later install tries again, e.g. once the site has the host
+      throw new Error(`This site has no Paint.NET plug-in host (pdn/), so .dll plug-ins cannot run here (${e.message})`);
+    }
     const { getAssemblyExports, getConfig, setModuleImports, Module } =
       await dotnet.withEnvironmentVariable("D2D_FONTS", "/fonts").withEnvironmentVariable("D2D_FALLBACK_FAMILY", "Selawik").create();
     Module.FS.mkdir("/fonts");

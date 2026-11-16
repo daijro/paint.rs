@@ -305,6 +305,51 @@ pub(crate) fn adjustment_entries(app: &AppWorkspace, plugins: Vec<&'static str>)
     .collect()
 }
 
+/// Submenus sorted by name (`compareNames`).
+fn sort_submenus(app: &AppWorkspace, entries: &mut [MenuEntry]) {
+    entries.sort_by(|a, b| {
+        let name = |e: &MenuEntry| match e {
+            MenuEntry::Submenu { key, .. } => action::display_name(app, key),
+            _ => String::new(),
+        };
+        compare_names(&name(a), &name(b))
+    });
+}
+
+/// Effects ▸ Plugins: a submenu for each one Paint.NET plug-ins declare (`SubMenuName`), with its effects, then the
+/// effects that declare none, each part sorted by name.
+fn plugin_entries(app: &AppWorkspace, ids: Vec<&'static str>) -> Vec<MenuEntry> {
+    let mut groups: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+    let mut direct = Vec::new();
+    for id in ids {
+        let item = registered(format!("menu.effects.{id}"));
+        match pdn_core::effect::dotnet::submenu_of(id) {
+            Some(key) => match groups.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, items)) => items.push(item),
+                None => groups.push((key, vec![item])),
+            },
+            None => direct.push(item),
+        }
+    }
+    let mut entries: Vec<MenuEntry> = groups
+        .into_iter()
+        .map(|(key, items)| MenuEntry::Submenu {
+            key,
+            entries: sorted(app, items.into_iter())
+                .into_iter()
+                .map(MenuEntry::Action)
+                .collect(),
+        })
+        .collect();
+    sort_submenus(app, &mut entries);
+    entries.extend(
+        sorted(app, direct.into_iter())
+            .into_iter()
+            .map(MenuEntry::Action),
+    );
+    entries
+}
+
 /// README "Menu tree": Repeat first, sorted categories, then sorted root plugins with no separator
 /// (R180/Q78: native Paint.NET 5.1.12 has none; supersedes the README rule).
 pub(crate) fn effect_entries(
@@ -316,23 +361,21 @@ pub(crate) fn effect_entries(
         .into_iter()
         .map(|(category, ids)| {
             let key = registered(format!("effects.{category}.submenu"));
-            let ids = ids
-                .into_iter()
-                .map(|id| registered(format!("menu.effects.{id}")));
-            let entries = sorted(app, ids)
-                .into_iter()
-                .map(MenuEntry::Action)
-                .collect();
+            let entries = if category == pdn_core::effect::dotnet::CATEGORY {
+                plugin_entries(app, ids)
+            } else {
+                let ids = ids
+                    .into_iter()
+                    .map(|id| registered(format!("menu.effects.{id}")));
+                sorted(app, ids)
+                    .into_iter()
+                    .map(MenuEntry::Action)
+                    .collect()
+            };
             MenuEntry::Submenu { key, entries }
         })
         .collect();
-    categories.sort_by(|a, b| {
-        let name = |e: &MenuEntry| match e {
-            MenuEntry::Submenu { key, .. } => action::display_name(app, key),
-            _ => String::new(),
-        };
-        compare_names(&name(a), &name(b))
-    });
+    sort_submenus(app, &mut categories);
     let mut entries: Vec<_> = app
         .last_effect
         .is_some()
@@ -833,6 +876,61 @@ mod tests {
         assert_eq!(shown[at + 1], MenuEntry::Action(action::BATCH_EXPORT));
         assert_eq!(mark(&shown[at + 1]), Mark::Extra);
         assert_eq!(extra_tooltip(action::BATCH_EXPORT), None);
+    }
+
+    /// Paint.NET plug-ins' effects sit in Effects ▸ Plugins under the submenu each declares (one per name, whatever
+    /// its case), sorted, before the effects that declare none.
+    #[test]
+    fn plugin_effects_group_by_their_declared_submenu() {
+        use pdn_core::effect::dotnet::{CATEGORY, remember_menu};
+        remember_menu("Test.Zeta", "Zeta", Some("Artistic"));
+        remember_menu("Test.Alpha", "Alpha", Some("artistic"));
+        remember_menu("Test.Blur", "Blur It", Some(" Blurs "));
+        remember_menu("Test.Root", "Root Effect", None);
+        let app = AppWorkspace::default();
+        let menu = effect_entries(
+            &app,
+            vec![(
+                CATEGORY,
+                vec!["Test.Root", "Test.Zeta", "Test.Blur", "Test.Alpha"],
+            )],
+            vec![],
+        );
+        let Some(MenuEntry::Submenu {
+            key: "effects.plugins.submenu",
+            entries,
+        }) = menu.first()
+        else {
+            panic!("no Plugins submenu: {menu:?}")
+        };
+        let shown: Vec<(String, Vec<&str>)> = entries
+            .iter()
+            .map(|e| match e {
+                MenuEntry::Submenu { key, entries } => (
+                    action::display_name(&app, key),
+                    entries
+                        .iter()
+                        .map(|i| match i {
+                            MenuEntry::Action(a) => *a,
+                            _ => "?",
+                        })
+                        .collect(),
+                ),
+                MenuEntry::Action(a) => (action::display_name(&app, a), vec![]),
+                _ => ("?".into(), vec![]),
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    "Artistic".into(),
+                    vec!["menu.effects.Test.Alpha", "menu.effects.Test.Zeta"]
+                ),
+                ("Blurs".into(), vec!["menu.effects.Test.Blur"]),
+                ("Root Effect".into(), vec![]),
+            ]
+        );
     }
 
     /// README "Menu tree": registered plugins merge into the built-in menus (Extras aside).

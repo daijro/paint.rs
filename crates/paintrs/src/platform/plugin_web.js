@@ -54,8 +54,10 @@ export async function pluginAll() {
   return rows.map((r) => ({ name: r.name, data: r.data instanceof Uint8Array ? r.data : new Uint8Array(r.data) }));
 }
 
-export async function pluginPut(name, bytes) {
-  await write((s) => s.put({ name, data: bytes.slice() }))();
+// `bytes` is wasm-bindgen's view of Rust memory: copy it before the first await, as memory growth detaches it.
+export function pluginPut(name, bytes) {
+  const data = bytes.slice();
+  return write((s) => s.put({ name, data }))();
 }
 
 export async function pluginDelete(name) {

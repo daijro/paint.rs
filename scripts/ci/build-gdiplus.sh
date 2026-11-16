@@ -59,9 +59,17 @@ cmake --build libjpeg-build --target install
 # On Linux the static libraries' symbols stay inside libgdiplus (--exclude-libs): another library in the process
 # exporting jpeg_* (a system libjpeg an image loader brings in) must not take its calls. macOS's two-level
 # namespace already binds them to the copy linked in.
-case "$(uname -s)" in Darwin) hide= ;; *) hide='-Wl,--exclude-libs,libjpeg.a:libgif.a' ;; esac
+# On macOS libgdiplus's configure skips libpng's pkg-config entry and looks for -lpng on the default paths, and its
+# sources include <cairo/cairo.h>, <X11/Xlib.h> and the like from the directory above each library's own: Homebrew's
+# include and lib directories, which are default paths on Intel (/usr/local) but not on Apple Silicon (/opt/homebrew).
+# libpng is cairo's own, which the macOS job carries in the bundle beside libgdiplus.
+case "$(uname -s)" in
+    Darwin) hide= brew_cflags="-I$(brew --prefix)/include" brew_libs="-L$(brew --prefix)/lib" ;;
+    *) hide='-Wl,--exclude-libs,libjpeg.a:libgif.a' brew_cflags= brew_libs= ;;
+esac
 (cd "libgdiplus-$commit" && NOCONFIGURE=1 ./autogen.sh \
-    && ./configure --with-libgif="$gif" --with-libjpeg="$jpeg" CPPFLAGS="-I$gif/include -I$jpeg/include" LDFLAGS="-L$gif/lib -L$jpeg/lib $hide" \
+    && ./configure --with-libgif="$gif" --with-libjpeg="$jpeg" CPPFLAGS="-I$gif/include -I$jpeg/include $brew_cflags" \
+        LDFLAGS="-L$gif/lib -L$jpeg/lib $brew_libs $hide" \
         --without-libexif --without-libtiff \
     && make -C src)
 grep -q 'define HAVE_LIBGIF 1' "libgdiplus-$commit/config.h"    # configure found the static giflib

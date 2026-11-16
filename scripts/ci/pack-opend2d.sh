@@ -16,4 +16,5 @@ git -C "$1" archive --format=tar --prefix="opend2d-$commit/" "$commit" Cargo.tom
 if command -v shasum >/dev/null; then sum=$(shasum -a 256 "$out"); else sum=$(sha256sum "$out"); fi
 echo "commit=$commit"
 echo "sha256=${sum%% *}"
-echo "upload: gh release upload opend2d-snapshots '$out' --repo daijro/paint.rs"
+echo "upload: gh release upload <OpenD2D release tag> '$out' --repo daijro/opend2d"
+echo "then pin that tag, the commit and the SHA-256 in fetch-opend2d.sh (release=, commit=, sha256=)"

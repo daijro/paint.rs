@@ -42,10 +42,11 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 '''
 
 
-def nuget_notices(pdn, nuget, out):
+def nuget_notices(deps_file, nuget, packs, out):
     """The runtime pack's and each package's notice files; a package that ships none (ComputeSharp)
-    gets the MIT text its nuspec declares, with the nuspec's copyright line."""
-    deps = json.loads((pdn / 'PdnBridge.deps.json').read_text(encoding='utf-8'))
+    gets the MIT text its nuspec declares, with the nuspec's copyright line. A runtime pack that is not in the
+    NuGet cache (the browser's, which the wasm-tools workload installs) is looked up in the SDK's packs/."""
+    deps = json.loads(deps_file.read_text(encoding='utf-8'))
     names = []
     for key, lib in deps['libraries'].items():
         if lib['type'] not in ('package', 'runtimepack'):
@@ -53,22 +54,28 @@ def nuget_notices(pdn, nuget, out):
         name, version = key.split('/')
         name = name.removeprefix('runtimepack.')
         root = nuget / name.lower() / version
+        if not root.is_dir() and lib['type'] == 'runtimepack' and packs:
+            root = packs / name / version
         if not root.is_dir():
             raise ValueError(f'{name} {version}: not in the NuGet cache at {root}')
-        dest = out / ('dotnet-runtime' if lib['type'] == 'runtimepack' else 'nuget') / f'{name}-{version}'
-        files = [p for p in root.iterdir() if p.is_file() and p.name.lower().startswith(NOTICE_PREFIXES)]
-        dest.mkdir(parents=True, exist_ok=True)
-        for f in files:
-            shutil.copyfile(f, dest / f.name)
-        if not any(f.name.lower().startswith(('license', 'licence')) for f in files):
-            nuspec = (root / f'{name.lower()}.nuspec').read_text(encoding='utf-8')
-            expression = between(nuspec, '<license type="expression">', '</license>')
-            if expression != 'MIT':
-                raise ValueError(f'{name} {version}: no licence file and licence {expression!r} (only MIT is generated)')
-            copyright = between(nuspec, '<copyright>', '</copyright>') or f'Copyright (c) {name} authors'
-            (dest / 'LICENSE.txt').write_text(MIT.format(copyright=copyright), encoding='utf-8')
+        package_notice(root, name, version,
+                       out / ('dotnet-runtime' if lib['type'] == 'runtimepack' else 'nuget') / f'{name}-{version}')
         names.append(f'{name} {version}')
     return names
+
+
+def package_notice(root, name, version, dest):
+    files = [p for p in root.iterdir() if p.is_file() and p.name.lower().startswith(NOTICE_PREFIXES)]
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        shutil.copyfile(f, dest / f.name)
+    if not any(f.name.lower().startswith(('license', 'licence')) for f in files):
+        nuspec = next(root.glob('*.nuspec')).read_text(encoding='utf-8')
+        expression = between(nuspec, '<license type="expression">', '</license>')
+        if expression != 'MIT':
+            raise ValueError(f'{name} {version}: no licence file and licence {expression!r} (only MIT is generated)')
+        copyright = between(nuspec, '<copyright>', '</copyright>') or f'Copyright (c) {name} authors'
+        (dest / 'LICENSE.txt').write_text(MIT.format(copyright=copyright), encoding='utf-8')
 
 
 def between(text, start, end):
@@ -98,6 +105,11 @@ def opend2d_notices(opend2d, out):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('pdn', type=Path)
+    # The browser host: its deps file (in its publish folder), the SDK's packs/ (its runtime pack) and the
+    # emscripten that relinked dotnet.native.wasm.
+    parser.add_argument('--deps', type=Path)
+    parser.add_argument('--packs', type=Path)
+    parser.add_argument('--emscripten', type=Path)
     parser.add_argument('--nuget', type=Path, default=Path(os.environ.get('NUGET_PACKAGES', Path.home() / '.nuget/packages')))
     parser.add_argument('--opend2d', type=Path)
     parser.add_argument('--gdiplus-notice', type=Path)
@@ -110,14 +122,26 @@ def main():
              "paint.rs's own code here (PdnBridge, the replacement PaintDotNet.* assemblies and the headless",
              "System.Windows.Forms) is under the distribution's LICENSE. The rest, with its licence notices in this",
              'folder:', '']
-    lines += [f'- {n}' for n in nuget_notices(args.pdn, args.nuget, out)]
+    lines += [f'- {n}' for n in nuget_notices(args.deps or args.pdn / 'PdnBridge.deps.json', args.nuget, args.packs, out)]
+    # Mono.Cecil, which the browser host fetches beside itself (Mono.Cecil.bin) only for plug-ins it rewrites.
+    if (args.pdn / 'Mono.Cecil.bin').exists():
+        root = max((args.nuget / 'mono.cecil').iterdir())
+        package_notice(root, 'Mono.Cecil', root.name, out / 'nuget' / f'Mono.Cecil-{root.name}')
+        lines.append(f'- Mono.Cecil {root.name} (Mono.Cecil.bin)')
+    if args.emscripten:
+        dest = out / 'emscripten'
+        dest.mkdir()
+        for name in ('LICENSE', 'AUTHORS'):
+            shutil.copyfile(args.emscripten / name, dest / name)
+        lines.append('- emscripten (its C library and runtime, linked into dotnet.native.wasm; emscripten/)')
     shipped_d2d = any((args.pdn / f).exists() for f in ('libd2d1.so', 'libd2d1.dylib', 'd2d1.dll'))
     if args.opend2d:
         lines.append(f'- opend2d (libd2d1, libdwrite, libwindowscodecs): {opend2d_notices(args.opend2d, out)} '
                      'third-party Rust crates, in opend2d/rust/ (inventory.json lists them)')
     elif shipped_d2d and args.strict:
         raise ValueError('opend2d libraries shipped but --opend2d not given')
-    if (args.pdn / 'System.Windows.Forms.DataVisualization.dll').exists():
+    if any((args.pdn / f).exists() for f in ('System.Windows.Forms.DataVisualization.dll',
+                                              '_framework/System.Windows.Forms.DataVisualization.wasm')):
         dest = out / 'System.Windows.Forms.DataVisualization'
         dest.mkdir()
         for name in ('LICENSE.TXT', 'THIRD-PARTY-NOTICES.TXT', 'PAINTRS-PATCH.md'):

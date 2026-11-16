@@ -109,7 +109,7 @@ initialisation for a self-contained app), and never looks for an installed .NET.
 
 On Linux and macOS the host also carries opend2d's `libd2d1`/`libdwrite`/`libwindowscodecs` and GDI+.
 The jobs build opend2d (github.com/daijro/opend2d) from a pinned source snapshot
-(`scripts/ci/fetch-opend2d.sh`, SHA-256 checked) uploaded to paint.rs's `opend2d-snapshots` release;
+(`scripts/ci/fetch-opend2d.sh`, SHA-256 checked) attached to an OpenD2D release;
 `scripts/ci/pack-opend2d.sh <opend2d repo> <commit> <dir>` makes the next one and prints the pin.
 Windows ships neither: the host there uses the system's Direct2D, DirectWrite and GDI+. Every publish
 writes `pdn/notices/` (`bridge/collect-notices.py`): the .NET runtime, the NuGet packages

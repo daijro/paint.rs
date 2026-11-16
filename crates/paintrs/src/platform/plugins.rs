@@ -293,6 +293,8 @@ enum Event {
     Picked(Vec<PickedFile>),
     Read(PickedFile),
     Done,
+    /// The store refused a file (the browser's storage full, say), which is then not installed.
+    NotStored(String, String),
     /// The browser host booted and (re)loaded the installed plug-ins: the runtime download size
     /// (MiB) and any per-plug-in load errors.
     #[cfg(target_arch = "wasm32")]
@@ -398,9 +400,13 @@ impl PluginManager {
             }
         }
         let put = self.store.put(&file, bytes);
-        self.pending.push_back(Pending::future(
-            async move { put.await.map(|()| Event::Done) },
-        ));
+        let stored = file.clone();
+        self.pending.push_back(Pending::future(async move {
+            Ok(match put.await {
+                Ok(()) => Event::Done,
+                Err(e) => Event::NotStored(stored, e),
+            })
+        }));
         self.items.retain(|f| f != &file);
         self.items.push(file);
         self.items.sort_by_key(|f| f.to_lowercase());
@@ -478,6 +484,13 @@ impl PluginManager {
                 Ok(Event::Read(file)) => self.install(&file.name, &file.bytes),
                 // A store write/delete finished, so the folder on disk is now current.
                 Ok(Event::Done) => self.stale = true,
+                Ok(Event::NotStored(file, e)) => {
+                    self.items.retain(|f| f != &file);
+                    if let Some(id) = self.active.remove(&file) {
+                        deactivate(&id);
+                    }
+                    self.status = format!("{file} was not installed: {e}");
+                }
                 #[cfg(target_arch = "wasm32")]
                 Ok(Event::Installed {
                     runtime_mib,

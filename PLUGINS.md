@@ -5,7 +5,8 @@ paint.rs runs two kinds of plug-ins:
 - **Paint.NET plug-ins**: the same `.dll` files that extend Paint.NET on Windows. They run on an
   embedded .NET runtime against paint.rs's own replacement for Paint.NET's plug-in API, so a plug-in
   sees paint.rs's image as it would see Paint.NET's. Effects and adjustments appear under
-  **Effects ▸ Plugins**, and FileType plug-ins add formats to **Open** and **Save**.
+  **Effects ▸ Plugins**, in the submenu a plug-in names for them (Effects ▸ Plugins ▸ Artistic ▸ …) or directly
+  there when it names none, and FileType plug-ins add formats to **Open** and **Save**.
 - **WebAssembly plug-ins**: PhotoCraft filters (`.wasm`), LightCraft looks (`.cube`, `.3dl`) and
   Camera Raw develop presets (`.xmp`). They appear under **Effects ▸ Plugins** too, marked with a
   puzzle piece. See [WebAssembly plug-ins](#webassembly-plug-ins).

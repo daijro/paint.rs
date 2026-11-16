@@ -18,6 +18,76 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
+/// The menu actions of the registered effects (`menu.effects.<id>`, named for the effect) and of the submenus they
+/// declare (`SubMenuName`, `effects.plugins.<name>.submenu`), which group them under Effects ▸ Plugins as Paint.NET
+/// groups them under Effects. Made as effects register and kept for the process, as menus hold their ids.
+#[derive(Default)]
+struct Menu {
+    actions: std::collections::HashMap<String, &'static crate::action::ActionDef>,
+    submenus: std::collections::HashMap<&'static str, &'static str>,
+}
+
+static MENU: std::sync::LazyLock<std::sync::RwLock<Menu>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn menu_action(
+    id: String,
+    label: &'static str,
+    category: &'static str,
+    icon: Option<&'static str>,
+) -> &'static crate::action::ActionDef {
+    Box::leak(Box::new(crate::action::ActionDef {
+        id: leak(&id),
+        name_key: None,
+        label: Some(label),
+        tooltip_key: None,
+        default_shortcut: None,
+        icon,
+        category,
+    }))
+}
+
+/// Gives registered effect `id`, named `name`, its menu action, and the submenu it declares its own: one per name,
+/// whatever its case, as Paint.NET merges them. With none it sits directly under Effects ▸ Plugins.
+pub fn remember_menu(id: &'static str, name: &'static str, submenu: Option<&str>) {
+    let mut menu = MENU.write().unwrap_or_else(|e| e.into_inner());
+    let action = format!("menu.effects.{id}");
+    menu.actions
+        .entry(action.clone())
+        .or_insert_with(|| menu_action(action, name, "Effects", Some(ICON)));
+    match submenu.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(sub) => {
+            let key = format!("effects.plugins.{}.submenu", sub.to_lowercase());
+            let action = *menu
+                .actions
+                .entry(key.clone())
+                .or_insert_with(|| menu_action(key, leak(sub), "General", None));
+            menu.submenus.insert(id, action.id);
+        }
+        None => {
+            menu.submenus.remove(id);
+        }
+    }
+}
+
+/// A registered effect's or declared submenu's menu action.
+pub fn action(action_id: &str) -> Option<&'static crate::action::ActionDef> {
+    MENU.read()
+        .unwrap_or_else(|e| e.into_inner())
+        .actions
+        .get(action_id)
+        .copied()
+}
+
+/// The submenu action (`effects.plugins.<name>.submenu`) registered effect `id` declares, if any.
+pub fn submenu_of(id: &str) -> Option<&'static str> {
+    MENU.read()
+        .unwrap_or_else(|e| e.into_inner())
+        .submenus
+        .get(id)
+        .copied()
+}
+
 /// The registry key for an effect: its .NET type name, unless another plug-in already registered that name
 /// (MadJik's Splashes and Tiles both define `PaintDotNet.Effects.TileEffect`), then `<type>@<tag>` (the plug-in's
 /// file name), so neither replaces the other.
@@ -644,6 +714,7 @@ mod native {
                 });
                 def.id = key;
                 nm.insert(key, name);
+                super::remember_menu(key, name, eff.get("submenu").and_then(Value::as_str));
                 reg.insert(
                     key,
                     Entry {
@@ -1121,6 +1192,7 @@ mod web {
                 });
                 def.id = key;
                 NAMES.with(|n| n.borrow_mut().insert(key, name));
+                super::remember_menu(key, name, eff.get("submenu").and_then(Value::as_str));
                 REGISTRY.with(|r| {
                     r.borrow_mut().insert(
                         key,
@@ -1517,6 +1589,23 @@ mod tests {
     }
 
     use super::*;
+
+    /// A registered effect gets a menu action named for it, and the submenu it declares one of its own, shared by
+    /// every effect that declares it whatever its case; an effect that declares none has no submenu.
+    #[test]
+    fn a_declared_submenu_is_a_menu_action() {
+        super::remember_menu("Menu.Test.One", "One", Some("Render"));
+        super::remember_menu("Menu.Test.Two", "Two", Some("render "));
+        super::remember_menu("Menu.Test.Three", "Three", Some("  "));
+        let one = super::submenu_of("Menu.Test.One").unwrap();
+        assert_eq!(super::submenu_of("Menu.Test.Two"), Some(one));
+        assert_eq!(super::action(one).and_then(|a| a.label), Some("Render"));
+        assert_eq!(super::submenu_of("Menu.Test.Three"), None);
+        assert_eq!(
+            crate::action::get("menu.effects.Menu.Test.Two").and_then(|a| a.label),
+            Some("Two")
+        );
+    }
 
     /// What did not load comes from the enumerate JSON's errors: the reasons when the DLL gave nothing
     /// else, else the skipped effects, named together by reason.

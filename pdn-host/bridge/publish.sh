@@ -36,8 +36,15 @@ if [ -f "$opend2d/Cargo.toml" ]; then
     opend2d="$(cd "$opend2d" && pwd)"
 
     # opend2d builds into its own target dir (kept out of paint.rs's, even under CARGO_TARGET_DIR, so the
-    # copy below never ships a stale build); release cdylibs only.
-    cargo build --release --manifest-path "$opend2d/Cargo.toml" --target-dir "$opend2d/target" -p d2d-ffi -p dwrite-ffi -p wic-ffi
+    # copy below never ships a stale build); release cdylibs only. windowscodecs' metadata code imports
+    # CoTaskMemAlloc and PropVariantClear, which nothing provides off Windows: a Linux .so leaves them to be
+    # resolved when called, and on macOS the linker has to be told to do the same.
+    lazy=
+    case "$(uname -s)" in
+        Darwin) lazy="RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-undefined -C link-arg=dynamic_lookup" ;;
+    esac
+    env ${lazy:+"$lazy"} cargo build --release --manifest-path "$opend2d/Cargo.toml" --target-dir "$opend2d/target" \
+        -p d2d-ffi -p dwrite-ffi -p wic-ffi
     for n in d2d1 dwrite windowscodecs; do cp "$opend2d/target/release/lib$n.$ext" "$out/"; done
     echo "native libs -> $out (d2d1, dwrite, windowscodecs)"
     opend2d_notices="$opend2d"

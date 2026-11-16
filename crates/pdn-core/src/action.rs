@@ -1392,6 +1392,7 @@ pub fn get(id: &str) -> Option<&'static ActionDef> {
         .chain(EXTRA_ACTIONS.iter())
         .find(|a| a.id == id)
         .or_else(|| crate::effect::wasm::action(id))
+        .or_else(|| crate::effect::dotnet::action(id))
 }
 
 /// The manifest row behind an Extra menu action; `None` for every other action.

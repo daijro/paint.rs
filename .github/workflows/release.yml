@@ -2,6 +2,8 @@ name: release
 on:
   push:
     tags: ['v*']
+    # A rehearsal: every build and package job runs on the pushed commit, and nothing is released or uploaded.
+    branches: ['ci/release-**']
   workflow_dispatch:
     inputs:
       tag:
@@ -13,30 +15,35 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TAG: ${{ inputs.tag || github.ref_name }}
+  # A rehearsal (a ci/release-** branch push) packages as v0.0.0-ci from the pushed commit and skips the release
+  # and every upload.
+  DRY: ${{ github.event_name == 'push' && github.ref_type == 'branch' }}
+  TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.0.0-ci' }}
+  SRC: ${{ inputs.tag || github.sha }}
   GH_TOKEN: ${{ github.token }}
   BINARYEN_VERSION: version_133
   # The Alpine jobs' image, pinned by its multi-arch digest.
   ALPINE_IMAGE: alpine:3.22.7@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f
 
 # Release builds only build and package; ci.yml runs the tests. Desktop builds use the
-# `dist` profile (fat LTO, one codegen unit). Each glibc Linux and Windows x86-64 download comes
+# `dist` profile (fat LTO, one codegen unit). Each glibc Linux, Windows and macOS x86-64 download comes
 # twice: baseline x86-64, which runs on any 64-bit CPU, and `-avx2` (x86-64-v3: Haswell / Excavator or
 # newer). Arm builds (Apple Silicon, Linux and Windows arm64) use the default aarch64 target, which has NEON.
-# checkout v7.0.1, the same pin as ci.yml. Uploads use the gh CLI that every runner ships, not a third-party
-# action. Downloads are pinned by version: binaryen in the web job, the dav1d source in the Linux and macOS
-# jobs (scripts/ci/build-dav1d.sh), and appimagetool and the AppImage runtime in the Linux job. All but binaryen
-# are checked by SHA-256 too.
+# checkout v7.0.1 and upload-artifact v7.0.2, the same pins as ci.yml. Uploads use the gh CLI that every
+# runner ships, not a third-party action. Downloads are pinned by version: binaryen in the web job, the dav1d
+# source in the Linux and macOS jobs (scripts/ci/build-dav1d.sh), and appimagetool and the AppImage runtime in
+# the Linux job. All but binaryen are checked by SHA-256 too.
 jobs:
   release:
     runs-on: ubuntu-24.04
     steps:
       - name: Create the release if the tag has none yet
+        if: env.DRY != 'true'
         shell: bash
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then exit 0; fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage, .deb and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS on Apple Silicon (arm64 .tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes --notes "Downloads: Linux x86_64 and aarch64 (.AppImage, .deb and .tar.gz), Alpine and other musl Linux x86_64 and aarch64 (-musl.tar.gz), Windows x86_64 and arm64 (.zip), macOS arm64 and x86_64 (.tar.gz), FreeBSD x86_64 (.tar.gz) and the web build (paintrs-web-*.zip).
 
           The plain x86-64 downloads run on any x86-64 CPU. The -avx2 ones are faster but need AVX2 (most Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If unsure, take the plain one.
 
@@ -75,14 +82,14 @@ jobs:
     # statically: the tarball and the AppImage then need no libdav1d from the system.
     runs-on: ${{ matrix.runner }}
     env:
-      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-linux-${{ matrix.arch }}${{ matrix.suffix }}
+      DIST: paint.rs-${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.0.0-ci' }}-linux-${{ matrix.arch }}${{ matrix.suffix }}
       APPIMAGETOOL_VERSION: 1.9.1
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_RUNTIME_VERSION: '20251108'
       APPIMAGE_RUNTIME_SHA256: ${{ matrix.runtime_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+        with: {ref: "${{ env.SRC }}", persist-credentials: false}
       - name: Install native build tools
         run: |
           sudo apt-get update
@@ -119,7 +126,7 @@ jobs:
         run: PYTHON=python3.11 sh scripts/ci/package-tarball.sh "$DIST" target/dist/paintrs "$RUNNER_TEMP/dav1d-notice"
       # Before the AppImage steps, so a failure in its tooling can't cost the tarball.
       - name: Upload the tarball
-        run: gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+        run: '[ "$DRY" = true ] || gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"'
       - name: Assemble the AppDir
         run: |
           set -euo pipefail
@@ -165,12 +172,24 @@ jobs:
           ARCH=${{ matrix.arch }} VERSION="${TAG#v}" "$RUNNER_TEMP/appimagetool" --appimage-extract-and-run \
             --runtime-file "$RUNNER_TEMP/runtime" AppDir "$DIST.AppImage"
       - name: Upload the AppImage
-        run: gh release upload "$TAG" "$DIST.AppImage" --clobber --repo "$GITHUB_REPOSITORY"
+        run: '[ "$DRY" = true ] || gh release upload "$TAG" "$DIST.AppImage" --clobber --repo "$GITHUB_REPOSITORY"'
       # The AppDir's files again, installed under /usr, for Debian, Ubuntu and their derivatives.
       - name: Make and upload the .deb
         run: |
           sh scripts/ci/package-deb.sh AppDir "$DIST.deb"
-          gh release upload "$TAG" "$DIST.deb" --clobber --repo "$GITHUB_REPOSITORY"
+          [ "$DRY" = true ] || gh release upload "$TAG" "$DIST.deb" --clobber --repo "$GITHUB_REPOSITORY"
+      # A rehearsal keeps the packages as the run's artifacts, to download and test from the run page.
+      - name: Keep the packages (rehearsal)
+        if: env.DRY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ env.DIST }}
+          path: |
+            ${{ env.DIST }}.tar.gz
+            ${{ env.DIST }}.AppImage
+            ${{ env.DIST }}.deb
+          if-no-files-found: error
+          retention-days: 14
 
   windows:
     name: windows ${{ matrix.arch }}${{ matrix.suffix }}
@@ -186,7 +205,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+        with: {ref: "${{ env.SRC }}", persist-credentials: false}
       # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
       - name: Fetch opend2d
         shell: bash
@@ -242,8 +261,17 @@ jobs:
           python scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license $notice
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path $dir -DestinationPath "$dir.zip"
-          gh release upload $env:TAG "$dir.zip" --clobber --repo $env:GITHUB_REPOSITORY
+          if ($env:DRY -ne 'true') { gh release upload $env:TAG "$dir.zip" --clobber --repo $env:GITHUB_REPOSITORY }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # A rehearsal keeps the packages as the run's artifacts, to download and test from the run page.
+      - name: Keep the packages (rehearsal)
+        if: env.DRY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: paint.rs-${{ env.TAG }}-windows-${{ matrix.arch }}${{ matrix.suffix }}
+          path: paint.rs-${{ env.TAG }}-windows-${{ matrix.arch }}${{ matrix.suffix }}.zip
+          if-no-files-found: error
+          retention-days: 14
 
   macos:
     name: macos ${{ matrix.arch }}${{ matrix.suffix }}
@@ -255,22 +283,35 @@ jobs:
           - runner: macos-15
             target: aarch64-apple-darwin
             arch: arm64
+            rid: osx-arm64
             suffix: ''
             rustflags: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+            rid: osx-x64
+            suffix: ''
+            rustflags: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+            rid: osx-x64
+            suffix: '-avx2'
+            rustflags: -Ctarget-cpu=x86-64-v3
     runs-on: ${{ matrix.runner }}
     # The static dav1d and the Rust code both build for macOS 11, not the runner's macOS 15.
     env:
       MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+        with: {ref: "${{ env.SRC }}", persist-credentials: false}
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         # .NET 11: the plugin host's runtime (Paint.NET 5.2 plugins target net11). 'preview' until 11.0 is GA.
         with: {dotnet-version: '11.0.x', dotnet-quality: 'preview'}
       - name: Install native build tools and Rust
         run: |
           test "$(uname -m)" = '${{ matrix.arch }}'
-          brew install meson ninja nasm pkgconf cmake autoconf automake libtool cairo pango dylibbundler
+          brew install meson ninja nasm pkgconf cmake autoconf automake libtool cairo pango libpng dylibbundler
           rustup toolchain install 1.99.1 --profile minimal --target '${{ matrix.target }}'
       # R244: dav1d is linked statically, as on Linux. Homebrew's libdav1d.dylib would not be in the bundle.
       - name: Build dav1d
@@ -290,23 +331,24 @@ jobs:
           sh scripts/macos-bundle.sh 'target/${{ matrix.target }}/dist/paintrs' "$dir/paint.rs.app"
           # The .NET plugin host, self-contained, beside the binary in the bundle.
           pdn="$dir/paint.rs.app/Contents/MacOS/pdn"
-          sh pdn-host/bridge/publish.sh "$pdn" osx-${{ matrix.arch }}
+          sh pdn-host/bridge/publish.sh "$pdn" ${{ matrix.rid }}
           # libgdiplus links Homebrew's cairo, pango and glib: carry them beside it, rewritten to
           # @loader_path, so the bundle needs no Homebrew. They keep the runner's minimum macOS.
           dylibbundler -of -b -x "$pdn/libgdiplus.dylib" -d "$pdn" -p @loader_path/ -s "$(brew --prefix)/lib"
-          if otool -L "$pdn"/*.dylib | grep -E '/opt/homebrew|/usr/local'; then
-            echo 'a plugin-host library above links one the bundle does not carry' >&2; exit 1; fi
-          # Their licences go with them: Homebrew keeps each formula's licence files in its keg.
-          for lib in "$pdn"/*.dylib; do
-            brewlib="$(brew --prefix)/lib/$(basename "$lib")"
-            [ -e "$brewlib" ] || continue   # not from Homebrew (opend2d, libgdiplus)
-            keg=$(cd "$(dirname "$(realpath "$brewlib")")/.." && pwd)   # Cellar/<formula>/<version>
-            notice="$pdn/notices/homebrew/$(basename "$(dirname "$keg")")-$(basename "$keg")"
-            mkdir -p "$notice"
-            find "$keg" -maxdepth 1 -type f \( -iname 'copying*' -o -iname 'licen[cs]e*' -o -iname 'notice*' -o -iname 'authors*' \) -exec cp {} "$notice/" \;
-            ls "$notice"/* >/dev/null 2>&1 || { echo "no licence file in $keg for $(basename "$lib")" >&2; exit 1; }
-            echo "- $(basename "$lib") (Homebrew $(basename "$(dirname "$keg")") $(basename "$keg"), in homebrew/)" >> "$pdn/notices/README.md"
+          # Our own libraries' install names are their builds' (libgdiplus's is /usr/local/lib/libgdiplus.0.dylib):
+          # give each one inside the bundle, and sign it again, as a changed arm64 library needs.
+          for lib in libgdiplus libd2d1 libdwrite libwindowscodecs libuser32; do
+            install_name_tool -id "@loader_path/$lib.dylib" "$pdn/$lib.dylib"
+            codesign --force -s - "$pdn/$lib.dylib"
           done
+          # Each library's dependencies: what otool -L lists but its own install name (otool -D's).
+          for lib in "$pdn"/*.dylib; do
+            id=$(otool -D "$lib" | sed -n 2p)
+            if otool -L "$lib" | sed 1d | awk -v id="$id" '$1 != id' | grep -E '/opt/homebrew|/usr/local'; then
+              echo "$(basename "$lib") links a library above that the bundle does not carry" >&2; exit 1; fi
+          done
+          # Their licences go with them, from each formula's keg or, failing that, its source.
+          sh scripts/ci/macos-homebrew-notices.sh "$pdn"
           plutil -lint "$dir/paint.rs.app/Contents/Info.plist"
           lipo "$dir/paint.rs.app/Contents/MacOS/paintrs" -verify_arch '${{ matrix.arch }}'
           libs=$(otool -L "$dir/paint.rs.app/Contents/MacOS/paintrs")
@@ -319,7 +361,16 @@ jobs:
           python3 scripts/ci/collect_notices.py "$dir/notices" --kind native --metadata metadata.json --dav1d-license "$RUNNER_TEMP/dav1d-notice"
           # tar keeps the executable modes inside the bundle.
           tar -czf "$dir.tar.gz" "$dir"
-          gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+          [ "$DRY" = true ] || gh release upload "$TAG" "$dir.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+      # A rehearsal keeps the packages as the run's artifacts, to download and test from the run page.
+      - name: Keep the packages (rehearsal)
+        if: env.DRY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: paint.rs-${{ env.TAG }}-macos-${{ matrix.arch }}${{ matrix.suffix }}
+          path: paint.rs-${{ env.TAG }}-macos-${{ matrix.arch }}${{ matrix.suffix }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   # GitHub has no FreeBSD runners: scripts/ci/freebsd-cross.sh builds on Linux with clang and lld against a
   # pinned FreeBSD base system, and dav1d is linked statically as on Linux.
@@ -327,10 +378,10 @@ jobs:
     needs: release
     runs-on: ubuntu-24.04
     env:
-      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-freebsd-x86_64
+      DIST: paint.rs-${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.0.0-ci' }}-freebsd-x86_64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+        with: {ref: "${{ env.SRC }}", persist-credentials: false}
       # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
       - name: Fetch opend2d
         shell: bash
@@ -348,7 +399,16 @@ jobs:
         run: |
           set -euo pipefail
           sh scripts/ci/package-tarball.sh "$DIST" target/x86_64-unknown-freebsd/dist/paintrs "$RUNNER_TEMP/dav1d-notice"
-          gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+          [ "$DRY" = true ] || gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+      # A rehearsal keeps the packages as the run's artifacts, to download and test from the run page.
+      - name: Keep the packages (rehearsal)
+        if: env.DRY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ env.DIST }}
+          path: ${{ env.DIST }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   # Alpine and other musl Linux: built in an Alpine container (scripts/ci/alpine-build.sh), linked to musl
   # dynamically.
@@ -363,10 +423,10 @@ jobs:
           - {arch: aarch64, runner: ubuntu-24.04-arm}
     runs-on: ${{ matrix.runner }}
     env:
-      DIST: paint.rs-${{ inputs.tag || github.ref_name }}-linux-${{ matrix.arch }}-musl
+      DIST: paint.rs-${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.0.0-ci' }}-linux-${{ matrix.arch }}-musl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+        with: {ref: "${{ env.SRC }}", persist-credentials: false}
       # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
       - name: Fetch opend2d
         shell: bash
@@ -374,7 +434,16 @@ jobs:
       - name: Build and package in Alpine
         run: docker run --rm -v "$PWD:/src" -v "$OPEND2D_DIR:/opend2d" -w /src "$ALPINE_IMAGE" sh scripts/ci/alpine-build.sh "$DIST"
       - name: Upload
-        run: gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"
+        run: '[ "$DRY" = true ] || gh release upload "$TAG" "$DIST.tar.gz" --clobber --repo "$GITHUB_REPOSITORY"'
+      # A rehearsal keeps the packages as the run's artifacts, to download and test from the run page.
+      - name: Keep the packages (rehearsal)
+        if: env.DRY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ env.DIST }}
+          path: ${{ env.DIST }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   web:
     needs: release
@@ -383,7 +452,7 @@ jobs:
       RUSTUP_TOOLCHAIN: '1.99.1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with: {ref: "${{ env.TAG }}", persist-credentials: false}
+        with: {ref: "${{ env.SRC }}", persist-credentials: false}
       # pdn-core's opend2d path dependencies (and the plugin host's drop-ins): the pinned snapshot.
       - name: Fetch opend2d
         shell: bash
@@ -395,10 +464,35 @@ jobs:
           cargo +1.99.1 install trunk --version 0.21.14 --locked
           curl -sSfL "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz" | tar xz -C "$RUNNER_TEMP"
           echo "WASM_OPT=$RUNNER_TEMP/binaryen-${BINARYEN_VERSION}/bin/wasm-opt" >> "$GITHUB_ENV"
-          # TODO(web-plugin-host): the .NET browser-wasm relink of the plugin host
-          # (pdn-host/paintnet-gpu/build-wasm.sh) needs binaryen >= 118 ON the emscripten Sdk
-          # pack's bin/ (the pack ships 117, too old for Rust's LLVM feature flags). When that
-          # build is wired into this job, copy this binaryen (133) over the pack's wasm-opt first.
+      # The browser's Paint.NET plug-in host (dist/pdn/, which the page loads once a plug-in is installed): the
+      # .NET 10 SDK, installed where the job may add workloads, with the wasm-tools workload (emscripten).
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        env: {DOTNET_INSTALL_DIR: '${{ runner.temp }}/dotnet'}
+        with: {dotnet-version: '10.0.403'}
+      - name: Install the plug-in host's toolchain and build OpenD2D's wasm drop-ins
+        run: |
+          set -euo pipefail
+          dotnet workload install wasm-tools
+          rustup target add wasm32-unknown-emscripten --toolchain 1.99.1
+          # The relink's wasm-opt must be binaryen >= 118: the emscripten pack ships 117, which rejects the feature
+          # flags Rust's LLVM stamps. This job's binaryen 133 takes its place.
+          em=$(ls -d "$DOTNET_ROOT"/packs/Microsoft.NET.Runtime.Emscripten.3.*.Sdk.*/*/tools | head -n 1)
+          mv "$em/bin/wasm-opt" "$em/bin/wasm-opt.orig"
+          cp "$RUNNER_TEMP/binaryen-$BINARYEN_VERSION/bin/wasm-opt" "$em/bin/"
+          "$em/bin/wasm-opt" --version
+          sh pdn-host/paintnet-web/build-native.sh "$OPEND2D_DIR"
       - run: tools/web-dist.sh --zip
+        env: {PDN_WEB_HOST: '1'}
+      # The plug-in host is in the zip: pdn/_framework/dotnet.js is what the page loads for a plug-in.
+      - run: unzip -l target/paintrs-web-*.zip | grep -q '/pdn/_framework/dotnet.js$'
       - name: Upload
-        run: gh release upload "$TAG" target/paintrs-web-*.zip --clobber --repo "$GITHUB_REPOSITORY"
+        run: '[ "$DRY" = true ] || gh release upload "$TAG" target/paintrs-web-*.zip --clobber --repo "$GITHUB_REPOSITORY"'
+      # A rehearsal keeps the packages as the run's artifacts, to download and test from the run page.
+      - name: Keep the packages (rehearsal)
+        if: env.DRY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: paintrs-web
+          path: target/paintrs-web-*.zip
+          if-no-files-found: error
+          retention-days: 14
