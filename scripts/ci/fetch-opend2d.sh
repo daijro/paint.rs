@@ -11,8 +11,8 @@
 set -eu
 [ "$#" -eq 1 ] || { echo 'usage: fetch-opend2d.sh <work dir>' >&2; exit 2; }
 release=v0.1.0-beta.1   # the OpenD2D release the snapshot is attached to
-commit=92aa6f6c313cac6aa7c716527d2d438ac89250bf
-sha256=c02bfdc576eb463bb70432ad86beef93e9dcc289c7f73c057b53f224d48974ef
+commit=55baec1d5ed76e0e572dd795434a3f94edaeaf18
+sha256=04fa161ce38f1d0bf656ecae094563de3b0831a0fe5be748c78668d02c4298a4
 url="${OPEND2D_SNAPSHOT_URL:-https://github.com/daijro/opend2d/releases/download/$release/opend2d-$commit.tar.gz}"
 dest="$(cd "$(dirname "$0")/../.." && pwd)/../../../opend2d"
 [ ! -e "$dest" ] || { echo "error: $dest already exists; not replacing it" >&2; exit 1; }
