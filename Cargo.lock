@@ -990,6 +990,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 [[package]]
 name = "crt"
 version = "0.1.0"
+source = "git+https://github.com/daijro/opend2d?rev=ad88739e2ba71ca043bd91f48d610d2338028c7c#ad88739e2ba71ca043bd91f48d610d2338028c7c"
 
 [[package]]
 name = "crunchy"
@@ -1016,6 +1017,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 [[package]]
 name = "d2d"
 version = "0.1.0"
+source = "git+https://github.com/daijro/opend2d?rev=ad88739e2ba71ca043bd91f48d610d2338028c7c#ad88739e2ba71ca043bd91f48d610d2338028c7c"
 dependencies = [
  "crt",
  "d2d-shader",
@@ -1038,6 +1040,7 @@ dependencies = [
 [[package]]
 name = "d2d-shader"
 version = "0.1.0"
+source = "git+https://github.com/daijro/opend2d?rev=ad88739e2ba71ca043bd91f48d610d2338028c7c#ad88739e2ba71ca043bd91f48d610d2338028c7c"
 dependencies = [
  "warpmath",
 ]
@@ -1045,6 +1048,7 @@ dependencies = [
 [[package]]
 name = "d2d-types"
 version = "0.1.0"
+source = "git+https://github.com/daijro/opend2d?rev=ad88739e2ba71ca043bd91f48d610d2338028c7c#ad88739e2ba71ca043bd91f48d610d2338028c7c"
 dependencies = [
  "windows-core",
  "windows-numerics",
@@ -2458,6 +2462,7 @@ dependencies = [
 [[package]]
 name = "jpegxr-pure-rs"
 version = "0.1.0"
+source = "git+https://github.com/daijro/opend2d?rev=ad88739e2ba71ca043bd91f48d610d2338028c7c#ad88739e2ba71ca043bd91f48d610d2338028c7c"
 
 [[package]]
 name = "js-sys"
@@ -5265,6 +5270,7 @@ dependencies = [
 [[package]]
 name = "warpmath"
 version = "0.1.0"
+source = "git+https://github.com/daijro/opend2d?rev=ad88739e2ba71ca043bd91f48d610d2338028c7c#ad88739e2ba71ca043bd91f48d610d2338028c7c"
 
 [[package]]
 name = "wasi"

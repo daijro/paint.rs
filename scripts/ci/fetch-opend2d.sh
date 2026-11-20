@@ -7,6 +7,7 @@
 # resolves pdn-core's path dependencies: crates/pdn-core's ../../../../../opend2d, i.e. <repo>/../../../
 # opend2d (the layout of a paint.rs worktree beside an opend2d checkout). In GitHub Actions OPEND2D_DIR
 # then points pdn-host/bridge/publish.sh at it. It never replaces an existing directory there.
+# Keep commit= the snapshot crates/pdn-core/Cargo.toml fetches as a git dependency (push-opend2d-snapshot.sh).
 set -eu
 [ "$#" -eq 1 ] || { echo 'usage: fetch-opend2d.sh <work dir>' >&2; exit 2; }
 release=v0.1.0-beta.1   # the OpenD2D release the snapshot is attached to
