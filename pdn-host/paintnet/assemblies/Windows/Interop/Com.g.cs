@@ -480,6 +480,37 @@ namespace PaintDotNet.Interop
         public static int CreateTransformedImageSource(void* p, void* a0, void* a1, void** a2) => ((delegate* unmanaged<void*, void*, void*, void**, int>)(*(void***)p)[105])(p, a0, a1, a2);
     }
 
+    /// <summary><c>ID2D1DeviceContext3</c> : <c>ID2D1DeviceContext2</c>.</summary>
+    internal static unsafe class ID2D1DeviceContext3
+    {
+        public static readonly Guid IID = new("235a7496-8351-414c-bcd4-6672ab2d8e00");
+        public static int CreateSpriteBatch(void* p, void** a0) => ((delegate* unmanaged<void*, void**, int>)(*(void***)p)[106])(p, a0);
+        public static void DrawSpriteBatch(void* p, void* a0, uint a1, uint a2, void* a3, int a4, int a5) => ((delegate* unmanaged<void*, void*, uint, uint, void*, int, int, void>)(*(void***)p)[107])(p, a0, a1, a2, a3, a4, a5);
+    }
+
+    /// <summary><c>ID2D1DeviceContext4</c> : <c>ID2D1DeviceContext3</c>.</summary>
+    internal static unsafe class ID2D1DeviceContext4
+    {
+        public static readonly Guid IID = new("8c427831-3d90-4476-b647-c4fae349e4db");
+        public static int CreateSvgGlyphStyle(void* p, void** a0) => ((delegate* unmanaged<void*, void**, int>)(*(void***)p)[108])(p, a0);
+        public static void DrawText(void* p, char* a0, uint a1, void* a2, void* a3, void* a4, void* a5, uint a6, int a7, int a8) => ((delegate* unmanaged<void*, char*, uint, void*, void*, void*, void*, uint, int, int, void>)(*(void***)p)[109])(p, a0, a1, a2, a3, a4, a5, a6, a7, a8);
+        public static void DrawTextLayout(void* p, Vector2 a0, void* a1, void* a2, void* a3, uint a4, int a5) => ((delegate* unmanaged<void*, Vector2, void*, void*, void*, uint, int, void>)(*(void***)p)[110])(p, a0, a1, a2, a3, a4, a5);
+        public static void DrawColorBitmapGlyphRun(void* p, int a0, Vector2 a1, void* a2, int a3, int a4) => ((delegate* unmanaged<void*, int, Vector2, void*, int, int, void>)(*(void***)p)[111])(p, a0, a1, a2, a3, a4);
+        public static void DrawSvgGlyphRun(void* p, Vector2 a0, void* a1, void* a2, void* a3, uint a4, int a5) => ((delegate* unmanaged<void*, Vector2, void*, void*, void*, uint, int, void>)(*(void***)p)[112])(p, a0, a1, a2, a3, a4, a5);
+        public static int GetColorBitmapGlyphImage(void* p, int a0, Vector2 a1, void* a2, float a3, ushort a4, int a5, void* a6, float a7, float a8, void* a9, void** a10) => ((delegate* unmanaged<void*, int, Vector2, void*, float, ushort, int, void*, float, float, void*, void**, int>)(*(void***)p)[113])(p, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+        public static int GetSvgGlyphImage(void* p, Vector2 a0, void* a1, float a2, ushort a3, int a4, void* a5, void* a6, void* a7, uint a8, void* a9, void** a10) => ((delegate* unmanaged<void*, Vector2, void*, float, ushort, int, void*, void*, void*, uint, void*, void**, int>)(*(void***)p)[114])(p, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10);
+    }
+
+    /// <summary><c>ID2D1DeviceContext5</c> : <c>ID2D1DeviceContext4</c>.</summary>
+    internal static unsafe class ID2D1DeviceContext5
+    {
+        public static readonly Guid IID = new("7836d248-68cc-4df6-b9e8-de991bf62eb7");
+        public static int CreateSvgDocument(void* p, void* a0, D2D_SIZE_F a1, void** a2) => ((delegate* unmanaged<void*, void*, D2D_SIZE_F, void**, int>)(*(void***)p)[115])(p, a0, a1, a2);
+        public static void DrawSvgDocument(void* p, void* a0) => ((delegate* unmanaged<void*, void*, void>)(*(void***)p)[116])(p, a0);
+        public static int CreateColorContextFromDxgiColorSpace(void* p, int a0, void** a1) => ((delegate* unmanaged<void*, int, void**, int>)(*(void***)p)[117])(p, a0, a1);
+        public static int CreateColorContextFromSimpleColorProfile(void* p, void* a0, void** a1) => ((delegate* unmanaged<void*, void*, void**, int>)(*(void***)p)[118])(p, a0, a1);
+    }
+
     /// <summary><c>IDWriteFactory</c> : <c>IUnknown</c>.</summary>
     internal static unsafe class IDWriteFactory
     {
@@ -743,5 +774,6 @@ namespace PaintDotNet.Interop
 
     internal struct D2D_SIZE_U { public uint width; public uint height; }
     internal struct Vector2 { public float X; public float Y; }
+    internal struct D2D_SIZE_F { public float width; public float height; }
     internal struct DWRITE_TEXT_RANGE { public uint startPosition; public uint length; }
 }

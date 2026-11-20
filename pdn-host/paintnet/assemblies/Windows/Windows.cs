@@ -102,10 +102,8 @@ namespace PaintDotNet.Imaging
     public interface IImagingFactory : IDisposable
     {
         IColorContext CreateColorContext(ReadOnlySpan<byte> profileBytes);
-        // A WIC encoder over a stream, in a container format. The host encodes through its own path, not this factory
-        // interface, so it is a default-implemented inert member (a plug-in binds it; a real factory overrides it).
-        IBitmapEncoder CreateEncoder(System.IO.Stream stream, in ContainerFormat containerFormat, in System.Nullable<VendorID> vendorId)
-            => throw new System.NotSupportedException("stream encoders are created through the host's own path");
+        /// A WIC encoder over a stream, in a container format.
+        IBitmapEncoder CreateEncoder(System.IO.Stream stream, in ContainerFormat containerFormat, in System.Nullable<VendorID> vendorId);
     }
 
     // The genuine CreateRef bumps a WIC ref-count; the host's factory is a plain managed

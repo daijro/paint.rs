@@ -335,14 +335,55 @@ namespace PaintDotNet.Imaging
         public string GetName() => guid.ToString();
     }
 
-    // The WIC pixel-format GUIDs the FileType plugins name.
+    // The WIC pixel-format GUIDs, as Paint.NET names them.
     public static class PixelFormats
     {
-        public static PixelFormat Bgra32 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc910"));
-        public static PixelFormat Rgb24 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90d"));
-        public static PixelFormat Rgba64 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc916"));
-        public static PixelFormat Rgba128Float => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc919"));
+        public static PixelFormat DontCare => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc900"));
+        public static PixelFormat Undefined => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc900"));
+        public static PixelFormat Alpha8 => new PixelFormat(new Guid("e6cd0116-eeba-4161-aa85-27dd9fb3a895"));
+        public static PixelFormat Indexed1 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc901"));
+        public static PixelFormat Indexed2 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc902"));
+        public static PixelFormat Indexed4 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc903"));
+        public static PixelFormat Indexed8 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc904"));
+        public static PixelFormat Gray8 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc908"));
+        public static PixelFormat Gray32Float => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc911"));
+        public static PixelFormat Gray16Half => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc93e"));
+        public static PixelFormat Bgr24 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90c"));
+        public static PixelFormat Bgr32 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90e"));
+        public static PixelFormat Bgr48 => new PixelFormat(new Guid("e605a384-b468-46ce-bb2e-36f180e64313"));
+        public static PixelFormat Bgra32 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90f"));
+        public static PixelFormat Bgra64 => new PixelFormat(new Guid("1562ff7c-d352-46f9-979e-42976b792246"));
+        public static PixelFormat Pbgra32 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc910"));
+        public static PixelFormat Pbgra64 => new PixelFormat(new Guid("8c518e8e-a4ec-468b-ae70-c9a35a9c5530"));
+        public static PixelFormat Prgba32 => new PixelFormat(new Guid("3cc4a650-a527-4d37-a916-3142c7ebedba"));
+        public static PixelFormat Prgba64 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc917"));
+        public static PixelFormat Prgba64Half => new PixelFormat(new Guid("58ad26c2-c623-4d9d-b320-387e49f8c442"));
         public static PixelFormat Prgba128Float => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc91a"));
+        public static PixelFormat Rgb24 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90d"));
+        public static PixelFormat Rgb32 => new PixelFormat(new Guid("d98c6b95-3efe-47d6-bb25-eb1748ab0cf1"));
+        public static PixelFormat Rgb48 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc915"));
+        public static PixelFormat Rgb48Half => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc93b"));
+        public static PixelFormat Rgb64 => new PixelFormat(new Guid("a1182111-186d-4d42-bc6a-9c8303a8dff9"));
+        public static PixelFormat Rgb96Float => new PixelFormat(new Guid("e3fed78f-e8db-4acf-84c1-e97f6136b327"));
+        public static PixelFormat Rgb128Float => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc91b"));
+        public static PixelFormat Rgba32 => new PixelFormat(new Guid("f5c7ad2d-6a8d-43dd-a7a8-a29935261ae9"));
+        public static PixelFormat Rgba64 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc916"));
+        public static PixelFormat Rgba64Half => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc93a"));
+        public static PixelFormat Rgba128Float => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc919"));
+        public static PixelFormat Bgra64Fixed => new PixelFormat(new Guid("356de33c-54d2-4a23-bb04-9b7bf9b1d42d"));
+        public static PixelFormat BlackWhite => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc905"));
+        public static PixelFormat Bgr16_555 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc909"));
+        public static PixelFormat Bgr16_565 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90a"));
+        public static PixelFormat Bgra16_5551 => new PixelFormat(new Guid("05ec7c2b-f1e6-4961-ad46-e1cc810a87d2"));
+        public static PixelFormat Cmyk64 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc91f"));
+        public static PixelFormat Cmyka80 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc92d"));
+        public static PixelFormat Cmyk32 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc91c"));
+        public static PixelFormat Cmyka40 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc92c"));
+        public static PixelFormat Gray2 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc906"));
+        public static PixelFormat Gray4 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc907"));
+        public static PixelFormat Gray16 => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc90b"));
+        public static PixelFormat Rgb64Half => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc942"));
+        public static PixelFormat Rgba64Fixed => new PixelFormat(new Guid("6fddc324-4e03-4bfe-b185-3d77768dc91d"));
     }
 
     // 32-bit straight-alpha BGRA. A single uint field (byte 0 = B .. byte 3 = A on
@@ -374,14 +415,13 @@ namespace PaintDotNet.Imaging
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorPbgra32 : INaturalPixelInfo
     {
-        private static readonly System.Guid FormatGuid = new System.Guid("6fddc324-4e03-4bfe-b185-3d77768dc911"); // 32bppPBGRA
         public uint Bgra;
         public byte B { readonly get => (byte)Bgra;         set => Bgra = (Bgra & 0xFFFFFF00u) | value; }
         public byte G { readonly get => (byte)(Bgra >> 8);  set => Bgra = (Bgra & 0xFFFF00FFu) | ((uint)value << 8); }
         public byte R { readonly get => (byte)(Bgra >> 16); set => Bgra = (Bgra & 0xFF00FFFFu) | ((uint)value << 16); }
         public byte A { readonly get => (byte)(Bgra >> 24); set => Bgra = (Bgra & 0x00FFFFFFu) | ((uint)value << 24); }
         public static ColorPbgra32 FromBgra(byte b, byte g, byte r, byte a) => new() { Bgra = b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24) };
-        readonly PixelFormat IPixelInfo.PixelFormat => FormatGuid;
+        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Pbgra32;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
 
@@ -396,8 +436,7 @@ namespace PaintDotNet.Imaging
         public static bool operator !=(ColorAlpha8 a, ColorAlpha8 b) => a.A != b.A;
         public override readonly bool Equals(object? obj) => obj is ColorAlpha8 o && o.A == A;
         public override readonly int GetHashCode() => A;
-        private static readonly System.Guid FormatGuid = new System.Guid("6fddc324-4e03-4bfe-b185-3d77768dc927"); // 8bppAlpha
-        readonly PixelFormat IPixelInfo.PixelFormat => FormatGuid;
+        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Alpha8;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
 
@@ -419,7 +458,7 @@ namespace PaintDotNet.Imaging
     public struct ColorPrgba64 : INaturalPixelInfo
     {
         public ushort R, G, B, A;
-        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgba64;
+        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Prgba64;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
 
@@ -489,13 +528,13 @@ namespace PaintDotNet.Imaging
         public static ColorRgba32 Round(ColorRgba128Float c, MidpointRounding mode)
             => new() { R = Byte(c.R, mode), G = Byte(c.G, mode), B = Byte(c.B, mode), A = Byte(c.A, mode) };
         private static byte Byte(float v, MidpointRounding mode) => (byte)Math.Round(Math.Clamp(v, 0f, 1f) * 255f, mode);
-        readonly PixelFormat IPixelInfo.PixelFormat => default;
+        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgba32;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorRgb48 : INaturalPixelInfo { public ushort R { get; set; } public ushort G { get; set; } public ushort B { get; set; } readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorRgb48 : INaturalPixelInfo { public ushort R { get; set; } public ushort G { get; set; } public ushort B { get; set; } readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgb48; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorRgb48Half : INaturalPixelInfo { public ushort R, G, B; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
+    public struct ColorRgb48Half : INaturalPixelInfo { public ushort R, G, B; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgb48Half; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorRgb96Float : INaturalPixelInfo
     {
@@ -505,19 +544,19 @@ namespace PaintDotNet.Imaging
         public ColorRgb96Float(float r, float g, float b) { R = r; G = g; B = b; }
         public static explicit operator ColorRgb96Float(System.Numerics.Vector3 v) => new(v.X, v.Y, v.Z);
         public static explicit operator System.Numerics.Vector3(ColorRgb96Float c) => new(c.R, c.G, c.B);
-        readonly PixelFormat IPixelInfo.PixelFormat => default;
+        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgb96Float;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float;
     }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorRgba64Half : INaturalPixelInfo { public ushort R, G, B, A; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
+    public struct ColorRgba64Half : INaturalPixelInfo { public ushort R, G, B, A; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgba64Half; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorGray8 : INaturalPixelInfo { public ColorGray8(byte v) => V = v; public byte V; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorGray8 : INaturalPixelInfo { public ColorGray8(byte v) => V = v; public byte V; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Gray8; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorGray16 : INaturalPixelInfo { public ushort V; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorGray16 : INaturalPixelInfo { public ushort V; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Gray16; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorGray16Half : INaturalPixelInfo { public ushort V; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
+    public struct ColorGray16Half : INaturalPixelInfo { public ushort V; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Gray16Half; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorGray32Float : INaturalPixelInfo { public float V; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
+    public struct ColorGray32Float : INaturalPixelInfo { public float V; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Gray32Float; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorAlpha16 : INaturalPixelInfo { public ushort A; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
@@ -525,13 +564,13 @@ namespace PaintDotNet.Imaging
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorAlpha32Float : INaturalPixelInfo { public float A; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorCmyk32 : INaturalPixelInfo { public byte C, M, Y, K; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorCmyk32 : INaturalPixelInfo { public byte C, M, Y, K; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Cmyk32; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorCmyk64 : INaturalPixelInfo { public ushort C, M, Y, K; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorCmyk64 : INaturalPixelInfo { public ushort C, M, Y, K; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Cmyk64; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorCmyka40 : INaturalPixelInfo { public byte C, M, Y, K, A; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorCmyka40 : INaturalPixelInfo { public byte C, M, Y, K, A; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Cmyka40; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorCmyka80 : INaturalPixelInfo { public ushort C, M, Y, K, A; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorCmyka80 : INaturalPixelInfo { public ushort C, M, Y, K, A; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Cmyka80; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorGenericXY16 : INaturalPixelInfo { public ushort V; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]

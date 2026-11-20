@@ -162,14 +162,13 @@ namespace PaintDotNet.Imaging
     {
         // Materialise an on-demand source into a concrete bitmap (the JPEG XL loader does
         // this for the decoded region before converting it to the document's pixel format).
-        // Copying a source's pixels into a lock, and format conversion, are the host imaging path's; inert here.
         /// The source's pixels from its origin, over the lock's size, into the lock.
         public static unsafe void CopyPixels<TPixel>(this IBitmapSource<TPixel> source, IBitmapLock destination)
             where TPixel : unmanaged, INaturalPixelInfo
             => ((IBitmapSource)source).CopyPixels(destination.Buffer, destination.BufferStride, destination.BufferSize,
                 new RectInt32(0, 0, destination.Size.Width, destination.Size.Height));
         public static IBitmapSource<TPixel> CreateFormatConverter<TPixel>(this IBitmapSource source)
-            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("format conversion is not available on this host");
+            where TPixel : unmanaged, INaturalPixelInfo => WicProcess.Convert<TPixel>(source);
 
         public static IBitmap<TPixel> ToBitmap<TPixel>(this IBitmapSource<TPixel> source)
             where TPixel : unmanaged, INaturalPixelInfo
@@ -403,14 +402,13 @@ namespace PaintDotNet.Imaging
             where TPixel : unmanaged, INaturalPixelInfo
             => new ManagedBitmap<TPixel>(width, height);
 
-        // Scaling and format conversion are the host imaging path's, not these factory extensions; the stand-in binds
-        // them inert (no survey plug-in reaches them at dialog construction).
+        // Scaling and format conversion run on the host's WIC (WicProcess).
         public static IBitmapSource<TPixel> CreateBitmapScaler<TPixel>(this IImagingFactory factory, IBitmapSource<TPixel> source, SizeInt32 dstSize, BitmapInterpolationMode mode)
-            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("bitmap scaling is not available on this host");
+            where TPixel : unmanaged, INaturalPixelInfo => WicProcess.Scale(source, dstSize.Width, dstSize.Height, mode);
         public static IBitmapSource<TPixel> CreateBitmapScaler<TPixel>(this IImagingFactory factory, IBitmapSource<TPixel> source, int dstWidth, int dstHeight, BitmapInterpolationMode mode)
-            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("bitmap scaling is not available on this host");
+            where TPixel : unmanaged, INaturalPixelInfo => WicProcess.Scale(source, dstWidth, dstHeight, mode);
         public static IBitmapSource<TPixel> CreateFormatConvertedBitmap<TPixel>(this IImagingFactory factory, IBitmapSource source)
-            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("format conversion is not available on this host");
+            where TPixel : unmanaged, INaturalPixelInfo => WicProcess.Convert<TPixel>(source);
 
         // The load path allocates its decode target with the non-generic form.
         // ponytail: the host only decodes 8-bit BGRA, so this backs every request with
@@ -431,6 +429,8 @@ namespace PaintDotNet.Imaging
     internal sealed class ManagedImagingFactory : IImagingFactory, IDisposable
     {
         public IColorContext CreateColorContext(ReadOnlySpan<byte> profileBytes) => new ManagedColorContext(profileBytes);
+        public IBitmapEncoder CreateEncoder(System.IO.Stream stream, in ContainerFormat containerFormat, in VendorID? vendorId)
+            => new WicBitmapEncoder(stream, containerFormat, vendorId);
         public void Dispose() { }
     }
 

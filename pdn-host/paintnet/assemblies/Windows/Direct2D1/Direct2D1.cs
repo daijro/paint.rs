@@ -249,9 +249,8 @@ namespace PaintDotNet.Direct2D1
         IDeviceColorContext CreateColorContext(DeviceColorSpace colorSpace);
         /// A device colour context for a bitmap's colour space (its profile; none: sRGB).
         IDeviceColorContext CreateColorContext(PaintDotNet.Imaging.IColorContext colorContext);
-        /// A device colour context for a DXGI colour space. Inert default (the host has no device colour contexts).
-        IDeviceColorContext CreateColorContext(PaintDotNet.Dxgi.DxgiColorSpace colorSpace)
-            => throw new System.NotSupportedException();
+        /// A device colour context for a DXGI colour space.
+        IDeviceColorContext CreateColorContext(PaintDotNet.Dxgi.DxgiColorSpace colorSpace);
     }
 
     public static class Direct2D1ObjectRefExtensions

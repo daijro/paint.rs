@@ -85,7 +85,7 @@ namespace PaintDotNet.Direct2D1
         // The native encoder writes the finished file to the stream in one Write at frame Commit, so only Write is
         // exercised (plus AddRef/Release from the Ref<IStream> clone). The rest return E_NOTIMPL; implement Seek/Stat
         // if a future container streams incrementally. The object is heap-allocated and refcounted: freed on last Release.
-        private static class ManagedStream
+        internal static class ManagedStream
         {
             private const int S_OK = 0;
             private const int E_NOTIMPL = unchecked((int)0x80004001);

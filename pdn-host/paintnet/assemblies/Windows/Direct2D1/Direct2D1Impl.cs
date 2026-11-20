@@ -431,6 +431,24 @@ namespace PaintDotNet.Direct2D1
             return new ColorContext(context, Owner, colorSpace);
         }
 
+        /// A colour context for a DXGI colour space; a custom one carries the profile Direct2D made for it.
+        public IDeviceColorContext CreateColorContext(PaintDotNet.Dxgi.DxgiColorSpace colorSpace)
+        {
+            void* dc5 = Native.QueryInterface(Ptr, ID2D1DeviceContext5.IID, "QueryInterface(ID2D1DeviceContext5)");
+            void* context;
+            try { Native.Check(ID2D1DeviceContext5.CreateColorContextFromDxgiColorSpace(dc5, (int)colorSpace, &context), "ID2D1DeviceContext5::CreateColorContextFromDxgiColorSpace"); }
+            finally { IUnknown.Release(dc5); }
+            var space = (DeviceColorSpace)ID2D1ColorContext.GetColorSpace(context);
+            byte[]? profile = null;
+            if (space == DeviceColorSpace.Custom)
+            {
+                profile = new byte[ID2D1ColorContext.GetProfileSize(context)];
+                fixed (byte* b = profile)
+                    Native.Check(ID2D1ColorContext.GetProfile(context, b, (uint)profile.Length), "ID2D1ColorContext::GetProfile");
+            }
+            return new ColorContext(context, Owner, space) { ProfileBytes = profile };
+        }
+
         /// A custom colour context from ICC profile bytes.
         internal IDeviceColorContext CreateColorContext(ReadOnlySpan<byte> profile)
         {
