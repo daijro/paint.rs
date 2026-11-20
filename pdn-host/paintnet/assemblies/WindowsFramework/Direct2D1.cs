@@ -59,8 +59,9 @@ namespace PaintDotNet.Direct2D1
     {
         private readonly IDeviceImage image;
         private readonly bool owns;
+        private readonly IDisposable? also;
 
-        internal HeldImage(IDeviceImage image, bool owns) { this.image = image; this.owns = owns; }
+        internal HeldImage(IDeviceImage image, bool owns, IDisposable? also = null) { this.image = image; this.owns = owns; this.also = also; }
 
         public IDirect2DFactory Factory => image.Factory;
 
@@ -70,6 +71,8 @@ namespace PaintDotNet.Direct2D1
         {
             if (disposing && owns)
                 image.Dispose();
+            if (disposing)
+                also?.Dispose();
         }
     }
 
@@ -121,7 +124,11 @@ namespace PaintDotNet.Direct2D1
                 if (!premultiplied && (options & BitmapImageOptions.UseStraightAlpha) == 0)
                     foreach (ref ColorBgra32 c in pixels.AsSpan())
                         c = Premultiply(c);
-                return new HeldImage(((DeviceContextImpl)dc).CreateBitmap(size, p, size.Width * 4, D2D.FormatB8G8R8A8, 0), owns: true);
+                // Through a Float32 PrecisionEffect, as Paint.NET's bitmap images are (at the context's bitmap image
+                // precision, Float32 for GPU effects): without it the 8-bit bitmap sets the precision of every effect
+                // after it, and a graph that holds signed or wide values (a Lab conversion) is clipped at each step.
+                IDeviceImage bitmapImage = ((DeviceContextImpl)dc).CreateBitmap(size, p, size.Width * 4, D2D.FormatB8G8R8A8, 0);
+                return new HeldImage(new PaintDotNet.Direct2D1.Effects.PrecisionEffect(dc, bitmapImage, BufferPrecision.Float32), owns: true, also: bitmapImage);
             }
         }
 
@@ -181,6 +188,20 @@ namespace PaintDotNet.Direct2D1
 
     public static class Direct2DFactoryExtensions
     {
+        // A Direct2D geometry from a WPF geometry, and a bitmap source rendered from a device image. The host has no WPF
+        // and renders device images through its own path, not these, so they are inert here (a plug-in that names them
+        // binds; the conversion is not available). The survey references them but does not reach them at dialog load.
+        public static IGeometry CreateGeometryFromWpfGeometry(this IDirect2DFactory factory, System.Windows.Media.Geometry geometry, float? flatteningTolerance = null)
+            => throw new System.NotSupportedException("WPF geometry conversion is not available on this host");
+        /// A CPU bitmap of what `render` draws on a device context of this factory, over `size`. ponytail: rendered as
+        /// 8-bit BGRA (the context-based overload), whatever `pixelFormat` asks; a float format would need a float read-back.
+        public static PaintDotNet.Imaging.IBitmapSource<TPixel> CreateBitmapSourceFromImage<TPixel>(this IDirect2DFactory factory, PaintDotNet.Rendering.SizeInt32 size, DevicePixelFormat pixelFormat, System.Func<IDeviceContext, IDeviceImage> render)
+            where TPixel : unmanaged, PaintDotNet.Imaging.INaturalPixelInfo
+        {
+            using IDeviceContext dc = factory.CreateBitmapDeviceContext(new PaintDotNet.Imaging.ManagedBitmap<PaintDotNet.Imaging.ColorBgra32>(1, 1));
+            return dc.CreateBitmapSourceFromImage<TPixel>(size, render(dc));
+        }
+
         // ComputeSharp.D2D1's registration blob, version 1 (D2D1EffectRegistrationData.V1).
         private static readonly Guid BlobV1 = new(2712970590u, 19576, 16703, 162, 230, 10, 2, 230, 10, 118, 24);
 
@@ -213,7 +234,7 @@ namespace PaintDotNet.Direct2D1
                 }
                 nint effectFactory = MemoryMarshal.Read<nint>(s);
                 fixed (nint* b = bindings)
-                    ((Direct2DFactory)factory).RegisterEffectFromString(classId, xml, count == 0 ? null : b, (uint)count, (void*)effectFactory);
+                    ((HostDirect2DFactory)factory).RegisterEffectFromString(classId, xml, count == 0 ? null : b, (uint)count, (void*)effectFactory);
             }
             finally
             {

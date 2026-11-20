@@ -877,31 +877,10 @@ pub fn size_control(
             }
         }
     }
-    // User (2026-10-24): the wheel over the control steps it as the ± buttons do (×5 with Ctrl),
-    // a step a notch: a wheel line, or 100 px of a pixel delta, as Ctrl+wheel zoom counts them;
-    // a partial notch waits for the rest. Through `change`, so a focused field shows the value.
-    if wheel && ui.rect_contains_pointer(rect) {
-        let wheel_id = id.with("wheel");
-        let mut steps = ui.data(|d| d.get_temp::<f64>(wheel_id)).unwrap_or(0.0);
-        ui.input(|i| {
-            for e in &i.events {
-                if let egui::Event::MouseWheel {
-                    unit,
-                    delta,
-                    modifiers,
-                    ..
-                } = e
-                {
-                    let notches = match unit {
-                        egui::MouseWheelUnit::Point => f64::from(delta.y) / 100.0,
-                        _ => f64::from(delta.y),
-                    };
-                    steps += notches * if modifiers.ctrl { 5.0 } else { 1.0 };
-                }
-            }
-        });
-        let whole = steps.trunc();
-        ui.data_mut(|d| d.insert_temp(wheel_id, steps - whole));
+    // User (2026-10-24): the wheel over the control steps it as the ± buttons do (×5 with Ctrl).
+    // Through `change`, so a focused field shows the value.
+    if wheel {
+        let whole = super::inputs::value_wheel(ui, id.with("wheel"), rect, Some(5.0));
         if whole != 0.0 {
             let v = ((value + whole * step) * 100.0).round() / 100.0;
             change(&mut edit, &mut actions, v);
@@ -1035,6 +1014,7 @@ pub fn slider_value(key: &str, f: f64, min: f64, max: f64, step: f64) -> f64 {
 }
 
 /// `createSliderControl`: minus, the meter (fill + `N%` label), plus. Returns the new value.
+/// `wheel`: the wheel over the control steps it as the buttons do (no menu or popup lies over it).
 #[allow(clippy::too_many_arguments)]
 pub fn slider_meter(
     ui: &mut Ui,
@@ -1042,6 +1022,7 @@ pub fn slider_meter(
     rect: Rect,
     def: &OptionDef,
     value: f64,
+    wheel: bool,
     backdrop: Color32,
 ) -> Option<f64> {
     let theme = theme::current(ui.ctx());
@@ -1129,6 +1110,13 @@ pub fn slider_meter(
     tip(&inc, def, Part::Inc, Path::Pdn);
     if inc.clicked() {
         out = Some(add(button_step));
+    }
+    if wheel {
+        let steps =
+            super::inputs::value_wheel(ui, ui.scope_id().with((key, "wheel")), rect, Some(5.0));
+        if steps != 0.0 {
+            out = Some(add(steps * step));
+        }
     }
     out.map(|v| v.clamp(min, max))
 }
@@ -1430,6 +1418,57 @@ fn labelled_button(
 mod tests {
     use super::{chevron_coverage, range_value, slider_fraction, slider_text_layout, slider_value};
     use egui::{Pos2, Rect, Vec2};
+
+    /// The wheel over a toolbar slider (the Paintbrush's Hardness) steps it as its −/+ do: a notch
+    /// a step, ×5 with Ctrl, clamped to its range, the value coming back as a press's does.
+    #[test]
+    fn wheel_over_a_toolbar_slider_steps_it_as_its_buttons_do() {
+        use egui::{Event, Modifiers, MouseWheelUnit};
+        use pdn_core::tool::types::{OptionKind, ToolSettings, ToolType, option_definitions};
+        let def = option_definitions(ToolType::PaintBrush, &ToolSettings::default())
+            .into_iter()
+            .find(|d| d.key == "hardness")
+            .expect("the Paintbrush has Hardness");
+        assert_eq!(def.kind, OptionKind::Slider);
+        let (min, max) = (def.min.unwrap_or(0.0), def.max.unwrap_or(100.0));
+        let ctx = egui::Context::default();
+        crate::install_fonts(&ctx, pdn_core::fonts::FontPolicy::Bundled, "Selawik");
+        let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(180.0, 23.0));
+        let mut time = 0.0;
+        let mut run = |value: f64, events: Vec<Event>| -> Option<f64> {
+            time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let mut out = None;
+            let mut full = ctx.run_ui(raw, |ui| {
+                out =
+                    super::slider_meter(ui, def.key, rect, &def, value, true, egui::Color32::WHITE);
+            });
+            full.textures_delta.clear();
+            out
+        };
+        let notch = |y, modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, y),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        run(50.0, vec![Event::PointerMoved(rect.center())]);
+        assert_eq!(run(50.0, vec![notch(1.0, Modifiers::NONE)]), Some(51.0));
+        assert_eq!(run(50.0, vec![notch(-1.0, Modifiers::NONE)]), Some(49.0));
+        assert_eq!(run(50.0, vec![notch(1.0, Modifiers::CTRL)]), Some(55.0));
+        assert_eq!(run(max - 1.0, vec![notch(3.0, Modifiers::NONE)]), Some(max));
+        assert_eq!(
+            run(min + 1.0, vec![notch(-3.0, Modifiers::NONE)]),
+            Some(min)
+        );
+        assert_eq!(run(50.0, vec![]), None);
+    }
 
     /// tooltips.md §3.5 / §3.6 / §3.10: every tool's options tip with Paint.NET's strings (each
     /// key resolves), and the untipped ones have none.

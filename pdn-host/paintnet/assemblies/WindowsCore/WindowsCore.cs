@@ -15,6 +15,18 @@ namespace PaintDotNet.Imaging
             var size = bitmapLock.Size;
             return new RegionPtr<TPixel>(bitmapLock.Buffer, size.Width, size.Height, bitmapLock.BufferStride);
         }
+
+        // ponytail: the genuine CreateSharedBitmap aliases the lock's memory; this copies into a fresh managed bitmap,
+        // which serves a plug-in that reads the result. Make it zero-copy if a plug-in writes back through the share.
+        public static IBitmap<TPixel> CreateSharedBitmap<TPixel>(this IBitmapLock<TPixel> bitmapLock)
+            where TPixel : unmanaged, INaturalPixelInfo
+        {
+            SizeInt32 size = bitmapLock.Size;
+            IBitmap<TPixel> bitmap = ImagingFactory.CreateRef().CreateBitmap<TPixel>(size.Width, size.Height);
+            using IBitmapLock<TPixel> dst = bitmap.Lock(BitmapLockOptions.Write);
+            bitmapLock.AsRegionPtr().CopyTo(dst.AsRegionPtr());
+            return bitmap;
+        }
     }
 
     public static class BitmapExtensions
@@ -150,6 +162,15 @@ namespace PaintDotNet.Imaging
     {
         // Materialise an on-demand source into a concrete bitmap (the JPEG XL loader does
         // this for the decoded region before converting it to the document's pixel format).
+        // Copying a source's pixels into a lock, and format conversion, are the host imaging path's; inert here.
+        /// The source's pixels from its origin, over the lock's size, into the lock.
+        public static unsafe void CopyPixels<TPixel>(this IBitmapSource<TPixel> source, IBitmapLock destination)
+            where TPixel : unmanaged, INaturalPixelInfo
+            => ((IBitmapSource)source).CopyPixels(destination.Buffer, destination.BufferStride, destination.BufferSize,
+                new RectInt32(0, 0, destination.Size.Width, destination.Size.Height));
+        public static IBitmapSource<TPixel> CreateFormatConverter<TPixel>(this IBitmapSource source)
+            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("format conversion is not available on this host");
+
         public static IBitmap<TPixel> ToBitmap<TPixel>(this IBitmapSource<TPixel> source)
             where TPixel : unmanaged, INaturalPixelInfo
         {
@@ -378,6 +399,19 @@ namespace PaintDotNet.Imaging
             where TPixel : unmanaged, INaturalPixelInfo
             => new ManagedBitmap<TPixel>(size.Width, size.Height);
 
+        public static IBitmap<TPixel> CreateBitmap<TPixel>(this IImagingFactory factory, int width, int height, BitmapAllocationOptions options)
+            where TPixel : unmanaged, INaturalPixelInfo
+            => new ManagedBitmap<TPixel>(width, height);
+
+        // Scaling and format conversion are the host imaging path's, not these factory extensions; the stand-in binds
+        // them inert (no survey plug-in reaches them at dialog construction).
+        public static IBitmapSource<TPixel> CreateBitmapScaler<TPixel>(this IImagingFactory factory, IBitmapSource<TPixel> source, SizeInt32 dstSize, BitmapInterpolationMode mode)
+            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("bitmap scaling is not available on this host");
+        public static IBitmapSource<TPixel> CreateBitmapScaler<TPixel>(this IImagingFactory factory, IBitmapSource<TPixel> source, int dstWidth, int dstHeight, BitmapInterpolationMode mode)
+            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("bitmap scaling is not available on this host");
+        public static IBitmapSource<TPixel> CreateFormatConvertedBitmap<TPixel>(this IImagingFactory factory, IBitmapSource source)
+            where TPixel : unmanaged, INaturalPixelInfo => throw new NotSupportedException("format conversion is not available on this host");
+
         // The load path allocates its decode target with the non-generic form.
         // ponytail: the host only decodes 8-bit BGRA, so this backs every request with
         // a ColorBgra32 buffer; widen per-format when HDR (Rgba64/Rgba128Float) decode lands.
@@ -426,7 +460,14 @@ namespace PaintDotNet.Imaging
         public byte[] Pixels => pixels;
         public PixelFormat PixelFormat => ((IPixelInfo)default(TPixel)).PixelFormat;
         public Vector2Double Resolution { get; set; } = new Vector2Double(96.0, 96.0);
-        public IBitmapLock Lock(RectInt32 rect, BitmapLockOptions options) => new ManagedBitmapLock<TPixel>(this);
+        /// The pixels of `rect`, which must lie inside the bitmap (a lock's buffer starts at its top-left pixel).
+        public IBitmapLock Lock(RectInt32 rect, BitmapLockOptions options)
+        {
+            if (rect.X < 0 || rect.Y < 0 || rect.Width < 0 || rect.Height < 0
+                || (long)rect.X + rect.Width > Size.Width || (long)rect.Y + rect.Height > Size.Height)
+                throw new ArgumentOutOfRangeException(nameof(rect), $"{rect} is outside the {Size.Width}x{Size.Height} bitmap");
+            return new ManagedBitmapLock<TPixel>(this, rect);
+        }
         public void SetPalette(IPalette palette) { } // host is always true-colour
         /// Runs once on Dispose (a premultiplied adapter writes its pixels back).
         internal Action? Disposing;
@@ -437,16 +478,19 @@ namespace PaintDotNet.Imaging
     {
         private GCHandle handle;
         private readonly ManagedBitmap<TPixel> owner;
-        public ManagedBitmapLock(ManagedBitmap<TPixel> owner)
+        private readonly RectInt32 rect;
+        public ManagedBitmapLock(ManagedBitmap<TPixel> owner, RectInt32 rect)
         {
             this.owner = owner;
+            this.rect = rect;
             handle = GCHandle.Alloc(owner.Pixels, GCHandleType.Pinned);
         }
-        public SizeInt32 Size => owner.Size;
-        void* IBitmapLock.Buffer => (void*)handle.AddrOfPinnedObject();
-        TPixel* IBitmapLock<TPixel>.Buffer => (TPixel*)handle.AddrOfPinnedObject();
+        private byte* Start => (byte*)handle.AddrOfPinnedObject() + (long)rect.Y * owner.Stride + (long)rect.X * sizeof(TPixel);
+        public SizeInt32 Size => new(rect.Width, rect.Height);
+        void* IBitmapLock.Buffer => Start;
+        TPixel* IBitmapLock<TPixel>.Buffer => (TPixel*)Start;
         public int BufferStride => owner.Stride;
-        public uint BufferSize => (uint)owner.Pixels.Length;
+        public uint BufferSize => rect.Height == 0 ? 0 : (uint)((long)(rect.Height - 1) * owner.Stride + (long)rect.Width * sizeof(TPixel));
         public PixelFormat PixelFormat => ((IPixelInfo)default(TPixel)).PixelFormat;
         public void Dispose() { if (handle.IsAllocated) handle.Free(); }
     }

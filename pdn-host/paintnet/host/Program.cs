@@ -61,7 +61,10 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
 
     private static bool IsSharedFramework(string n)
     {
-        if (n is "System.Drawing.Common" or "System.Drawing") return false;
+        // System.Drawing is the plug-in context's on Linux (the libgdiplus build in the asmdir) and the default
+        // context's on Windows (the VM oracle: the install's own copy, which the host loads too; a second copy in
+        // the plug-in context makes a plug-in's Bitmap a different type from the one the genuine Effect takes).
+        if (n is "System.Drawing.Common" or "System.Drawing") return OperatingSystem.IsWindows();
         return n is "mscorlib" or "netstandard" or "WindowsBase"
             || n.StartsWith("System.", StringComparison.Ordinal)
             || n.StartsWith("Microsoft.", StringComparison.Ordinal);
@@ -86,6 +89,7 @@ internal sealed class PluginLoadContext : AssemblyLoadContext
 
 internal static class Program
 {
+    [STAThread]   // a classic effect's settings dialog is WinForms, built on this thread (DialogToken)
     private static int Main(string[] args)
     {
         // Last-resort error log: a headless host launched without a console (e.g. the reference VM
@@ -289,6 +293,10 @@ internal static class Program
             token = tokenT.GetConstructor(new[] { props.GetType() })!.Invoke(new[] { props });
         }
 
+        // A classic effect with its own settings dialog renders with the token that dialog makes, as Paint.NET's OK
+        // gives it: built, given the effect, its source and selection, loaded, and its controls read back.
+        token ??= DialogToken(effect, src, new Rectangle(0, 0, w, h));
+
         object srcArgs = renderArgsCtor.Invoke(new[] { src });
         object dstArgs = renderArgsCtor.Invoke(new[] { dst });
 
@@ -323,7 +331,10 @@ internal static class Program
             schedule = new[] { new[] { new Rectangle(0, 0, w, h) } };
         }
         foreach (Rectangle[] tile in schedule)
+        {
+            if (Environment.GetEnvironmentVariable("PDN_DIAG") is not null) Console.Error.WriteLine("RENDER " + string.Join(" ", tile));
             render.Invoke(effect, new object[] { token!, dstArgs, srcArgs, tile, 0, tile.Length });
+        }
         // Copy any GDI+ drawing (done through a RenderArgs.Graphics the plugin may have created and
         // not disposed) back into the surfaces. The replacement RenderArgs needs this because
         // libgdiplus does not write through a bitmap-over-scan0; the genuine Windows RenderArgs has
@@ -378,6 +389,39 @@ internal static class Program
                     return c.Invoke(new object[] { black, white!, 2f, region, src });
             }
         return envT.GetProperty("DefaultParameters", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+    }
+
+    /// The token a classic effect's own dialog makes (null when it has none): CreateConfigDialog,
+    /// its Effect, EffectSourceSurface and Selection set, shown (Load: the token into the controls), then
+    /// FinishTokenUpdate (the controls into the token), as OK in Paint.NET.
+    private static object? DialogToken(object effect, object src, Rectangle bounds)
+    {
+        const BindingFlags Any = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        if (effect.GetType().GetMethod("CreateConfigDialog", BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes)?.Invoke(effect, null)
+            is not { } dialog) return null;
+        Type dt = dialog.GetType();
+        // A generic dialog base (EffectConfigDialog<TEffect, TToken>) hides Effect and EffectToken with typed ones: set
+        // each property of the name.
+        void Set(string name, object? value)
+        {
+            foreach (PropertyInfo p in dt.GetProperties().Where(p => p.Name == name && p.CanWrite)) p.SetValue(dialog, value);
+        }
+        Set("Effect", effect);
+        Set("EffectSourceSurface", src);
+        object? env = effect.GetType().GetProperty("EnvironmentParameters")?.GetValue(effect);
+        if (env?.GetType().GetMethod("GetSelection", new[] { typeof(Rectangle) }) is { } getSel)
+            Set("Selection", getSel.Invoke(env, new object[] { bounds }));
+        // Shown, as Paint.NET shows it: the form's Load and each child control's Load (a UserControl's runs only when
+        // it is created visible) fire within Show. The replacement WinForms shows nothing headless; its RaiseLoad
+        // raises the same Loads.
+        (dt.GetMethod("RaiseLoad", Type.EmptyTypes) ?? dt.GetMethod("Show", Type.EmptyTypes)!).Invoke(dialog, null);
+        dt.GetMethod("FinishTokenUpdate", Any, Type.EmptyTypes)?.Invoke(dialog, null);
+        dt.GetMethod("Hide", Type.EmptyTypes)?.Invoke(dialog, null);
+        object? token = dt.GetProperties().FirstOrDefault(p => p.Name == "EffectToken")?.GetValue(dialog);
+        if (token is not null && Environment.GetEnvironmentVariable("PDN_DIAG") is not null)
+            foreach (FieldInfo f in token.GetType().GetFields(Any))
+                Console.Error.WriteLine($"TOKEN {f.Name} = {f.GetValue(token)}");
+        return token;
     }
 
     private static bool DerivesFrom(Type t, string baseFullName)

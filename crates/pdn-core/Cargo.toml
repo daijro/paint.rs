@@ -16,6 +16,8 @@ avif-dav1d = ["dep:dav1d"]
 sam = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:getrandom"]
 
 [dependencies]
+# A plug-in's network request and its response cross the host as base64 (effect::permission); already in the lock.
+base64 = "0.22"
 # WARP's shader-math intrinsics (sincos, …), shared from opend2d so the shader-mirroring distort
 # coord-gen matches WARP's transcendentals. Path for now; switches to the github dep at release.
 warpmath = { path = "../../../../../opend2d/crates/warpmath" }
@@ -58,6 +60,11 @@ bcdec_rs = "0.2"
 gif = "0.14"
 # Task 47b: palette TIFFs re-tagged as grey (io/tiff.rs); 0.11 is the version `image` already locks.
 tiff = "0.11"
+# JPEG XR decode on every target (formats-matrix.md §3.8): openreadout-jpegxr (BSD-2-Clause,
+# Microsoft's jxrlib decoder ported without `unsafe`: Ruling R51; OpenD2D's d2d already builds it for
+# wasm32); half (MIT OR Apache-2.0, already locked) reads its half floats.
+openreadout-jpegxr = "0.4"
+half = "2"
 # PSD and PSB open and save (io/psd.rs): PhotoCraft's reader and writer (MIT OR Apache-2.0, pure
 # Rust on every target), vendored without its swatch, action and preset parsers.
 photocraft-psd = { path = "../vendor/photocraft-psd" }
@@ -76,15 +83,11 @@ rayon = "1.12"
 pdn-bridge = { path = "../pdn-bridge" }
 # Task 47: lossy WebP (libwebp, vendored C; formats-matrix.md §3.9).
 webp = { version = "0.3", default-features = false }
-# Task 48: native decoders (formats-matrix.md §2, §3.5, §3.6, §3.8). dav1d (MIT) links the system
+# Task 48: native decoders (formats-matrix.md §2, §3.5, §3.6). dav1d (MIT) links the system
 # libdav1d (BSD-2-Clause) through pkg-config; heic-rs (MIT OR Apache-2.0, vendored with a colour
-# patch: Ruling R52) parses HEIF for HEIC and AVIF; openreadout-jpegxr (BSD-2-Clause, Microsoft's
-# jxrlib decoder ported without `unsafe`: Ruling R51) decodes JPEG XR; half (MIT OR Apache-2.0,
-# already locked) reads its half floats.
+# patch: Ruling R52) parses HEIF for HEIC and AVIF.
 dav1d = { version = "0.11", optional = true }
 heic-rs = { version = "0.1", default-features = false, features = ["parallel"] }
-openreadout-jpegxr = "0.4"
-half = "2"
 
 # Task 47: libjxl (BSD-3-Clause) built statically for the hand-written lossy JPEG XL FFI in
 # io/encode.rs (formats-matrix.md §3.4 and its ruling: never the GPL jpegxl-rs/jpegxl-sys).

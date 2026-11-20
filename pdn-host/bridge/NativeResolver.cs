@@ -30,11 +30,35 @@ internal static class NativeResolver
         };
         if (file is not null)
         {
-            string full = Path.Combine(AppContext.BaseDirectory, file);
+            // The imaging drop-in imports the COM allocator entrypoints (native/user32.c provides them), which
+            // nothing supplies off Windows; its load-time relocations need them globally visible, and
+            // NativeLibrary.Load uses local scope. Load the stand-in into the global scope first.
+            if (name == "windowscodecs" && !OperatingSystem.IsWindows())
+                PreloadGlobal(Path.Combine(PluginLoadContext.HostDirectory, PlatformFileName("user32")));
+            string full = Path.Combine(PluginLoadContext.HostDirectory, file);
             if (File.Exists(full) && NativeLibrary.TryLoad(full, out IntPtr handle))
                 return handle;
         }
         return IntPtr.Zero; // fall through to the default resolver
+    }
+
+    // dlopen with RTLD_GLOBAL so a library's exported symbols satisfy a later-loaded library's relocations
+    // (NativeLibrary.Load is RTLD_LOCAL). dlopen lives in libdl (Linux) / libSystem (macOS).
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate IntPtr DlOpen([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
+    private static void PreloadGlobal(string path)
+    {
+        if (!File.Exists(path)) return;
+        const int RTLD_NOW = 2;
+        int rtldGlobal = OperatingSystem.IsMacOS() ? 0x8 : 0x100;
+        string dl = OperatingSystem.IsMacOS() ? "libSystem.dylib" : "libdl.so.2";
+        try
+        {
+            if (NativeLibrary.TryLoad(dl, out IntPtr dlh) && NativeLibrary.TryGetExport(dlh, "dlopen", out IntPtr fn))
+                Marshal.GetDelegateForFunctionPointer<DlOpen>(fn)(path, RTLD_NOW | rtldGlobal);
+        }
+        catch { /* best-effort; the drop-in load below surfaces the real failure if this did not help */ }
     }
 
     private static string PlatformFileName(string name) =>

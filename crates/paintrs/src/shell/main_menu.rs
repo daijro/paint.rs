@@ -305,6 +305,20 @@ pub(crate) fn adjustment_entries(app: &AppWorkspace, plugins: Vec<&'static str>)
     .collect()
 }
 
+/// Where installed plug-in effect `id` sits in the menus, as they show it: Effects, Plugins, the submenu it declares
+/// (if any) and its name (the Plugins page in Settings lists these under each plug-in).
+pub(crate) fn effect_menu_path(app: &AppWorkspace, id: &str) -> Vec<String> {
+    let mut parts = vec![
+        label("menu.effects"),
+        action::display_name(app, "effects.plugins.submenu"),
+    ];
+    if let Some(sub) = pdn_core::effect::dotnet::submenu_of(id) {
+        parts.push(action::display_name(app, sub));
+    }
+    parts.push(action::menu_label(app, &format!("menu.effects.{id}")));
+    parts
+}
+
 /// Submenus sorted by name (`compareNames`).
 fn sort_submenus(app: &AppWorkspace, entries: &mut [MenuEntry]) {
     entries.sort_by(|a, b| {
@@ -930,6 +944,23 @@ mod tests {
                 ("Blurs".into(), vec!["menu.effects.Test.Blur"]),
                 ("Root Effect".into(), vec![]),
             ]
+        );
+    }
+
+    /// An installed plug-in effect's menu path reads as the menus show it, with the submenu it declares.
+    #[test]
+    fn a_plugin_effects_menu_path() {
+        use pdn_core::effect::dotnet::remember_menu;
+        remember_menu("Path.Test.Swirl", "Swirl", Some("Distort"));
+        remember_menu("Path.Test.Plain", "Plain", None);
+        let app = AppWorkspace::default();
+        assert_eq!(
+            effect_menu_path(&app, "Path.Test.Swirl"),
+            ["Effects", "Plugins", "Distort", "Swirl"]
+        );
+        assert_eq!(
+            effect_menu_path(&app, "Path.Test.Plain"),
+            ["Effects", "Plugins", "Plain"]
         );
     }
 

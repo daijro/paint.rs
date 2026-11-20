@@ -106,7 +106,6 @@ namespace System.Windows.Forms
         public static Color DefaultBackColor => SystemColors.Control;
         public static Color DefaultForeColor => SystemColors.ControlText;
         public bool HasChildren => Controls.Count > 0;
-        private Size? clientSize;
         public string Name { get; set; } = "";
         public int TabIndex { get; set; }
         public bool TabStop { get; set; } = true;
@@ -118,7 +117,10 @@ namespace System.Windows.Forms
         public object? Tag { get; set; }
         public virtual Size MinimumSize { get; set; }
         public virtual Size MaximumSize { get; set; }
-        public Size ClientSize { get => clientSize ?? Size; set { clientSize = value; Size = value; } }
+        // Headless, with no window chrome, so the client area is the whole control: ClientSize is Size. (Keeping a
+        // separate stored clientSize let it win over a later Size/Bounds change -- Liquify's Load sets Size after its
+        // designer set ClientSize -- so the Anchor layout that reads ClientSize stayed at the designer size.)
+        public Size ClientSize { get => Size; set => Size = value; }
         public Rectangle Bounds { get => new(Location, Size); set { Location = value.Location; Size = value.Size; } }
         public int Right => Left + Width;
         public int Bottom => Top + Height;
@@ -194,8 +196,10 @@ namespace System.Windows.Forms
         public IAsyncResult BeginInvoke(Delegate method, params object?[]? args) { method.DynamicInvoke(args); return new Done(); }
         public IAsyncResult BeginInvoke(Action method) { method(); return new Done(); }
         public object? EndInvoke(IAsyncResult result) => null;
-        public Point PointToClient(Point p) => p;
-        public Point PointToScreen(Point p) => p;
+        // Headless there is no screen; a consistent cumulative offset up the Parent chain is enough for the one
+        // use (CurtisBlack's ControlShadow maps the DocumentBox to screen and back to exclude it -- the origin cancels).
+        public Point PointToScreen(Point p) { for (Control? c = this; c is not null; c = c.Parent) p = new Point(p.X + c.Left, p.Y + c.Top); return p; }
+        public Point PointToClient(Point p) { for (Control? c = this; c is not null; c = c.Parent) p = new Point(p.X - c.Left, p.Y - c.Top); return p; }
         public Graphics CreateGraphics() => Graphics.FromImage(new Bitmap(Math.Max(1, Width), Math.Max(1, Height)));
         public void Scale(SizeF factor) { }
         void ISupportInitialize.BeginInit() { }
@@ -212,6 +216,17 @@ namespace System.Windows.Forms
         public event DragEventHandler? DragDrop, DragEnter, DragOver;
         public event EventHandler? DragLeave;
         protected virtual void OnLoad(EventArgs e) { }
+
+        private bool loadRaised;
+        /// Raises OnLoad once for every descendant control, as WinForms does when it creates a control's tree
+        /// (OnCreateControl raises a UserControl's Load). The headless show path creates no handles, so Form.RaiseLoad
+        /// calls this on its children: a plug-in's own UserControl then runs its Load -- CurtisBlack's DocumentView
+        /// hooks its child controls (so the live-canvas recogniser sees them) and selects its panel there.
+        internal void RaiseLoadTree()
+        {
+            foreach (Control c in Controls) c.RaiseLoadTree();   // descendants first, as control creation is bottom-up
+            if (!loadRaised) { loadRaised = true; OnLoad(EventArgs.Empty); }
+        }
 
         // The rest of WinForms' protected virtuals, so a plug-in's control can override and call them.
         public event ControlEventHandler? ControlAdded, ControlRemoved;
@@ -247,7 +262,45 @@ namespace System.Windows.Forms
         protected virtual void OnHandleDestroyed(EventArgs e) => HandleDestroyed?.Invoke(this, e);
         protected virtual void OnKeyPress(KeyPressEventArgs e) => KeyPress?.Invoke(this, e);
         protected virtual void OnKeyUp(KeyEventArgs e) => KeyUp?.Invoke(this, e);
-        protected virtual void OnLayout(LayoutEventArgs levent) => Layout?.Invoke(this, levent);
+        private Size anchorBase;
+        private bool anchorBaseSet;
+        protected virtual void OnLayout(LayoutEventArgs levent)
+        {
+            LayoutChildren();
+            Layout?.Invoke(this, levent);
+        }
+
+        /// WinForms' default layout: resize or move each child by its Dock (fill the named side) and Anchor (keep
+        /// the anchored edges' distances as this control resizes). Lets Liquify's canvas, anchored to all four
+        /// sides, grow with its form when the host sizes it from its Owner. Incremental from the last layout size.
+        private void LayoutChildren()
+        {
+            if (controls is null || controls.Count == 0) return;
+            Size now = ClientSize;
+            if (!anchorBaseSet) { anchorBase = now; anchorBaseSet = true; return; }
+            int dw = now.Width - anchorBase.Width, dh = now.Height - anchorBase.Height;
+            anchorBase = now;
+            var client = new Rectangle(Point.Empty, now);
+            foreach (Control c in controls)
+            {
+                switch (c.Dock)
+                {
+                    case DockStyle.Fill: c.SetBounds(client.Left, client.Top, client.Width, client.Height); continue;
+                    case DockStyle.Top: c.SetBounds(client.Left, client.Top, client.Width, c.Height); continue;
+                    case DockStyle.Bottom: c.SetBounds(client.Left, client.Bottom - c.Height, client.Width, c.Height); continue;
+                    case DockStyle.Left: c.SetBounds(client.Left, client.Top, c.Width, client.Height); continue;
+                    case DockStyle.Right: c.SetBounds(client.Right - c.Width, client.Top, c.Width, client.Height); continue;
+                }
+                if (dw == 0 && dh == 0) continue;
+                AnchorStyles a = c.Anchor;
+                int x = c.Left, y = c.Top, w = c.Width, h = c.Height;
+                bool l = (a & AnchorStyles.Left) != 0, r = (a & AnchorStyles.Right) != 0;
+                bool t = (a & AnchorStyles.Top) != 0, b = (a & AnchorStyles.Bottom) != 0;
+                if (l && r) w += dw; else if (r) x += dw; else if (!l) x += dw / 2;   // neither edge: WinForms keeps it centred
+                if (t && b) h += dh; else if (b) y += dh; else if (!t) y += dh / 2;
+                c.SetBounds(x, y, Math.Max(0, w), Math.Max(0, h));
+            }
+        }
         protected virtual void OnMarginChanged(EventArgs e) => MarginChanged?.Invoke(this, e);
         protected virtual void OnMouseCaptureChanged(EventArgs e) => MouseCaptureChanged?.Invoke(this, e);
         protected virtual void OnMouseClick(MouseEventArgs e) => MouseClick?.Invoke(this, e);
@@ -369,6 +422,7 @@ namespace System.Windows.Forms
     {
         public PreviewKeyDownEventArgs(Keys keyData) { KeyData = keyData; }
         public Keys KeyData { get; }
+        public Keys KeyCode => KeyData & Keys.KeyCode;
         public bool IsInputKey { get; set; }
     }
     public class CreateParams
@@ -407,12 +461,39 @@ namespace System.Windows.Forms
         public virtual bool AutoScroll { get; set; }
         public Size AutoScrollMinSize { get; set; }
         public Size AutoScrollMargin { get; set; }
-        public Point AutoScrollPosition { get; set; }
-        public ScrollProperties HorizontalScroll { get; } = new();
-        public ScrollProperties VerticalScroll { get; } = new();
+        // As WinForms': the position reads as the display area's offset, zero or negative; setting it scrolls to the
+        // negated point, held within how far the content overflows the client area (not at all when it fits, so a
+        // document view smaller than its panel stays put and centres it), and moves the children with the content.
+        private Point displayOrigin;
+        public Point AutoScrollPosition
+        {
+            get => displayOrigin;
+            set
+            {
+                int right = AutoScrollMinSize.Width, bottom = AutoScrollMinSize.Height;
+                if (AutoScroll)
+                    foreach (Control c in Controls)
+                    {
+                        right = Math.Max(right, c.Right - displayOrigin.X + AutoScrollMargin.Width);
+                        bottom = Math.Max(bottom, c.Bottom - displayOrigin.Y + AutoScrollMargin.Height);
+                    }
+                var to = new Point(Math.Clamp(-value.X, Math.Min(0, ClientSize.Width - right), 0),
+                                   Math.Clamp(-value.Y, Math.Min(0, ClientSize.Height - bottom), 0));
+                if (to == displayOrigin) return;
+                foreach (Control c in Controls)
+                    c.Location = new Point(c.Left + to.X - displayOrigin.X, c.Top + to.Y - displayOrigin.Y);
+                displayOrigin = to;
+            }
+        }
+        public HScrollProperties HorizontalScroll { get; } = new();
+        public VScrollProperties VerticalScroll { get; } = new();
+        /// Whether the scrollbars are shown. ponytail: the headless host does not scroll, so these stay false.
+        protected bool HScroll { get; set; }
+        protected bool VScroll { get; set; }
         public void ScrollControlIntoView(Control activeControl) { }
         public void SetAutoScrollMargin(int x, int y) => AutoScrollMargin = new Size(x, y);
         public event ScrollEventHandler? Scroll;
+        protected virtual void OnScroll(ScrollEventArgs se) => Scroll?.Invoke(this, se);
     }
     public class ScrollProperties
     {
@@ -424,6 +505,8 @@ namespace System.Windows.Forms
         public int SmallChange { get; set; } = 1;
         public int LargeChange { get; set; } = 10;
     }
+    public class HScrollProperties : ScrollProperties { }
+    public class VScrollProperties : ScrollProperties { }
 
     public partial class ContainerControl
     {
@@ -436,6 +519,7 @@ namespace System.Windows.Forms
 
     public class UserControl : ContainerControl
     {
+        protected override Size DefaultSize => new(150, 150);   // real WinForms UserControl default, so a custom control sized by its parent is not 0x0 at construction
         public event EventHandler? Load;
         protected override void OnLoad(EventArgs e) => Load?.Invoke(this, e);
         public BorderStyle BorderStyle { get; set; }
@@ -456,6 +540,10 @@ namespace System.Windows.Forms
         public bool TopMost { get; set; }
         public bool KeyPreview { get; set; }
         public SizeGripStyle SizeGripStyle { get; set; }
+        public Color TransparencyKey { get; set; }
+        // ponytail: there is no native window; these exist so a plug-in's CreateHandle/SetVisibleCore overrides bind.
+        protected virtual void CreateHandle() { }
+        protected virtual void SetVisibleCore(bool value) => Visible = value;
         public FormStartPosition StartPosition { get; set; }
         public FormWindowState WindowState { get; set; }
         public Icon? Icon { get; set; }
@@ -490,6 +578,7 @@ namespace System.Windows.Forms
             Owner ??= AppWindow;
             OnLoad(EventArgs.Empty);
             PerformLayout();   // as WinForms lays a form out when it is shown
+            foreach (Control c in Controls) c.RaiseLoadTree();   // and raises each child control's Load (a UserControl hooks its children there)
         }
         /// Paint.NET's main window, as plug-ins find it (Application.OpenForms["MainForm"]).
         internal static readonly Form AppWindow = new() { Name = "MainForm", Text = "Paint.NET", ClientSize = new Size(1280, 800) };
@@ -659,16 +748,18 @@ namespace System.Windows.Forms
 
     public class GroupBox : Control
     {
+        protected override Size DefaultSize => new(200, 100);
         public FlatStyle FlatStyle { get; set; } = FlatStyle.Standard;
     }
 
     public class Panel : ScrollableControl
     {
+        protected override Size DefaultSize => new(200, 100);
         public BorderStyle BorderStyle { get; set; }
         public AutoSizeMode AutoSizeMode { get; set; }
     }
 
-    public class FlowLayoutPanel : Panel { public bool WrapContents { get; set; } = true; }
+    public class FlowLayoutPanel : Panel { public bool WrapContents { get; set; } = true; public FlowDirection FlowDirection { get; set; } }
 
     public class SplitterPanel : Panel { }
 
@@ -685,6 +776,8 @@ namespace System.Windows.Forms
         public BorderStyle BorderStyle { get; set; }
         public int Panel1MinSize { get; set; } = 25;
         public int Panel2MinSize { get; set; } = 25;
+        public bool Panel1Collapsed { get; set; }
+        public bool Panel2Collapsed { get; set; }
     }
     public enum FixedPanel { None, Panel1, Panel2 }
 
@@ -707,6 +800,13 @@ namespace System.Windows.Forms
         public bool ShowToolTips { get; set; }
         public TabSizeMode SizeMode { get; set; }
         public Size ItemSize { get; set; } = new(0, 18);
+        public new System.Drawing.Point Padding { get; set; }
+        public TabAlignment Alignment { get; set; } = TabAlignment.Top;
+        public TabAppearance Appearance { get; set; } = TabAppearance.Normal;
+        public bool HotTrack { get; set; }
+        public int TabCount => TabPages.Count;
+        /// ponytail: tabs aren't laid out in the headless host, so there is no on-screen rectangle.
+        public System.Drawing.Rectangle GetTabRect(int index) => System.Drawing.Rectangle.Empty;
         public int SelectedIndex
         {
             get => selected;
@@ -736,6 +836,8 @@ namespace System.Windows.Forms
     }
 
     public enum TabSizeMode { Normal, FillToRight, Fixed }
+    public enum TabAlignment { Top, Bottom, Left, Right }
+    public enum TabAppearance { Normal, Buttons, FlatButtons }
 
     public class PictureBox : Control, ISupportInitialize
     {
@@ -745,6 +847,8 @@ namespace System.Windows.Forms
         public BorderStyle BorderStyle { get; set; }
         public Image? ErrorImage { get; set; }
         public Image? InitialImage { get; set; }
+        // ponytail: stored, not fetched — loading from a path/URL is the host's gated concern, not the control's.
+        public string? ImageLocation { get; set; }
         void ISupportInitialize.BeginInit() { }
         void ISupportInitialize.EndInit() { }
     }
@@ -1013,24 +1117,33 @@ namespace System.Windows.Forms
 
     public class ComboBox : ListControl
     {
+        protected override Size DefaultSize => new(121, 21);
         public AutoCompleteStringCollection AutoCompleteCustomSource { get; set; } = new();
         public AutoCompleteMode AutoCompleteMode { get; set; }
         public AutoCompleteSource AutoCompleteSource { get; set; } = AutoCompleteSource.None;
         public class ObjectCollection : IList
         {
+            // As WinForms' own: clearing or removing items moves the selection without raising SelectedIndexChanged
+            // (the list control's reset and delete messages send no selection notification). A dialog that clears a
+            // list and refills it inside a handler sees no event between the two.
             private readonly List<object> items = new();
-            private readonly Action changed;
-            internal ObjectCollection(Action changed) { this.changed = changed; }
+            private readonly ComboBox owner;
+            internal ObjectCollection(ComboBox owner) { this.owner = owner; }
             public int Count => items.Count;
-            public object this[int index] { get => items[index]; set { items[index] = value; changed(); } }
+            public object this[int index] { get => items[index]; set => items[index] = value; }
             public int Add(object item) { items.Add(item); return items.Count - 1; }
             public void AddRange(object[] range) => items.AddRange(range);
-            public void Clear() { items.Clear(); changed(); }
+            public void Clear() { items.Clear(); owner.selected = -1; }
             public bool Contains(object? value) => value is not null && items.Contains(value);
             public int IndexOf(object? value) => value is null ? -1 : items.IndexOf(value);
             public void Insert(int index, object item) => items.Insert(index, item);
-            public void Remove(object? value) { if (value is not null) { items.Remove(value); changed(); } }
-            public void RemoveAt(int index) { items.RemoveAt(index); changed(); }
+            public void Remove(object? value) { int i = IndexOf(value); if (i >= 0) RemoveAt(i); }
+            public void RemoveAt(int index)
+            {
+                items.RemoveAt(index);
+                if (index == owner.selected) owner.selected = -1;
+                else if (index < owner.selected) owner.selected--;
+            }
             public void CopyTo(Array array, int index) => ((ICollection)items).CopyTo(array, index);
             public IEnumerator GetEnumerator() => items.GetEnumerator();
             bool IList.IsFixedSize => false;
@@ -1043,7 +1156,7 @@ namespace System.Windows.Forms
         }
 
         private int selected = -1;
-        public ComboBox() { Items = new ObjectCollection(() => { if (selected >= Items.Count) SelectedIndex = -1; }); }
+        public ComboBox() { Items = new ObjectCollection(this); }
         public ObjectCollection Items { get; }
         public ComboBoxStyle DropDownStyle { get; set; } = ComboBoxStyle.DropDown;
         public int DropDownWidth { get; set; }
@@ -1055,6 +1168,8 @@ namespace System.Windows.Forms
         public bool Sorted { get; set; }
         public bool DroppedDown { get; set; }
         public FlatStyle FlatStyle { get; set; } = FlatStyle.Standard;
+        // ponytail: no text caret in the headless host, so the "selected text" is just stored.
+        public string SelectedText { get; set; } = "";
         public override int SelectedIndex
         {
             get => selected;
@@ -1110,6 +1225,7 @@ namespace System.Windows.Forms
 
     public class ListBox : ListControl
     {
+        protected override Size DefaultSize => new(120, 96);
         public class ObjectCollection : IList
         {
             private readonly List<object> items = new();
@@ -1126,6 +1242,7 @@ namespace System.Windows.Forms
             public void Remove(object? value) { if (value is not null) { items.Remove(value); changed(); } }
             public void RemoveAt(int index) { items.RemoveAt(index); changed(); }
             public void CopyTo(Array array, int index) => ((ICollection)items).CopyTo(array, index);
+            public void CopyTo(object[] destination, int arrayIndex) => items.CopyTo(destination, arrayIndex);
             public IEnumerator GetEnumerator() => items.GetEnumerator();
             bool IList.IsFixedSize => false;
             bool IList.IsReadOnly => false;
@@ -1141,8 +1258,26 @@ namespace System.Windows.Forms
         protected virtual ObjectCollection CreateItemCollection() => new(this);
         public ObjectCollection Items { get; }
         public bool MultiColumn { get; set; }
+        public bool HorizontalScrollbar { get; set; }
+        public int HorizontalExtent { get; set; }
         public int ColumnWidth { get; set; }
         public int GetItemHeight(int index) => ItemHeight;
+        public bool ScrollAlwaysVisible { get; set; }
+        public int TopIndex { get; set; }
+        public int FindString(string s) => FindCore(s, false);
+        public int FindStringExact(string s) => FindCore(s, true);
+        private int FindCore(string s, bool exact)
+        {
+            for (int i = 0; i < Items.Count; i++)
+            {
+                string t = Items[i]?.ToString() ?? "";
+                if (exact ? string.Equals(t, s, StringComparison.OrdinalIgnoreCase) : t.StartsWith(s ?? "", StringComparison.OrdinalIgnoreCase)) return i;
+            }
+            return -1;
+        }
+        public System.Drawing.Rectangle GetItemRectangle(int index) => new(0, (index - TopIndex) * ItemHeight, Width, ItemHeight);
+        public int IndexFromPoint(System.Drawing.Point p) { int i = TopIndex + p.Y / Math.Max(1, ItemHeight); return i >= 0 && i < Items.Count ? i : -1; }
+        public int IndexFromPoint(int x, int y) => IndexFromPoint(new System.Drawing.Point(x, y));
         public SelectionMode SelectionMode { get; set; } = SelectionMode.One;
         public BorderStyle BorderStyle { get; set; } = BorderStyle.Fixed3D;
         public int ItemHeight { get; set; } = 13;
@@ -1169,6 +1304,38 @@ namespace System.Windows.Forms
         public event MeasureItemEventHandler? MeasureItem;
         protected virtual void OnDrawItem(DrawItemEventArgs e) => DrawItem?.Invoke(this, e);
         protected virtual void OnMeasureItem(MeasureItemEventArgs e) => MeasureItem?.Invoke(this, e);
+        protected virtual void OnSelectedIndexChanged(EventArgs e) => SelectedIndexChanged?.Invoke(this, e);
+
+        // The single selection surfaced as the multi-select collections. ponytail: SelectionMode.MultiSimple/Extended
+        // isn't tracked, so at most one index/item is reported.
+        public SelectedIndexCollection SelectedIndices => new(selected >= 0 ? new List<int> { selected } : new List<int>());
+        public SelectedObjectCollection SelectedItems => new(selected >= 0 ? new List<object> { Items[selected]! } : new List<object>());
+
+        public class SelectedIndexCollection : IReadOnlyList<int>
+        {
+            private readonly List<int> items;
+            internal SelectedIndexCollection(List<int> items) => this.items = items;
+            public int Count => items.Count;
+            public int this[int index] => items[index];
+            public bool Contains(int selectedIndex) => items.Contains(selectedIndex);
+            public void CopyTo(Array dest, int index) => ((ICollection)items).CopyTo(dest, index);
+            public void Add(int index) => items.Add(index);
+            public void Clear() => items.Clear();
+            // Genuine's public GetEnumerator is the non-generic one; the generic stays explicit for IReadOnlyList<int>.
+            public IEnumerator GetEnumerator() => items.GetEnumerator();
+            IEnumerator<int> IEnumerable<int>.GetEnumerator() => items.GetEnumerator();
+        }
+        public class SelectedObjectCollection : IReadOnlyList<object>
+        {
+            private readonly List<object> items;
+            internal SelectedObjectCollection(List<object> items) => this.items = items;
+            public int Count => items.Count;
+            public object this[int index] => items[index];
+            public bool Contains(object? value) => value is not null && items.Contains(value);
+            public void CopyTo(Array dest, int index) => ((ICollection)items).CopyTo(dest, index);
+            public IEnumerator GetEnumerator() => items.GetEnumerator();
+            IEnumerator<object> IEnumerable<object>.GetEnumerator() => items.GetEnumerator();
+        }
     }
 
     /// A list whose items each have a check box.
@@ -1194,6 +1361,23 @@ namespace System.Windows.Forms
             states[index] = e.NewValue;
         }
         protected virtual void OnItemCheck(ItemCheckEventArgs ice) => ItemCheck?.Invoke(this, ice);
+
+        public CheckedItemCollection CheckedItems
+        {
+            get { var l = new List<object>(); for (int i = 0; i < base.Items.Count; i++) if (GetItemChecked(i)) l.Add(base.Items[i]); return new CheckedItemCollection(l); }
+        }
+        public class CheckedItemCollection : IReadOnlyList<object>
+        {
+            private readonly List<object> items;
+            internal CheckedItemCollection(List<object> items) => this.items = items;
+            public int Count => items.Count;
+            public object this[int index] => items[index];
+            public bool Contains(object? value) => value is not null && items.Contains(value);
+            public int IndexOf(object? value) => value is null ? -1 : items.IndexOf(value);
+            public void CopyTo(Array dest, int index) => ((ICollection)items).CopyTo(dest, index);
+            public IEnumerator<object> GetEnumerator() => items.GetEnumerator();
+            IEnumerator IEnumerable.GetEnumerator() => items.GetEnumerator();
+        }
 
         public new class ObjectCollection : ListBox.ObjectCollection
         {
@@ -1233,6 +1417,23 @@ namespace System.Windows.Forms
         public virtual int TextLength => Text.Length;
         public void ScrollToCaret() { }
         public void Select(int start, int length) { SelectionStart = start; SelectionLength = length; }
+        public void DeselectAll() { SelectionLength = 0; }   // SelectAll is on the other half of the partial (WindowsForms.cs)
+        public string SelectedText
+        {
+            get { int s = Math.Clamp(SelectionStart, 0, Text.Length); return Text.Substring(s, Math.Clamp(SelectionLength, 0, Text.Length - s)); }
+            set { int s = Math.Clamp(SelectionStart, 0, Text.Length); int l = Math.Clamp(SelectionLength, 0, Text.Length - s); Text = Text.Remove(s, l).Insert(s, value ?? ""); SelectionStart = s + (value?.Length ?? 0); SelectionLength = 0; }
+        }
+        // Line/char-index mapping a code editor uses (CurtisBlack's CodeTextBox), over the text's newlines.
+        public int GetLineFromCharIndex(int index) { int n = 0, cap = Math.Clamp(index, 0, Text.Length); for (int i = 0; i < cap; i++) if (Text[i] == '\n') n++; return n; }
+        public int GetFirstCharIndexFromLine(int line)
+        {
+            if (line < 0) return -1;
+            if (line == 0) return 0;
+            int seen = 0;
+            for (int i = 0; i < Text.Length; i++) if (Text[i] == '\n' && ++seen == line) return i + 1;
+            return -1;
+        }
+        public int GetFirstCharIndexOfCurrentLine() => GetFirstCharIndexFromLine(GetLineFromCharIndex(SelectionStart));
     }
 
     public class ColorDialog : CommonDialog
@@ -1264,6 +1465,27 @@ namespace System.Windows.Forms
 
     public abstract class FileDialog : CommonDialog
     {
+        public event System.ComponentModel.CancelEventHandler? FileOk;
+        // For the host (paint.rs replays a file the user picked in its own settings window, the same way
+        // ColorDialog replays a colour): the bytes and name the next OpenFileDialog shown on this thread
+        // returns, then used up; and the last dialog shown, so paint.rs can offer a picker with its filter.
+        [ThreadStatic] private static byte[]? hostBytes;
+        [ThreadStatic] private static string? hostName;
+        [ThreadStatic] private static FileDialog? lastOffered;
+        [ThreadStatic] private static bool pickNeeded;   // an Open dialog was shown with no file staged: paint.rs must pick one
+        public static void SetHostAnswer(byte[] bytes, string name) { hostBytes = bytes; hostName = name; }
+        public static void ClearHostAnswer() { hostBytes = null; hostName = null; }
+        /// Every file an open dialog was answered with so far, by the path it was given at: a second host process
+        /// that renders for this one (the browser's render worker) is given the same files at the same paths.
+        public static string[] HostFiles() { lock (hostFiles) return hostFiles.ToArray(); }
+        private static readonly System.Collections.Generic.List<string> hostFiles = new();
+        public static FileDialog? HostLastOffered { get => lastOffered; set => lastOffered = value; }
+        // The open dialog a press showed with nothing staged (so paint.rs offers a chooser), taken once; cleared before a press.
+        public static FileDialog? TakePick() { if (!pickNeeded) return null; pickNeeded = false; return lastOffered; }
+        public static void ClearPick() { pickNeeded = false; lastOffered = null; }
+
+        private byte[]? chosen;
+
         public string FileName { get; set; } = "";
         public string[] FileNames => FileName.Length == 0 ? [] : [FileName];
         public string Filter { get; set; } = "";
@@ -1277,12 +1499,44 @@ namespace System.Windows.Forms
         public bool RestoreDirectory { get; set; }
         public bool ValidateNames { get; set; } = true;
         public bool SupportMultiDottedExtensions { get; set; }
+        public bool AddToRecent { get; set; } = true;
+        public Guid? ClientGuid { get; set; }
+
+        protected byte[]? Chosen => chosen;
+
+        protected override bool RunDialog(IntPtr hwndOwner)
+        {
+            lastOffered = this;
+            // Save is not routed here (the host would have to read back what the plug-in writes); only Open
+            // is answered. An unanswered or save dialog cancels, as a real dialog's Cancel does; an Open with
+            // nothing staged flags that paint.rs must offer a file (the host turns that into a "pick").
+            if (this is not OpenFileDialog || hostBytes is not { } bytes) { if (this is OpenFileDialog) pickNeeded = true; return false; }
+            pickNeeded = false;
+            // Back the chosen file with a real path too, so a plug-in that reads FileName (File.OpenRead,
+            // Image.FromFile) works like one that calls OpenFile().
+            try
+            {
+                // Keep the user's own file name at the end of the path (a per-pick temp subdir avoids collisions), so a
+                // plug-in that shows FileName (CurtisBlack's "Map File") shows "pattern.png", not the temp hash.
+                string dir = IO.Path.Combine(IO.Path.GetTempPath(), "pdn-open-" + Guid.NewGuid().ToString("N"));
+                IO.Directory.CreateDirectory(dir);
+                string name = string.IsNullOrEmpty(hostName) ? "chosen" + IO.Path.GetExtension(hostName ?? "") : IO.Path.GetFileName(hostName);
+                string path = IO.Path.Combine(dir, name);
+                IO.File.WriteAllBytes(path, bytes);
+                lock (hostFiles) hostFiles.Add(path);
+                FileName = path;
+            }
+            catch (Exception) { FileName = hostName ?? "chosen"; }   // no temp FS: OpenFile() still serves the bytes
+            chosen = bytes;
+            hostBytes = null; hostName = null;
+            return true;
+        }
     }
     public sealed class OpenFileDialog : FileDialog
     {
         public bool Multiselect { get; set; }
         public bool ReadOnlyChecked { get; set; }
-        public IO.Stream OpenFile() => throw new InvalidOperationException("no file was chosen");
+        public IO.Stream OpenFile() => Chosen is { } b ? new IO.MemoryStream(b, writable: false) : IO.File.OpenRead(FileName);
     }
     public sealed class SaveFileDialog : FileDialog
     {
@@ -1295,6 +1549,8 @@ namespace System.Windows.Forms
         public string Description { get; set; } = "";
         public bool ShowNewFolderButton { get; set; } = true;
         public Environment.SpecialFolder RootFolder { get; set; } = Environment.SpecialFolder.Desktop;
+        public bool AddToRecent { get; set; } = true;
+        public Guid? ClientGuid { get; set; }
     }
 
     public enum ToolStripItemAlignment { Left, Right }
@@ -1317,6 +1573,9 @@ namespace System.Windows.Forms
             }
         }
         protected virtual void OnTextChanged(EventArgs e) => TextChanged?.Invoke(this, e);
+        protected virtual void OnLayout(LayoutEventArgs e) { }
+        protected virtual void OnMouseMove(MouseEventArgs e) { }
+        public ImageLayout BackgroundImageLayout { get; set; } = ImageLayout.Tile;
         public bool AutoSize { get; set; } = true;
         public bool AutoToolTip { get; set; }
         public ToolStripItemAlignment Alignment { get; set; }
@@ -1380,7 +1639,9 @@ namespace System.Windows.Forms
         public ToolStripLabel(string? text) => Text = text ?? "";
         public ToolStripLabel(string? text, Image? image) : this(text) => Image = image;
     }
-    public class ToolStripStatusLabel : ToolStripLabel { public bool Spring { get; set; } }
+    public class ToolStripStatusLabel : ToolStripLabel { public bool Spring { get; set; } public ToolStripStatusLabelBorderSides BorderSides { get; set; } = ToolStripStatusLabelBorderSides.None; }
+
+    [Flags] public enum ToolStripStatusLabelBorderSides { None = 0, Left = 1, Top = 2, Right = 4, Bottom = 8, All = 15 }
     public class ToolStripButton : ToolStripItem
     {
         public ToolStripButton() { }
@@ -1442,12 +1703,14 @@ namespace System.Windows.Forms
         public event EventHandler? ButtonClick;
         protected virtual void OnButtonClick(EventArgs e) => ButtonClick?.Invoke(this, e);
     }
-    public class ToolStripItemCollection : IList
+    // An ArrangedElementCollection, as Windows Forms' is: a plug-in enumerating a strip's Items binds to the base's
+    // GetEnumerator.
+    public class ToolStripItemCollection : Layout.ArrangedElementCollection, IList
     {
         private readonly List<ToolStripItem> items = new();
         public ToolStripItemCollection() { }
         public ToolStripItemCollection(ToolStrip owner, ToolStripItem[] value) { AddRange(value); }
-        public int Count => items.Count;
+        public override int Count => items.Count;
         public ToolStripItem this[int index] => items[index];
         public ToolStripItem? this[string key] => items.Find(i => string.Equals(i.Name, key, StringComparison.OrdinalIgnoreCase));
         public int Add(ToolStripItem value) { items.Add(value); return items.Count - 1; }
@@ -1467,7 +1730,8 @@ namespace System.Windows.Forms
         public int IndexOf(ToolStripItem value) => items.IndexOf(value);
         public int IndexOfKey(string key) => this[key] is { } i ? items.IndexOf(i) : -1;
         public ToolStripItem[] Find(string key, bool searchAllChildren) => items.FindAll(i => string.Equals(i.Name, key, StringComparison.OrdinalIgnoreCase)).ToArray();
-        public IEnumerator GetEnumerator() => items.GetEnumerator();
+        public override IEnumerator GetEnumerator() => items.GetEnumerator();
+        public void CopyTo(ToolStripItem[] array, int index) => items.CopyTo(array, index);
         int IList.Add(object? value) => Add((ToolStripItem)value!);
         bool IList.Contains(object? value) => value is ToolStripItem i && Contains(i);
         int IList.IndexOf(object? value) => value is ToolStripItem i ? IndexOf(i) : -1;
@@ -1495,6 +1759,7 @@ namespace System.Windows.Forms
         protected virtual void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
         protected virtual void OnRenderItemText(ToolStripItemTextRenderEventArgs e) { }
         protected virtual void OnRenderDropDownButtonBackground(ToolStripItemRenderEventArgs e) { }
+        protected virtual void OnRenderItemBackground(ToolStripItemRenderEventArgs e) { }
         public void DrawArrow(ToolStripArrowRenderEventArgs e) => OnRenderArrow(e);
         public void DrawDropDownButtonBackground(ToolStripItemRenderEventArgs e) => OnRenderDropDownButtonBackground(e);
         public void DrawItemImage(ToolStripItemImageRenderEventArgs e) => OnRenderItemImage(e);
@@ -1503,13 +1768,26 @@ namespace System.Windows.Forms
     public class ToolStripProfessionalRenderer : ToolStripRenderer
     {
         public ToolStripProfessionalRenderer() { }
-        public ToolStripProfessionalRenderer(ProfessionalColorTable professionalColorTable) { }
+        public ToolStripProfessionalRenderer(ProfessionalColorTable professionalColorTable) { ColorTable = professionalColorTable; }
         public bool RoundedEdges { get; set; } = true;
+        public ProfessionalColorTable ColorTable { get; } = new();
+        protected virtual void OnRenderSplitButtonBackground(ToolStripItemRenderEventArgs e) { }
     }
     public class ToolStripSystemRenderer : ToolStripRenderer { }
-    public class ProfessionalColorTable { public bool UseSystemColors { get; set; } }
+    public class ProfessionalColorTable
+    {
+        public bool UseSystemColors { get; set; }
+        // Headless: nothing paints, so the theme colours are plausible defaults, not pixel-exact.
+        public virtual Color MenuBorder => Color.FromArgb(0x80, 0x80, 0x80);
+        public virtual Color ToolStripDropDownBackground => Color.FromArgb(0xFA, 0xFA, 0xFA);
+    }
     public class ToolStrip : ScrollableControl
     {
+        // Non-public in real WinForms; CodeLab's ThemeUtil reaches it through an [UnsafeAccessor] (Name="get_ToolTip"),
+        // which binds by name and signature, not via a metadata reference, so memberdiff cannot see it. The strip's
+        // own tooltip, themed the same way as any other (its Handle is 0 headless).
+        private ToolTip? ownToolTip;
+        internal ToolTip ToolTip => ownToolTip ??= new ToolTip();
         public ToolStripRenderer? Renderer { get; set; }
         public virtual bool IsDropDown => this is ToolStripDropDown;
         private ToolStripLayoutStyle layoutStyle;
@@ -1535,6 +1813,7 @@ namespace System.Windows.Forms
         public ToolStripGripStyle GripStyle { get; set; }
         public bool Stretch { get; set; }
         public ToolStripRenderMode RenderMode { get; set; }
+        public bool AllowClickThrough { get; set; }
     }
     public enum ToolStripGripStyle { Hidden, Visible }
     public enum ToolStripTextDirection { Inherit, Horizontal, Vertical90, Vertical270 }
@@ -1555,6 +1834,7 @@ namespace System.Windows.Forms
         public new bool Visible => false;
         public void Show() { }
         public void Show(Point screenLocation) { }
+        public void Show(Control control, int x, int y) { }
         public void Show(Control control, Point position) { }
         public void Show(Control control, Point position, ToolStripDropDownDirection direction) { }
         public void Close() { }
@@ -1574,12 +1854,12 @@ namespace System.Windows.Forms
     public class ToolStripDropDownMenu : ToolStripDropDown
     {
         public bool ShowCheckMargin { get; set; }
+        public bool ShowImageMargin { get; set; } = true;
     }
     public class ContextMenuStrip : ToolStripDropDownMenu
     {
         public ContextMenuStrip() { }
         public ContextMenuStrip(IContainer container) { container.Add(this); }
-        public bool ShowImageMargin { get; set; } = true;
         public void Show(Control control, Point position) { }
         public Control? SourceControl => null;
     }
@@ -1658,6 +1938,22 @@ namespace System.Windows.Forms
         public static void AddMessageFilter(IMessageFilter value) { }
         public static void RemoveMessageFilter(IMessageFilter value) { }
         public static string StartupPath => AppContext.BaseDirectory;
+        // Inside the host's exempt plug-in area (WhichSymbolRedux writes its settings here), so writes never prompt.
+        // PDN_PLUGIN_FILES overrides it; default <LocalAppData>/paint.rs/"Plug-in Files". Must match GateIo.PluginArea.
+        public static string UserAppDataPath
+        {
+            get
+            {
+                string p = Environment.GetEnvironmentVariable("PDN_PLUGIN_FILES") is { Length: > 0 } e ? e
+                    : IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "paint.rs", "Plug-in Files");
+                try { IO.Directory.CreateDirectory(p); } catch { }
+                return p;
+            }
+        }
+        public static VisualStyles.VisualStyleState VisualStyleState { get; set; } = VisualStyles.VisualStyleState.ClientAndNonClientAreasEnabled;
+        // ponytail: the host owns the message loop and COM apartment; these satisfy a plug-in that calls them.
+        public static System.Threading.ApartmentState OleRequired() => System.Threading.ApartmentState.STA;
+        public static void Run(Form mainForm) { }
     }
 
     public interface IMessageFilter { bool PreFilterMessage(ref Message m); }
@@ -1943,6 +2239,8 @@ namespace System.Windows.Forms.VisualStyles
 namespace System.Windows.Forms.VisualStyles
 {
     public enum PushButtonState { Normal = 1, Hot = 2, Pressed = 3, Disabled = 4, Default = 5 }
+
+    [Flags] public enum VisualStyleState { NoneEnabled = 0, ClientAreaEnabled = 1, NonClientAreaEnabled = 2, ClientAndNonClientAreasEnabled = 3 }
     public enum CheckBoxState { UncheckedNormal = 1, UncheckedHot, UncheckedPressed, UncheckedDisabled, CheckedNormal, CheckedHot, CheckedPressed, CheckedDisabled, MixedNormal, MixedHot, MixedPressed, MixedDisabled }
     public enum RadioButtonState { UncheckedNormal = 1, UncheckedHot, UncheckedPressed, UncheckedDisabled, CheckedNormal, CheckedHot, CheckedPressed, CheckedDisabled }
 }
@@ -2109,6 +2407,7 @@ namespace System.Windows.Forms
         public bool ReadOnly { get => TextBox.ReadOnly; set => TextBox.ReadOnly = value; }
         public int MaxLength { get => TextBox.MaxLength; set => TextBox.MaxLength = value; }
         public HorizontalAlignment TextBoxTextAlign { get => TextBox.TextAlign; set => TextBox.TextAlign = value; }
+        public BorderStyle BorderStyle { get => TextBox.BorderStyle; set => TextBox.BorderStyle = value; }
         public event EventHandler? TextChanged;
     }
     public class ProgressBar : Control

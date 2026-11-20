@@ -109,11 +109,15 @@ namespace System.Windows.Forms
         public override int GetHashCode() => name.GetHashCode();
         /// Where the pointer is on screen. Headless there is none: it stays where it was last put.
         public static Point Position { get; set; }
+        public static Cursor Current { get; set; } = Cursors.Default;
+        public Point HotSpot => Point.Empty;
+        public Size Size => new(32, 32);
     }
 
     public static class Cursors
     {
         public static Cursor Default { get; } = new("Default");
+        public static Cursor AppStarting { get; } = new("AppStarting");
         public static Cursor Arrow { get; } = new("Arrow");
         public static Cursor IBeam { get; } = new("IBeam");
         public static Cursor WaitCursor { get; } = new("WaitCursor");
@@ -130,9 +134,13 @@ namespace System.Windows.Forms
     }
 
     /// Windows' standard metrics at 96 DPI (Windows 10/11 defaults).
+    public enum BootMode { Normal, FailSafe, FailSafeWithNetwork }
+
     public static class SystemInformation
     {
         public static bool HighContrast => false;
+        public static bool IsHotTrackingEnabled => true;
+        public static BootMode BootMode => BootMode.Normal;
         public static Size BorderSize => new(1, 1);
         public static Size Border3DSize => new(2, 2);
         public static Size FixedFrameBorderSize => new(3, 3);
@@ -143,6 +151,7 @@ namespace System.Windows.Forms
         public static int MenuHeight => 20;
         public static Font MenuFont => SystemFonts.MenuFont ?? Control.DefaultFont;
         public static int VerticalScrollBarWidth => 17;
+        public static int MouseHoverTime => 400;
         public static int HorizontalScrollBarHeight => 17;
         public static int VerticalScrollBarArrowHeight => 17;
         public static int HorizontalScrollBarArrowWidth => 17;
@@ -207,6 +216,10 @@ namespace System.Windows.Forms
 
         public IntPtr Handle => IntPtr.Zero;
         public Control? Parent { get; internal set; }
+        /// The top of this control's parent chain (the Form that hosts it, as WinForms returns).
+        public Control? TopLevelControl { get { Control c = this; while (c.Parent is { } p) c = p; return c; } }
+        // ponytail: nothing is painted in the headless host, so the target bitmap is left as-is.
+        public void DrawToBitmap(System.Drawing.Bitmap bitmap, System.Drawing.Rectangle targetBounds) { }
         private bool visible = true;
         public bool Visible { get => visible; set { if (visible != value) { visible = value; OnVisibleChanged(EventArgs.Empty); Parent?.PerformLayout(this, "Visible"); } } }
         public bool Focused => false;
@@ -278,6 +291,13 @@ namespace System.Windows.Forms
         public ControlCollection Controls => controls ??= CreateControlsInstance();
         protected virtual ControlCollection CreateControlsInstance() => new ControlCollection(this);
 
+        public void ResetText() => Text = string.Empty;
+        public bool UseWaitCursor { get; set; }
+        // Headless there is no window handle and no cross-thread marshalling; these keep the API shape.
+        public static bool CheckForIllegalCrossThreadCalls { get; set; }
+        protected virtual void DestroyHandle() { }
+        protected virtual void OnSystemVisualSettingsChanged(SystemVisualSettingsChangedEventArgs e) { }
+
         protected void SetStyle(ControlStyles flag, bool value) => styles = value ? styles | flag : styles & ~flag;
         protected bool GetStyle(ControlStyles flag) => (styles & flag) == flag;
 
@@ -285,19 +305,22 @@ namespace System.Windows.Forms
         public object? Invoke(Delegate method) => method.DynamicInvoke();
         public object? Invoke(Delegate method, params object?[]? args) => method.DynamicInvoke(args);
 
-        // No window: nothing to repaint or focus.
-        public void Invalidate() { }
-        public void Invalidate(bool invalidateChildren) { }
-        public void Invalidate(Rectangle rc) { }
-        public void Invalidate(Rectangle rc, bool invalidateChildren) { }
-        public void Invalidate(Region region) { }
-        public void Invalidate(Region region, bool invalidateChildren) { }
+        // No window: an invalidated control only notes that its paint is due. The host's live canvas runs that paint
+        // before the next press, as Windows paints a window between the user's inputs (a view may pick what is under
+        // the pointer while it paints, and the press then takes that).
+        public bool HostPaintDue { get; set; }
+        public void Invalidate() => HostPaintDue = true;
+        public void Invalidate(bool invalidateChildren) => HostPaintDue = true;
+        public void Invalidate(Rectangle rc) => HostPaintDue = true;
+        public void Invalidate(Rectangle rc, bool invalidateChildren) => HostPaintDue = true;
+        public void Invalidate(Region region) => HostPaintDue = true;
+        public void Invalidate(Region region, bool invalidateChildren) => HostPaintDue = true;
         public void Update() { }
         public virtual void Refresh() { }
         public bool Focus() => false;
         public Form? FindForm() { for (Control? c = this; c is not null; c = c.Parent) if (c is Form f) return f; return null; }
-        public Rectangle RectangleToScreen(Rectangle r) => r;
-        public Rectangle RectangleToClient(Rectangle r) => r;
+        public Rectangle RectangleToScreen(Rectangle r) => new(PointToScreen(r.Location), r.Size);
+        public Rectangle RectangleToClient(Rectangle r) => new(PointToClient(r.Location), r.Size);
 
         protected virtual AccessibleObject CreateAccessibilityInstance() => new ControlAccessibleObject(this);
 
@@ -325,7 +348,31 @@ namespace System.Windows.Forms
         protected virtual void OnMouseUp(MouseEventArgs e) => MouseUp?.Invoke(this, e);
         protected virtual void OnMouseMove(MouseEventArgs e) => MouseMove?.Invoke(this, e);
         protected virtual void OnPaint(PaintEventArgs e) => Paint?.Invoke(this, e);
-        protected virtual void OnPaintBackground(PaintEventArgs pevent) { }
+        // As WinForms' base does: fill the client area with BackColor, then draw BackgroundImage per
+        // BackgroundImageLayout. The live canvas (DialogCanvas) calls this before OnPaint, so a control whose content
+        // is its BackgroundImage (CurtisBlack's ColorWheel builds the wheel as one) shows it.
+        protected virtual void OnPaintBackground(PaintEventArgs pevent)
+        {
+            Graphics g = pevent.Graphics;
+            Rectangle area = ClientRectangle;
+            if (backColor.A > 0) { using var brush = new SolidBrush(backColor); g.FillRectangle(brush, area); }
+            if (backgroundImage is not { } img) return;
+            switch (BackgroundImageLayout)
+            {
+                case ImageLayout.None: g.DrawImageUnscaled(img, 0, 0); break;
+                case ImageLayout.Center: g.DrawImageUnscaled(img, (area.Width - img.Width) / 2, (area.Height - img.Height) / 2); break;
+                case ImageLayout.Stretch: g.DrawImage(img, area); break;
+                case ImageLayout.Zoom:
+                    double s = Math.Min((double)area.Width / img.Width, (double)area.Height / img.Height);
+                    int zw = (int)(img.Width * s), zh = (int)(img.Height * s);
+                    g.DrawImage(img, (area.Width - zw) / 2, (area.Height - zh) / 2, zw, zh);
+                    break;
+                default:   // Tile
+                    for (int y = 0; y < area.Height; y += img.Height)
+                        for (int x = 0; x < area.Width; x += img.Width) g.DrawImageUnscaled(img, x, y);
+                    break;
+            }
+        }
         protected virtual void OnInvalidated(InvalidateEventArgs e) => Invalidated?.Invoke(this, e);
 
         public class ControlAccessibleObject : AccessibleObject
@@ -365,10 +412,13 @@ namespace System.Windows.Forms
     public partial class ContainerControl : ScrollableControl
     {
         public Control? ActiveControl { get; set; }
+        // The Form this control sits in, if any (CurtisBlack's DocumentView reads it): the nearest Form ancestor.
+        public Form? ParentForm { get { for (Control? c = Parent; c is not null; c = c.Parent) if (c is Form f) return f; return null; } }
     }
 
     public partial class Form : ContainerControl
     {
+        protected override Size DefaultSize => new(300, 300);
         public static Form ActiveForm { get; } = new();
         /// Nobody can answer a dialog headless: it closes at once, cancelled, unless the host answers it (HostDialog:
         /// a FileType's window while paint.rs opens or saves, which paint.rs shows in its own).
@@ -384,6 +434,9 @@ namespace System.Windows.Forms
         public DialogResult ShowDialog() => RunDialog(IntPtr.Zero) ? DialogResult.OK : DialogResult.Cancel;
         public DialogResult ShowDialog(IWin32Window? owner) => ShowDialog();
         protected virtual bool RunDialog(IntPtr hwndOwner) => false;
+        public virtual void Reset() { }
+        public event EventHandler? HelpRequest;
+        protected virtual void OnHelpRequest(EventArgs e) => HelpRequest?.Invoke(this, e);
     }
     public sealed class PageSetupDialog : CommonDialog
     {
@@ -396,6 +449,9 @@ namespace System.Windows.Forms
         public PrintDocument? Document { get; set; }
         public PrinterSettings? PrinterSettings { get; set; }
         public bool UseEXDialog { get; set; }
+        // Answer OK only when the host can actually print (its print-pages output is wired); else Cancel, so a
+        // plug-in never reports it printed when nothing was shown.
+        protected override bool RunDialog(IntPtr hwndOwner) => global::System.AppContext.GetData("System.Drawing.Printing.PrintPages") is not null;
     }
     public class PrintPreviewDialog : Form { public PrintDocument? Document { get; set; } }
 
@@ -407,20 +463,36 @@ namespace System.Windows.Forms
         public int SelectionStart { get; set; }
         public int SelectionLength { get; set; }
         public void SelectAll() { SelectionStart = 0; SelectionLength = Text.Length; }
+        public void Paste() { }   // headless: the editor routes through HostScintilla, not this control
     }
     public class TextBox : TextBoxBase
     {
         public AutoCompleteStringCollection AutoCompleteCustomSource { get; set; } = new();
         public AutoCompleteMode AutoCompleteMode { get; set; }
         public AutoCompleteSource AutoCompleteSource { get; set; } = AutoCompleteSource.None;
+        public CharacterCasing CharacterCasing { get; set; } = CharacterCasing.Normal;
     }
+
+    public enum CharacterCasing { Normal, Upper, Lower }
 
     /// A timer that never ticks: there is no message loop to run it.
     public class Timer : Component
     {
+        private bool enabled;
         public Timer() { }
         public Timer(IContainer container) { container.Add(this); }
-        public bool Enabled { get; set; }
+        public bool Enabled
+        {
+            get => enabled;
+            set
+            {
+                if (value && !enabled) HostStarted = Environment.TickCount64;
+                enabled = value;
+            }
+        }
+        /// When it was last started (Environment.TickCount64): a host with no message loop runs it once its Interval
+        /// has passed since then.
+        public long HostStarted { get; private set; }
         public int Interval { get; set; } = 100;
         public event EventHandler? Tick;
         public void Start() => Enabled = true;
@@ -433,6 +505,10 @@ namespace System.Windows.Forms
         private readonly Dictionary<Control, string> tips = new();
         public ToolTip() { }
         public ToolTip(IContainer container) { container.Add(this); }
+        // Non-public in real WinForms; CodeLab's ThemeUtil reaches it through an [UnsafeAccessor] (Name="get_Handle"),
+        // which binds by name and signature, not via a metadata reference, so memberdiff cannot see it. Headless: there
+        // is no native tooltip window, so the handle is 0 (the theming SendMessage against it is a no-op).
+        internal IntPtr Handle => IntPtr.Zero;
         public bool Active { get; set; } = true;
         public int AutoPopDelay { get; set; } = 5000;
         public int InitialDelay { get; set; } = 500;
@@ -444,6 +520,7 @@ namespace System.Windows.Forms
         public bool OwnerDraw { get; set; }
         public bool StripAmpersands { get; set; }
         public event PopupEventHandler? Popup;
+        public event DrawToolTipEventHandler? Draw;   // headless: nothing is drawn
         public int AutomaticDelay { get; set; } = 500;
         public string ToolTipTitle { get; set; } = "";
         public ToolTipIcon ToolTipIcon { get; set; }
@@ -549,7 +626,8 @@ namespace System.Windows.Forms.Layout
         internal ArrayList InnerList { get; } = new();
         public virtual int Count => InnerList.Count;
         public virtual IEnumerator GetEnumerator() => InnerList.GetEnumerator();
-        public void CopyTo(Array array, int index) => InnerList.CopyTo(array, index);
+        // What the collection enumerates, so a subclass keeping its own list copies that.
+        public void CopyTo(Array array, int index) { foreach (object? o in this) array.SetValue(o, index++); }
     }
 }
 
@@ -571,8 +649,8 @@ namespace System.Drawing.Design
 // its class. Nothing shows them. (TextBoxBase and BorderStyle are above.)
 namespace System.Windows.Forms
 {
-    public partial class ButtonBase : Control { }
-    public partial class Button : ButtonBase { }
+    public partial class ButtonBase : Control { protected override Size DefaultSize => new(75, 23); }
+    public partial class Button : ButtonBase { public AutoSizeMode AutoSizeMode { get; set; } }
     /// ponytail: rich text is kept as given and shown as its plain text (control words and groups dropped).
     public class RichTextBox : TextBoxBase
     {
@@ -589,10 +667,24 @@ namespace System.Windows.Forms
             }
         }
         public RichTextBoxScrollBars ScrollBars { get; set; } = RichTextBoxScrollBars.Both;
+        public bool DetectUrls { get; set; } = true;
+        public string SelectedRtf { get => SelectedText; set => SelectedText = value ?? ""; }   // headless: plain, no RTF markup
         public System.Drawing.Font? SelectionFont { get => Font; set { } }
+        public System.Drawing.Color SelectionColor { get; set; }   // headless: stored, no syntax colouring drawn
+        public System.Drawing.Color SelectionBackColor { get; set; }   // headless: stored, no syntax colouring drawn
+        public bool SelectionBullet { get; set; }
+        public int SelectionCharOffset { get; set; }
+        public int SelectionIndent { get; set; }
+        public int SelectionRightIndent { get; set; }
+        public HorizontalAlignment SelectionAlignment { get; set; }
+        // ponytail: the headless RichTextBox holds plain text with no caret, so search reports "not found".
+        public int Find(string str) => -1;
+        public int Find(string str, int start, RichTextBoxFinds options) => -1;
         public event LinkClickedEventHandler? LinkClicked;
         protected virtual void OnLinkClicked(LinkClickedEventArgs e) => LinkClicked?.Invoke(this, e);
     }
+
+    [Flags] public enum RichTextBoxFinds { None = 0, WholeWord = 2, MatchCase = 4, NoHighlight = 8, Reverse = 16 }
     /// The pre-.NET Core context menu, which .NET's WinForms no longer has: OptionBasedLibrary keeps one in a field
     /// of its split button (never shown).
     public class ContextMenu : Menu

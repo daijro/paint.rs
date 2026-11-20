@@ -25,7 +25,7 @@ namespace PaintDotNet.Effects
         public EffectCategory Category { get; }
     }
 
-    public record EffectOptionsBase
+    public record EffectOptionsBase : IEffectOptions
     {
         public bool IsConfigurable { get; set; }
     }
@@ -74,6 +74,11 @@ namespace PaintDotNet.Effects
         IColorContext ColorContext { get; }
         /// The document's pixel format (Paint.NET's documents are BGRA, 8 bits a channel).
         PixelFormat PixelFormat { get; }
+        /// The document's EXIF/IPTC/XMP metadata and resolution, which the survey corpus reads. The host surfaces no
+        /// live document metadata, so these are default-implemented inert (no metadata, default resolution); a real
+        /// document-info implementation overrides them.
+        IEffectDocumentMetadata Metadata => null!;
+        PaintDotNet.Resolution Resolution => default;
     }
 
     public interface IEffectEnvironment : IObjectRef, IDisposable, IIsDisposed
@@ -143,6 +148,20 @@ namespace PaintDotNet.Effects
 
         private protected abstract IEffectEnvironment? EnvironmentCore { get; }
         IEffectEnvironment IEffect.Environment => EnvironmentCore ?? throw new InvalidOperationException("no environment yet");
+
+        // What a plug-in hosting another effect reads (CodeLab runs its script so): the options, a descriptor that makes
+        // another instance, and the renderer that instance draws through, which the host makes.
+        IEffectOptions IEffect.Options => Options;
+        IEffectInfo2 IEffect.EffectInfo => new HostEffectInfo(this);
+        IEffectRenderer IEffect.CreateRenderer(Type interfaceType)
+            => ((IEffect)this).IsRendererAvailable(interfaceType)
+                ? HostRenderer!(this)
+                : throw new NotSupportedException($"{Name}: the host makes no {interfaceType.Name}");
+        bool IEffect.IsRendererAvailable(Type interfaceType)
+            => HostRenderer is not null && interfaceType.IsAssignableFrom(typeof(IBitmapEffectRenderer));
+
+        /// The host's renderer for an effect (CreateRenderer), set by the bridge.
+        internal static Func<EffectBase, IBitmapEffectRenderer>? HostRenderer;
     }
 }
 
@@ -154,26 +173,37 @@ namespace PaintDotNet.Effects.Gpu
         public static IGpuEffectInputImage CreateRef(this IGpuEffectInputImage image) => image;
     }
 
-    public record GpuEffectOptions : EffectOptionsBase
+    // Each options type derives from its factory, an abstract record that adds the static Create(), which derives from
+    // the options type before it, as in Paint.NET: so source writes GpuImageEffectOptions.Create() (a run-time
+    // compile, CodeLab's template) and compiled plug-ins call GpuImageEffectOptionsFactory.Create().
+    public abstract record GpuEffectOptionsFactory : EffectOptionsBase
+    {
+        private protected GpuEffectOptionsFactory() { }
+        public static GpuEffectOptions Create() => new() { DefaultColorContext = GpuEffectColorContext.WorkingSpaceLinear };
+    }
+
+    public record GpuEffectOptions : GpuEffectOptionsFactory
     {
         // Paint.NET's options versions: the (now obsolete) constructors are version 1 and render in sRGB,
         // Create() is version 2 and renders in linear light. An effect can still choose in OnInitializeRenderInfo.
         public GpuEffectColorContext DefaultColorContext { get; set; } = GpuEffectColorContext.WorkingSpace;
     }
 
-    public record GpuImageEffectOptions : GpuEffectOptions { }
-
-    public record GpuDrawingEffectOptions : GpuImageEffectOptions { }
-
-    public static class GpuImageEffectOptionsFactory
+    public abstract record GpuImageEffectOptionsFactory : GpuEffectOptions
     {
-        public static GpuImageEffectOptions Create() => new() { DefaultColorContext = GpuEffectColorContext.WorkingSpaceLinear };
+        private protected GpuImageEffectOptionsFactory() { }
+        public static new GpuImageEffectOptions Create() => new() { DefaultColorContext = GpuEffectColorContext.WorkingSpaceLinear };
     }
 
-    public static class GpuDrawingEffectOptionsFactory
+    public record GpuImageEffectOptions : GpuImageEffectOptionsFactory { }
+
+    public abstract record GpuDrawingEffectOptionsFactory : GpuImageEffectOptions
     {
-        public static GpuDrawingEffectOptions Create() => new() { DefaultColorContext = GpuEffectColorContext.WorkingSpaceLinear };
+        private protected GpuDrawingEffectOptionsFactory() { }
+        public static new GpuDrawingEffectOptions Create() => new() { DefaultColorContext = GpuEffectColorContext.WorkingSpaceLinear };
     }
+
+    public record GpuDrawingEffectOptions : GpuDrawingEffectOptionsFactory { }
 
     /// The colour space an effect's inputs arrive in and its output is read back from.
     public abstract class GpuEffectColorContext
@@ -335,6 +365,9 @@ namespace PaintDotNet.Effects.Gpu
         protected GpuImageEffect(string name, Image? image, string? submenuName, GpuImageEffectOptions options)
             : base(name, image, submenuName, options) { }
 
+        protected GpuImageEffect(string name, string? submenuName, GpuImageEffectOptions options)
+            : this(name, null, submenuName, options) { }
+
         public new GpuImageEffectOptions Options => (GpuImageEffectOptions)base.Options;
 
         protected sealed override void OnInitializeRenderInfo(IGpuEffectRenderInfo renderInfo)
@@ -380,6 +413,9 @@ namespace PaintDotNet.Effects.Gpu
         protected GpuImageEffect(string name, Image? image, string? submenuName, GpuImageEffectOptions options)
             : base(name, image, submenuName, options) { }
 
+        protected GpuImageEffect(string name, string? submenuName, GpuImageEffectOptions options)
+            : this(name, null, submenuName, options) { }
+
         protected TToken Token { get; private set; } = null!;
 
         protected sealed override void OnSetToken(EffectConfigToken? newToken)
@@ -418,6 +454,9 @@ namespace PaintDotNet.Effects.Gpu
         protected GpuDrawingEffect(string name, Image? image, string? submenuName, GpuDrawingEffectOptions options)
             : base(name, image, submenuName, options) { }
 
+        protected GpuDrawingEffect(string name, string? submenuName, GpuDrawingEffectOptions options)
+            : this(name, null, submenuName, options) { }
+
         public new GpuDrawingEffectOptions Options => (GpuDrawingEffectOptions)base.Options;
 
         protected sealed override void OnInitializeRenderInfo(IGpuImageEffectRenderInfo renderInfo)
@@ -452,6 +491,9 @@ namespace PaintDotNet.Effects.Gpu
     {
         protected GpuDrawingEffect(string name, Image? image, string? submenuName, GpuDrawingEffectOptions options)
             : base(name, image, submenuName, options) { }
+
+        protected GpuDrawingEffect(string name, string? submenuName, GpuDrawingEffectOptions options)
+            : this(name, null, submenuName, options) { }
 
         protected TToken Token { get; private set; } = null!;
 

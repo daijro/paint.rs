@@ -1,0 +1,25 @@
+# Browser-only combining static library. One archive carries d2d-ffi (the d2d1 + dwrite entry points)
+# and wic-ffi (the windowscodecs entry points) with a single copy of std and the shared core, so the
+# Mono-wasm link has no duplicate std (the reason dwrite.a/windowscodecs.a beside it are name-only
+# stubs). build-native.sh builds this for wasm32-unknown-emscripten and points ./opend2d at $OPEND2D_DIR
+# so the path dependencies resolve. Not part of paint.rs's or opend2d's workspace.
+[package]
+name = "pdn-wasm-native"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "pdn_wasm_native"
+crate-type = ["staticlib"]
+
+# Aliased so the extern-crate names are unambiguous: d2d-ffi's lib is "d2d1" (which this archive also
+# becomes) and wic-ffi's is "windowscodecs"; the aliases avoid the name clash and name them in lib.rs.
+[dependencies]
+d2dffi = { package = "d2d-ffi", path = "opend2d/crates/d2d-ffi" }
+# default-features = false so that, once the pinned OpenD2D's wic-ffi carries the `jxr` feature
+# (default on, gating the JPEG-XR encode and decode arms), this archive leaves it out and the
+# JPEG-XR codec stays out of the web bundle. A no-op until that feature exists in the pin.
+wicffi = { package = "wic-ffi", path = "opend2d/crates/wic-ffi", default-features = false }

@@ -16,8 +16,9 @@ site="${1:?usage: stage.sh <site-dir>}"
 dest="$site/pdn"
 
 # The stand-ins PaintNetWeb.csproj builds through MSBuild tasks (Microsoft.Win32.Registry, WindowsBase,
-# PresentationCore) are not restored by its own restore: restore them first, or a fresh checkout cannot publish.
-for p in Win32Registry WindowsBase PresentationCore; do
+# PresentationCore, PresentationFramework) are not restored by its own restore: restore them first, or a fresh
+# checkout cannot publish.
+for p in Win32Registry WindowsBase PresentationCore PresentationFramework; do
     "$here/../paintnet/dn.sh" restore "$here/../paintnet/assemblies/$p/$p.csproj" \
         --disable-build-servers -nodeReuse:false >/dev/null
 done
@@ -35,7 +36,7 @@ cp -r "$bundle/." "$dest/"
 find "$dest" -name '*.wasm' -exec sh -c 'gzip -9 -c "$1" > "$1.gz"' _ {} \;
 
 # Licence notices for what pdn/ ships, into pdn/notices/: the .NET runtime and the NuGet packages (the publish's
-# deps file), emscripten's runtime and C library, Mono.Cecil, and with $OPEND2D_DIR the Rust crates in OpenD2D's
+# deps file), emscripten's runtime and C library, Mono.Cecil, Roslyn, and with $OPEND2D_DIR the Rust crates in OpenD2D's
 # drop-ins (--strict then, as for a release).
 root="${DOTNET_ROOT:-$HOME/.dotnet}"
 python3 "$here/../bridge/collect-notices.py" "$dest" \

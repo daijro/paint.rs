@@ -59,6 +59,12 @@ else
     echo "warning: opend2d not found at \$OPEND2D_DIR ($opend2d); GPU plugins will not render" >&2
 fi
 
+# --- The registry plug-ins see, on every platform (plugin-shims/, which the plugin load context checks first) ---
+# Microsoft.Win32.Registry's stand-in: each plug-in's keys kept in its own settings area, so no plug-in reaches the
+# system's registry (on Windows the framework's would be the real one; elsewhere it throws PlatformNotSupported).
+"$here/dn.sh" build "$here/../paintnet/assemblies/Win32Registry/Win32Registry.csproj" -c Release -m:1 \
+    --disable-build-servers -nodeReuse:false -o "$out/plugin-shims" >/dev/null || exit 1
+
 # --- GDI+ off Windows (plugins that load an icon or draw) ---
 # System.Drawing.Common 10.0 only runs on Windows' gdiplus.dll; elsewhere swap in its 6.0 unix build
 # and the libgdiplus it P/Invokes, as pdnhost's shim does (paintnet/tests/stage-gdiplus.sh, whose
@@ -70,16 +76,21 @@ case "$rid" in win-*) ;; *)
             [ -z "$rid" ] || { echo "error: GDI+ inputs missing for a release; run scripts/ci/build-gdiplus.sh" >&2; exit 1; }
             echo "warning: GDI+ inputs missing; plugins that use System.Drawing will not load" >&2
         fi
-        # Stand-ins plugins bind instead of framework assemblies that do not work here (Microsoft.Win32.Registry):
-        # plugin-shims/, which the plugin load context checks first.
-        "$here/dn.sh" build "$here/../paintnet/assemblies/Win32Registry/Win32Registry.csproj" -c Release -m:1 \
-            --disable-build-servers -nodeReuse:false -o "$out/plugin-shims" >/dev/null || exit 1
         # SystemEvents that does not throw off Windows, in place of the package's (Win32SystemEvents)
         "$here/dn.sh" build "$here/../paintnet/assemblies/Win32SystemEvents/Win32SystemEvents.csproj" -c Release -m:1 \
             --disable-build-servers -nodeReuse:false -o "$out" >/dev/null || exit 1
         # WPF's WindowsBase and PresentationCore types plugins use (Point, EllipseGeometry), which .NET has not.
         "$here/dn.sh" build "$here/../paintnet/assemblies/PresentationCore/PresentationCore.csproj" -c Release -m:1 \
             --disable-build-servers -nodeReuse:false -o "$out/plugin-shims" >/dev/null || exit 1
+        # PresentationFramework's XamlReader, which CodeLab 6.x's ShapeBuilder uses to validate pasted geometry.
+        "$here/dn.sh" build "$here/../paintnet/assemblies/PresentationFramework/PresentationFramework.csproj" -c Release -m:1 \
+            --disable-build-servers -nodeReuse:false -o "$out/plugin-shims" >/dev/null || exit 1
+        # PresentationCore's WPF-Media render layer compiles against WindowsCore (for the host Direct2D/DirectWrite),
+        # which pulls the host's PaintDotNet.* and System.Windows.Forms into plugin-shims transitively. The plugin
+        # load context resolves those to the host's own copies (PaintDotNet.* to the host context, System.Windows.Forms
+        # from the app base beside PdnBridge), so a copy here only splits assembly identity: a second System.Windows.Forms
+        # makes a WinForms/GDI+ paint fault. Keep only the WPF/registry stand-ins .NET and the host lack.
+        rm -f "$out/plugin-shims"/PaintDotNet.* "$out/plugin-shims"/System.Windows.Forms*
         # user32's GetSystemMetrics and window calls, which some plugins' dialogs P/Invoke (native/user32.c)
         case "$(uname -s)" in Darwin) cc -dynamiclib -O2 -o "$out/libuser32.dylib" "$here/native/user32.c" ;;
                                *) cc -shared -fPIC -O2 -o "$out/libuser32.so" "$here/native/user32.c" ;; esac ;;

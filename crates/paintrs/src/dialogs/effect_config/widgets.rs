@@ -821,6 +821,19 @@ pub(in crate::dialogs) fn range_line(
             changed = Some(false);
         }
     }
+    // The wheel over the slider steps it as its arrow keys do.
+    let wheel = inputs::value_wheel(ui, id, range, None);
+    if wheel != 0.0 {
+        let before = num(values, key).clamp(spec.min, spec.max);
+        let mut value = before;
+        for _ in 0..wheel.abs() as usize {
+            value = spec.key_step(value, wheel > 0.0, false);
+        }
+        if value != before {
+            set(values, key, value);
+            changed = merge(changed, Some(false));
+        }
+    }
     // Refresh keyboard edits before pointer handling, so a numeric blur cannot undo a press.
     let numeric = num(values, key).clamp(spec.min, spec.max);
     let tw = if matches!(track, Track::Standard) {

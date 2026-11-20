@@ -46,6 +46,25 @@ namespace PaintDotNet
         /// BT.601 intensity in [0, 1].
         public readonly double GetIntensity() => (0.114 * B + 0.587 * G + 0.299 * R) / 255.0;
 
+        /// Eight uppercase hex digits in R G B A order. ponytail: order not verified against genuine; this is a
+        /// display round-trip, widen if a plug-in parses it back.
+        public readonly string ToHexString() => $"{R:X2}{G:X2}{B:X2}{A:X2}";
+
+        /// Composite src under dst over `length` pixels, mirroring PixelKernels.Underwrite's coverage math
+        /// (mask weighted by dst transparency), straight into dst.
+        public static unsafe void Underwrite(ColorBgra* dst, ColorBgra* src, byte* mask, int length)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                int cov = mask[i] * (255 - dst[i].A) / 255;
+                if (cov == 0) continue;
+                dst[i].B = (byte)((dst[i].B * (255 - cov) + src[i].B * cov) / 255);
+                dst[i].G = (byte)((dst[i].G * (255 - cov) + src[i].G * cov) / 255);
+                dst[i].R = (byte)((dst[i].R * (255 - cov) + src[i].R * cov) / 255);
+                dst[i].A = (byte)Math.Min(255, dst[i].A + cov);
+            }
+        }
+
         public static explicit operator ColorBgra(uint bgra) => FromUInt32(bgra);
         public static explicit operator uint(ColorBgra color) => color.Bgra;
         public static uint BgraToUInt32(int b, int g, int r, int a) => (uint)b + ((uint)g << 8) + ((uint)r << 16) + ((uint)a << 24);
@@ -82,11 +101,13 @@ namespace PaintDotNet
         public static unsafe ColorBgra Blend(ColorBgra* colors, int count)
         {
             if (count <= 0) return Transparent;
+            // One packed load per colour, its channels by shifts (a plug-in averaging a window calls this per row).
+            uint* packed = (uint*)colors;
             ulong a = 0, b = 0, g = 0, r = 0;
             for (int i = 0; i < count; i++)
             {
-                ColorBgra c = colors[i];
-                a += c.A; b += (ulong)c.B * c.A; g += (ulong)c.G * c.A; r += (ulong)c.R * c.A;
+                uint c = packed[i], ca = c >> 24;
+                a += ca; b += (c & 0xFF) * ca; g += ((c >> 8) & 0xFF) * ca; r += ((c >> 16) & 0xFF) * ca;
             }
             if (a == 0) return FromBgra(0, 0, 0, 0);
             return FromBgra((byte)(b / a), (byte)(g / a), (byte)(r / a), (byte)(a / (ulong)count));
@@ -341,6 +362,7 @@ namespace PaintDotNet
             using var bitmap = new Bitmap(image);
             return CopyFromBitmap(bitmap);
         }
+        public static Surface CopyFromGdipImage(Image image, bool detectDishonestAlpha) => CopyFromGdipImage(image);
 
         /// Paint.NET's bilinear sample inside the surface (8-bit fractional weights, alpha-weighted);
         /// transparent outside it.
@@ -407,6 +429,7 @@ namespace PaintDotNet
         public bool IsEmpty() => scans.Count == 0;
         public PdnRegion(PdnGraphicsPath path) : this(path.Path) { }
         public static PdnRegion CreateEmpty() => new();
+        public static PdnRegion FromRectangles(Rectangle[] rects) => new PdnRegion(rects);
     }
 
     /// Paint.NET 3.x's GDI+ path wrapper, which classic selection code builds regions from.
@@ -485,6 +508,34 @@ namespace PaintDotNet
         public static int Clamp(int x, int min, int max) => x < min ? min : x > max ? max : x;
         public static double Lerp(double from, double to, double frac) => from + frac * (to - from);
         public static float Lerp(float from, float to, float frac) => from + frac * (to - from);
+        public static PointF Lerp(PointF from, PointF to, float frac) => new(from.X + frac * (to.X - from.X), from.Y + frac * (to.Y - from.Y));
+
+        /// A fully transparent colour sentinel. ponytail: genuine exact RGB not verified; transparent is the safe
+        /// default for a "transparent key".
+        public static readonly Color TransparentKey = Color.FromArgb(0, 0, 0, 0);
+
+        /// The image as an icon with `transparentColor` made transparent (classic plug-ins build toolbar icons so).
+        public static Icon ImageToIcon(Image image, Color transparentColor)
+        {
+            using var bmp = new Bitmap(image);
+            bmp.MakeTransparent(transparentColor);
+            return Icon.FromHandle(bmp.GetHicon());
+        }
+
+        /// Rotated-grid supersampling offsets (genuine): `sampleCount` (= quality*quality) sub-pixel offsets in
+        /// [-0.5, 0.5), which the classic WarpEffect-style plug-ins (MadJik's Polar, Tiles, TubeOblique) average.
+        public static unsafe void GetRgssOffsets(PointF* samplesArray, int sampleCount, int quality)
+        {
+            if (sampleCount < 1) return;
+            if (sampleCount == 1) { samplesArray[0] = new PointF(0f, 0f); return; }
+            for (int i = 0; i < sampleCount; i++)
+            {
+                double y = (i + 1.0) / (sampleCount + 1.0);
+                double x = y * quality;
+                x -= (int)x;
+                samplesArray[i] = new PointF((float)(x - 0.5), (float)(y - 0.5));
+            }
+        }
 
         /// The largest size of <paramref name="original"/>'s aspect whose longer edge is at most maxEdgeLength.
         public static Size ComputeThumbnailSize(Size original, int maxEdgeLength)
@@ -524,8 +575,19 @@ namespace PaintDotNet
         }
 
         private readonly object? owner;   // keeps the surface (and so its memory) alive
+        internal object? Owner => owner;
 
         internal MemoryBlock(object owner, IntPtr pointer, long length) { this.owner = owner; Pointer = pointer; Length = length; }
+
+        /// A handle the live canvas resolves to this block's pixels: CurtisBlack's GdiBufferedPaintControl passes the
+        /// root block's handle to PdnGraphics.DrawBitmap. A block backing a surface hands back a snapshot bitmap
+        /// handle (the consumer frees it); anything else has none.
+        public IntPtr BitmapHandle => owner is Surface s ? s.NewBitmapHandle() : IntPtr.Zero;
+
+        /// Host memory is plain heap and always writable, so the write-protection toggle is honoured but does nothing
+        /// (there is no page protection to set).
+        public bool MaySetAllowWrites => true;
+        public bool AllowWrites { set { } }
 
         public byte this[long index]
         {

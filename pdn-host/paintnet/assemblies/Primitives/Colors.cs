@@ -22,6 +22,10 @@ public struct SrgbColorA
     public float B { readonly get; set; }
     public float A { readonly get; set; }
     public static explicit operator SrgbColorA(ColorBgra32 c) => new(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f);
+    public static explicit operator SrgbColorA(ColorRgb24 c) => new(c.R / 255f, c.G / 255f, c.B / 255f, 1f);
+    public static explicit operator SrgbColorA(ColorRgb96Float c) => new(c.R, c.G, c.B, 1f);
+    public static explicit operator SrgbColorA(System.Drawing.Color c) => new(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f);
+    public static implicit operator SrgbColorA(SrgbColor c) => new(c.R, c.G, c.B, 1f);
     /// The same numbers as a working colour (no transfer curve applied).
     public static implicit operator ColorRgba128Float(SrgbColorA c) => new(c.R, c.G, c.B, c.A);
 }
@@ -61,6 +65,20 @@ public readonly struct ColorHsv96Float
     public float Hue { get; }
     public float Saturation { get; }
     public float Value { get; }
+
+    /// RGB (each 0–1) to this hue 0–360 / saturation,value 0–100 form -- the inverse of ToRgb.
+    public static ColorHsv96Float FromRgb(ColorRgb96Float rgb)
+    {
+        float r = rgb.R, g = rgb.G, b = rgb.B;
+        float max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min;
+        float h = d == 0f ? 0f
+            : max == r ? 60f * (((g - b) / d) % 6f)
+            : max == g ? 60f * ((b - r) / d + 2f)
+            : 60f * ((r - g) / d + 4f);
+        if (h < 0f) h += 360f;
+        float s = max == 0f ? 0f : d / max;
+        return new ColorHsv96Float(h, s * 100f, max * 100f);
+    }
 
     /// Paint.NET's sector form, op for op (genuine `ColorHsv96Float.ToRgb`): hue 360 is 0, S = 0 is grey, else
     /// f = h/60 − ⌊h/60⌋ and p, q, t = v(1 − s), v(1 − s·f), v(1 − s(1 − f)) — a rotated-difference form rounds

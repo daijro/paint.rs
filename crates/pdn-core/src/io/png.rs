@@ -21,7 +21,18 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend(crc.to_be_bytes());
 }
 
-pub(crate) fn write(r: &Raster, dpi: f64) -> Vec<u8> {
+/// Adam7's seven passes (ISO/IEC 15948 §8.2): first column and row, column and row steps.
+const ADAM7: [(u32, u32, u32, u32); 7] = [
+    (0, 0, 8, 8),
+    (4, 0, 8, 8),
+    (0, 4, 4, 8),
+    (2, 0, 4, 4),
+    (0, 2, 2, 4),
+    (1, 0, 2, 2),
+    (0, 1, 1, 2),
+];
+
+pub(crate) fn write(r: &Raster, dpi: f64, interlaced: bool) -> Vec<u8> {
     let (bits, colour_type) = match r.depth {
         Depth::B24 => (8, 2),
         Depth::B32 => (8, 6),
@@ -31,7 +42,7 @@ pub(crate) fn write(r: &Raster, dpi: f64) -> Vec<u8> {
     let ihdr = [
         &r.w.to_be_bytes()[..],
         &r.h.to_be_bytes(),
-        &[bits, colour_type, 0, 0, 0],
+        &[bits, colour_type, 0, 0, interlaced as u8],
     ];
     chunk(&mut out, b"IHDR", &ihdr.concat());
     chunk(&mut out, b"sRGB", &[0]);
@@ -46,8 +57,16 @@ pub(crate) fn write(r: &Raster, dpi: f64) -> Vec<u8> {
             chunk(&mut out, b"tRNS", &alpha);
         }
     }
-    let raw: Vec<u8> = (0..r.h)
-        .flat_map(|y| std::iter::once(0).chain(r.row(y)))
+    // Each pass is a sub-image of its own rows (filter 0); an empty pass has no rows.
+    let passes: &[_] = if interlaced { &ADAM7 } else { &[(0, 0, 1, 1)] };
+    let raw: Vec<u8> = passes
+        .iter()
+        .filter(|&&(x0, y0, ..)| x0 < r.w && y0 < r.h)
+        .flat_map(|&(x0, y0, dx, dy)| {
+            (y0..r.h)
+                .step_by(dy as usize)
+                .flat_map(move |y| std::iter::once(0).chain(r.columns(y, x0, dx)))
+        })
         .collect();
     for part in miniz_oxide::deflate::compress_to_vec_zlib(&raw, 3).chunks(MAX_CHUNK) {
         chunk(&mut out, b"IDAT", part);
@@ -119,6 +138,70 @@ mod tests {
             [0, 0b0001_0010, 0b0100_0000, 0, 0b1010_0000, 0b0100_0000]
         );
         assert_eq!(decode("png", &bytes).unwrap().image.data, img.data);
+    }
+
+    /// Interlaced: IHDR says Adam7 and the passes hold every pixel once; a 3×2 image fills
+    /// passes 1, 4, 6 and 7 only. It decodes back to the same pixels at every lossless depth.
+    #[test]
+    fn interlaced_passes() {
+        let (r, b, g) = ([255, 0, 0, 255], [0, 0, 255, 255], [0, 255, 0, 255]);
+        let img = ImageData {
+            width: 3,
+            height: 2,
+            data: [r, b, g, g, r, b].concat(),
+        };
+        let o = SaveOptions {
+            interlaced: true,
+            ..opts(BitDepth::B2)
+        };
+        let bytes = encode(&img, "png", &o).unwrap();
+        let c = chunks(&bytes);
+        assert_eq!(c[0].1[12], 1);
+        // Pass 1: (0,0); pass 4: (2,0); pass 6: (1,0); pass 7: row 1, all three. Indices r 0,
+        // b 1, g 2, two bits each from the high end, one filter byte per row.
+        let raw = miniz_oxide::inflate::decompress_to_vec_zlib(&c[5].1).unwrap();
+        assert_eq!(raw, [0, 0, 0, 0b1000_0000, 0, 0b0100_0000, 0, 0b1000_0100]);
+        for d in [
+            BitDepth::B1,
+            BitDepth::B4,
+            BitDepth::B8,
+            BitDepth::B24,
+            BitDepth::B32,
+        ] {
+            let o = SaveOptions {
+                interlaced: true,
+                ..opts(d)
+            };
+            let bytes = encode(&img, "png", &o).unwrap();
+            assert_eq!(chunks(&bytes)[0].1[12], 1, "{d:?}");
+            // Three colours do not fit 1 bit.
+            if d != BitDepth::B1 {
+                assert_eq!(decode("png", &bytes).unwrap().image.data, img.data, "{d:?}");
+            }
+        }
+    }
+
+    /// Median Cut is WIC's: three greys at 1 bit get WIC's two colours, 3A7B7B and BD7B7B.
+    #[test]
+    fn median_cut_palette_is_wics() {
+        let (k, g, w) = ([0, 0, 0, 255], [128, 128, 128, 255], [255; 4]);
+        let img = ImageData {
+            width: 5,
+            height: 1,
+            data: [k, k, k, g, w].concat(),
+        };
+        let o = SaveOptions {
+            quantizer: super::super::encode::Quantizer::MedianCut,
+            dither: 0,
+            ..opts(BitDepth::B1)
+        };
+        let c = chunks(&encode(&img, "png", &o).unwrap());
+        assert_eq!(
+            c[4],
+            ("PLTE".into(), vec![0x3A, 0x7B, 0x7B, 0xBD, 0x7B, 0x7B])
+        );
+        let octree = chunks(&encode(&img, "png", &opts(BitDepth::B1)).unwrap());
+        assert_ne!(octree[4].1, c[4].1);
     }
 
     /// 8A1: PLTE with the transparent entry last as black and a tRNS whose last entry is 0.

@@ -14,6 +14,14 @@ public interface IEffect : IDisposable
     IServiceProvider Services { get; }
     IEffectEnvironment Environment { get; }
     IEffectConfigForm CreateConfigForm();
+    // What a plug-in hosting another effect reads (CodeLab 6.x). EffectBase implements them; the classic effects
+    // have no descriptor or renderer of this kind.
+    IEffectInfo2 EffectInfo => throw new NotSupportedException($"{Name} has no effect descriptor");
+    IEffectOptions Options => throw new NotSupportedException($"{Name} has no effect options");
+    IEffectRenderer CreateRenderer(Type interfaceType) => throw new NotSupportedException($"{Name} makes no {interfaceType.Name}");
+    TRenderer CreateRenderer<TRenderer>() where TRenderer : class, IEffectRenderer => (TRenderer)CreateRenderer(typeof(TRenderer));
+    bool IsRendererAvailable(Type interfaceType) => false;
+    bool IsRendererAvailable<TRenderer>() where TRenderer : class, IEffectRenderer => IsRendererAvailable(typeof(TRenderer));
 }
 
 public interface IEffect<TToken> : IEffect where TToken : EffectConfigToken { }

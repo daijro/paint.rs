@@ -11,12 +11,16 @@ set -eu
 version=14.4
 sha256=769f60a6eea2938ad6b7943cfbcc17dfaf7d1f7ba59a32b869a00349302df853
 triple=x86_64-unknown-freebsd$version
+here=$(cd -- "$(dirname -- "$0")" && pwd)
 work=$(cd -- "$1" && pwd)
 sysroot=$work/freebsd
 bin=$work/freebsd-bin
 mkdir -p "$sysroot" "$bin"
-curl --retry 3 -sSfLo "$work/base.txz" "https://download.freebsd.org/releases/amd64/$version-RELEASE/base.txz"
-echo "$sha256  $work/base.txz" | sha256sum -c
+# FreeBSD's download host, its FTP host, then a mirror.
+sh "$here/fetch.sh" "$work/base.txz" "$sha256" \
+    "https://download.freebsd.org/releases/amd64/$version-RELEASE/base.txz" \
+    "https://ftp.freebsd.org/pub/FreeBSD/releases/amd64/$version-RELEASE/base.txz" \
+    "https://ftp.fau.de/freebsd/releases/amd64/$version-RELEASE/base.txz"
 # Headers, libraries and the C runtime objects, without the debug files.
 tar -xJf "$work/base.txz" -C "$sysroot" --exclude ./usr/lib/debug ./lib ./usr/lib ./usr/include
 # jpegxl-src picks its C++ library with cfg! in a build script, so by the build machine's system: a Linux

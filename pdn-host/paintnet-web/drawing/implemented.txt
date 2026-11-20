@@ -104,6 +104,8 @@ System.Drawing.SystemFonts
 System.Drawing.StringFormat
 System.Drawing.Drawing2D.HatchBrush
 System.Drawing.Drawing2D.PathGradientBrush
+System.Drawing.Drawing2D.CustomLineCap
+System.Drawing.Drawing2D.AdjustableArrowCap
 # GraphicsPath (src/Geometry.cs)
 System.Drawing.Drawing2D.GraphicsPath::.ctor(*)
 System.Drawing.Drawing2D.GraphicsPath::P:FillMode
@@ -278,3 +280,47 @@ System.Drawing.Imaging.ImageAttributes::ClearColorMatrix(System.Drawing.Imaging.
 System.Drawing.Imaging.ImageAttributes::SetWrapMode(System.Drawing.Drawing2D.WrapMode)
 System.Drawing.Imaging.ImageAttributes::SetWrapMode(System.Drawing.Drawing2D.WrapMode,System.Drawing.Color)
 System.Drawing.Imaging.ImageAttributes::SetWrapMode(System.Drawing.Drawing2D.WrapMode,System.Drawing.Color,System.Boolean)
+# Codecs and encoder parameters (src/Encoders.cs): all but EncoderParameter's two native-pointer constructors
+System.Drawing.Imaging.Encoder
+System.Drawing.Imaging.EncoderParameters
+System.Drawing.Imaging.ImageCodecInfo
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Byte)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Byte,System.Boolean)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int16)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int64)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int32,System.Int32)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int32,System.Int32,System.Int32,System.Int32)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int64,System.Int64)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.String)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Byte[])
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Byte[],System.Boolean)
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int16[])
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int64[])
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int32[],System.Int32[])
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int64[],System.Int64[])
+System.Drawing.Imaging.EncoderParameter::.ctor(System.Drawing.Imaging.Encoder,System.Int32[],System.Int32[],System.Int32[],System.Int32[])
+System.Drawing.Imaging.EncoderParameter::P:Encoder
+System.Drawing.Imaging.EncoderParameter::P:Type
+System.Drawing.Imaging.EncoderParameter::P:ValueType
+System.Drawing.Imaging.EncoderParameter::P:NumberOfValues
+System.Drawing.Imaging.EncoderParameter::Dispose()
+System.Drawing.Image::Save(System.String,System.Drawing.Imaging.ImageCodecInfo,System.Drawing.Imaging.EncoderParameters)
+System.Drawing.Image::Save(System.IO.Stream,System.Drawing.Imaging.ImageCodecInfo,System.Drawing.Imaging.EncoderParameters)
+# Bitmap.ApplyEffect with a colour matrix (src/Attributes.cs)
+System.Drawing.Imaging.Effects.ColorMatrixEffect::.ctor(System.Drawing.Imaging.ColorMatrix)
+System.Drawing.Imaging.Effects.ColorMatrixEffect::P:Matrix
+System.Drawing.Imaging.Effects.Effect::Dispose()
+System.Drawing.Imaging.Effects.Effect::Dispose(System.Boolean)
+System.Drawing.Bitmap::ApplyEffect(System.Drawing.Imaging.Effects.Effect,System.Drawing.Rectangle)
+# Printing (src/Printing.cs)
+System.Drawing.Printing.PrintDocument::.ctor()
+System.Drawing.Printing.PrintDocument::P:PrinterSettings
+System.Drawing.Printing.PrintDocument::E:PrintPage
+System.Drawing.Printing.PrintDocument::Print()
+System.Drawing.Printing.PrinterSettings::.ctor()
+System.Drawing.Printing.PrintPageEventArgs::.ctor(System.Drawing.Graphics,System.Drawing.Rectangle,System.Drawing.Rectangle,System.Drawing.Printing.PageSettings)
+System.Drawing.Printing.PrintPageEventArgs::P:Cancel
+System.Drawing.Printing.PrintPageEventArgs::P:Graphics
+System.Drawing.Printing.PrintPageEventArgs::P:HasMorePages
+System.Drawing.Printing.PrintPageEventArgs::P:MarginBounds
+System.Drawing.Printing.PrintPageEventArgs::P:PageBounds

@@ -788,6 +788,15 @@ pub fn color_slider(
     } else if !down {
         ui.data_mut(|m| m.remove_temp::<i32>(column));
     }
+    // The wheel over the slider steps it by one, as its number field's arrows step that field.
+    if !look.disabled {
+        let steps = super::inputs::value_wheel(ui, id, rect, None);
+        let v = (f64::from(*value) + steps).clamp(0.0, 255.0) as u8;
+        if v != *value {
+            *value = v;
+            response.mark_changed();
+        }
+    }
     // The value's column in the strip (§2.4 step 3, strip-relative), the apex at its centre.
     let ax = strip_px.x as f64 + slider_col(*value, strip_px.w) as f64 + 0.5;
     let top = ((rect.min.y - area.min.y) * ppp) as f64;

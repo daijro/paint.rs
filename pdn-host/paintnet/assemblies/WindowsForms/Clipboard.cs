@@ -126,6 +126,8 @@ namespace System.Windows.Forms
         public static string GetText() => GetDataObject()?.GetData(DataFormats.UnicodeText) as string ?? "";
         public static void SetImage(Image image) => SetDataObject(new DataObject(image));
         public static void SetText(string text) => SetDataObject(new DataObject(DataFormats.UnicodeText, text));
+        public static void SetText(string text, TextDataFormat format) => SetDataObject(new DataObject(
+            format switch { TextDataFormat.Rtf => DataFormats.Rtf, TextDataFormat.Html => DataFormats.Html, TextDataFormat.CommaSeparatedValue => DataFormats.CommaSeparatedValue, _ => DataFormats.UnicodeText }, text));
         public static void SetDataObject(object data) { lock (gate) own = data as IDataObject ?? new DataObject(data); }
         public static void SetDataObject(object data, bool copy) => SetDataObject(data);
         public static void SetDataObject(object data, bool copy, int retryTimes, int retryDelay) => SetDataObject(data);

@@ -9,12 +9,13 @@ set -eu
 cross=${2:+$(cd -- "$(dirname -- "$2")" && pwd)/$(basename -- "$2")}
 version=1.5.4
 sha256=686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5
+here=$(cd -- "$(dirname -- "$0")" && pwd)
 cd -- "$1"
-curl --retry 3 -sSfLo dav1d.tar.xz "https://downloads.videolan.org/pub/videolan/dav1d/$version/dav1d-$version.tar.xz"
-# shasum where there is one: macOS's own sha256sum (BSD) checks no list on stdin, and Alpine has only
-# sha256sum.
-if command -v shasum >/dev/null; then sum='shasum -a 256'; else sum=sha256sum; fi
-echo "$sha256  dav1d.tar.xz" | $sum -c
+# VideoLAN's download hosts, then OSU's mirror of them.
+sh "$here/fetch.sh" dav1d.tar.xz "$sha256" \
+    "https://downloads.videolan.org/pub/videolan/dav1d/$version/dav1d-$version.tar.xz" \
+    "https://download.videolan.org/pub/videolan/dav1d/$version/dav1d-$version.tar.xz" \
+    "https://ftp.osuosl.org/pub/videolan/dav1d/$version/dav1d-$version.tar.xz"
 tar -xJf dav1d.tar.xz
 # The notice: dav1d's COPYING, then the ISC header of x86inc.asm (x264 project), which the x86 assembly
 # is built with.

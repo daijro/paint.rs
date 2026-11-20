@@ -14,6 +14,8 @@
 //! enable rules, ×1.1, captions, text / label / layer / pan / file rows; BB plan BB5);
 //! effects/fill-from-file.md (the file source, BB27).
 
+mod canvas;
+mod code;
 mod color_popup;
 mod external;
 mod layouts;
@@ -35,6 +37,7 @@ use pdn_core::effect::bb::ui::External;
 use egui::{ColorImage, Id, Key, PointerButton, Pos2, Rect, Ui, Vec2};
 use pdn_core::canvas::{Canvas, ImageData};
 use pdn_core::effect::bb::ui::Help;
+use pdn_core::effect::permission::Request;
 use pdn_core::effect::session::EffectSession;
 use pdn_core::effect::{Control, DialogLayout, PanThumb, Values};
 use serde_json::{Value, json};
@@ -57,9 +60,6 @@ struct WindowAnswer {
     controls: Vec<Control>,
     done: Option<WindowDone>,
 }
-
-/// A plug-in window's displacement grid being edited: its size in cells, and the node being dragged.
-type GridEdit = ((u32, u32), Option<(u32, u32)>);
 
 /// Where a FileType's window's OK (its values) or Cancel (`None`) goes.
 type WindowDone = Box<dyn FnOnce(Option<Values>, &mut DialogCx)>;
@@ -148,13 +148,25 @@ pub struct EffectConfigDialog {
     worker_lost: bool,
     pending_notice: Option<String>,
     noticed_generation: Option<u64>,
+    /// A plug-in's outside request being asked about ([`EffectConfigDialog::ask`]).
+    asking: Option<Asking>,
+    /// The network requests whose responses this run handed the host, so a host that keeps asking for one stops.
+    fetched: Vec<String>,
+    /// The request last run again after an answer the host already had, so a host that keeps asking stops here.
+    rerun_for: Option<Request>,
+    /// The plug-in asked about, whose Allow once answers end with this run.
+    asked: Option<String>,
+    /// A request that cannot happen here was explained; the plug-in's failure after it needs no second box.
+    explained: bool,
     curves: Option<CurvesState>,
-    /// A plug-in window's curve editor and the channels it shows (`plugin_curve`).
-    plugin_curve: Option<(&'static [&'static str], CurveEditor)>,
-    /// A plug-in window's displacement grid (`plugin_grid`): its size, and the node being dragged.
-    plugin_grid: Option<GridEdit>,
-    /// The image under that grid at its device size.
-    grid_thumb: Option<(usize, usize, Canvas)>,
+    /// A plug-in window's live canvas (`plugin_canvas`): the window kept open while this dialog is.
+    live_canvas: Option<canvas::LiveCanvas>,
+    /// Why that window did not open, so it is not tried again every frame.
+    canvas_error: Option<String>,
+    /// The sizes the plug-in window's canvases are shown at, in points.
+    canvas_shown: Vec<(&'static str, (u32, u32))>,
+    /// A plug-in window's code editors (`plugin_code`), by key.
+    code_edits: std::collections::HashMap<&'static str, code::CodeEdit>,
     /// The Levels gradient handle being dragged: (output column, handle index).
     levels_drag: Option<(bool, usize)>,
     /// The Rotate/Zoom roll canvas drag: (start pointer, start roll vector, on the sphere).
@@ -306,10 +318,16 @@ impl EffectConfigDialog {
             worker_lost: false,
             pending_notice: None,
             noticed_generation: None,
+            asking: None,
+            fetched: vec![],
+            rerun_for: None,
+            asked: None,
+            explained: false,
             curves: None,
-            plugin_curve: None,
-            plugin_grid: None,
-            grid_thumb: None,
+            live_canvas: None,
+            canvas_error: None,
+            canvas_shown: Vec::new(),
+            code_edits: Default::default(),
             levels_drag: None,
             roll_drag: None,
             thumb_presses: vec![],
@@ -360,18 +378,29 @@ impl EffectConfigDialog {
 
     /// A plug-in window's button (`Control::Button`): pressed in the plug-in's own window over the layer, keeping the
     /// token that makes and the window's settings after it (a list's new items). False when it could not be
-    /// pressed; the reason goes to the notice line.
+    /// pressed; the user is told why, as for a render that stops with an error.
     pub(super) fn press(&mut self, key: &str) -> bool {
+        // A window kept open for its canvases takes the press itself, on its own state.
+        let live = self.press_live(key);
         let Some(s) = &self.session else {
             return false;
         };
         let env = s.env();
-        match pdn_core::effect::dotnet::press(s.def.id, key, s.source(), &mut self.values, &env) {
+        let pressed = match live {
+            Some(done) => done,
+            None => {
+                pdn_core::effect::dotnet::press(s.def.id, key, s.source(), &mut self.values, &env)
+            }
+        };
+        match pressed {
             Ok(()) => true,
+            Err(e) if let Some(request) = Request::from_error(&e) => {
+                self.ask(request, Rerun::Press(key.to_owned()));
+                false
+            }
             Err(e) => {
-                if let Some(notice) = env.notice {
-                    *notice.lock().unwrap() = Some(e);
-                }
+                let text = pdn_core::effect::dotnet::failed(&self.title, &e);
+                self.deliver_notice(Some(text));
                 false
             }
         }
@@ -411,14 +440,28 @@ impl EffectConfigDialog {
         self.session.as_ref().and_then(|s| s.def.dialog)
     }
 
+    /// The dialog's controls; a plug-in window's canvas at the size it is shown (`fit_canvas`).
     fn controls(&self) -> Vec<Control> {
-        if let Some(w) = &self.window {
-            return w.controls.clone();
+        // A live window's own: rows its input brought (a file it loaded) join the schema's.
+        let mut controls = match (&self.window, &self.live_canvas) {
+            (Some(w), _) => w.controls.clone(),
+            (None, Some(live)) => live.canvas.controls().to_vec(),
+            (None, None) => self
+                .session
+                .as_ref()
+                .map(|s| s.def.controls.clone())
+                .unwrap_or_default(),
+        };
+        for c in &mut controls {
+            if let Control::PluginCanvas {
+                key, width, height, ..
+            } = c
+                && let Some(&(_, shown)) = self.canvas_shown.iter().find(|s| s.0 == *key)
+            {
+                (*width, *height) = shown;
+            }
         }
-        self.session
-            .as_ref()
-            .map(|s| s.def.controls.clone())
-            .unwrap_or_default()
+        controls
     }
 
     /// The footer's Reset: Curves' identity curves; Levels' five triples from the defaults (§2.9,
@@ -475,10 +518,16 @@ impl EffectConfigDialog {
             }
         };
         let rendered = self.current_preview();
+        // A Paint.NET plug-in renders its final through the dialog too, so an outside request it stops at is asked.
+        let plugin = self
+            .session
+            .as_ref()
+            .is_some_and(|s| matches!(s.def.kind, pdn_core::effect::EffectKind::Plugin));
         if !fonts
             || !self.input_ready()
             || self.chooser.is_some()
             || (self.seam() && rendered.is_none())
+            || (plugin && rendered.is_none())
         {
             self.finalizing = true;
             self.open_select = None;
@@ -486,10 +535,14 @@ impl EffectConfigDialog {
             return DialogState::Open;
         }
         self.cancel_job();
+        if rendered.is_some() && self.plugin_failed() {
+            return self.fail_plugin(cx);
+        }
         let file_key = self.file_key();
         if let Some(s) = self.session.take()
             && s.commit_with(cx.app, self.values.clone(), rendered)
         {
+            self.keep_canvas();
             self.publish_file_source(file_key);
             let notice = self.pending_notice.take();
             self.deliver_notice(notice);
@@ -555,6 +608,8 @@ impl EffectConfigDialog {
             if let Some(immediate) = self.poll_chooser() {
                 self.notify(cx, ui.ctx(), immediate);
             }
+            let ctx = ui.ctx().clone();
+            self.rerun_answered(cx, &ctx);
             self.poll_external(cx.app);
             self.check_faces(cx);
             self.run_previews(cx, ui.ctx());
@@ -594,6 +649,138 @@ impl EffectConfigDialog {
 impl Drop for EffectConfigDialog {
     fn drop(&mut self) {
         self.cancel_job();
+        // Allow once was for this run.
+        if let Some(plugin) = &self.asked {
+            pdn_core::effect::permission::with(|p| p.end_once(plugin));
+        }
+    }
+}
+
+/// What runs again once an outside request has its answer.
+#[derive(Clone, Debug, PartialEq)]
+enum Rerun {
+    Render,
+    Press(String),
+}
+
+/// An outside request being asked about: what runs again, whether the prompt has its answer, and for a network
+/// request paint.rs makes itself, where its response lands.
+struct Asking {
+    rerun: Rerun,
+    request: Request,
+    answered: std::rc::Rc<std::cell::Cell<bool>>,
+    response: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
+}
+
+impl EffectConfigDialog {
+    /// A plug-in stopped at an outside request (the network, files, a program, a system setting, native code):
+    /// asks once, and the answer runs `rerun` again, so the plug-in goes on allowed, or fails the call as it would
+    /// offline. One the host should already have the answer to (it has just been sent) runs again once.
+    fn ask(&mut self, request: Request, rerun: Rerun) {
+        use pdn_core::effect::permission;
+        if self.asking.is_some() {
+            return;
+        }
+        self.asked = Some(request.plugin.clone());
+        let answered = std::rc::Rc::new(std::cell::Cell::new(false));
+        if request.http.is_some() && permission::with(|p| p.allows(&request)) {
+            // Allowed: the host waits for paint.rs to make the request; once only for each one.
+            if self.fetched.contains(&request.key) {
+                let text = format!("{}, and it was not passed on.", request.message());
+                crate::platform::files::message(&self.title, text);
+                return;
+            }
+            answered.set(true);
+        } else if permission::with(|p| p.answered(&request)) {
+            if self.rerun_for.as_ref() == Some(&request) {
+                let text = format!("{}, and it was not passed on.", request.message());
+                crate::platform::files::message(&self.title, text);
+                return;
+            }
+            self.rerun_for = Some(request.clone());
+            answered.set(true);
+        } else if !request.unavailable.is_empty() {
+            // It cannot happen here (a browser cannot change the wallpaper): the plug-in carries on without it.
+            let text = format!("{}, but {}.", request.message(), request.unavailable);
+            permission::with(|p| p.deny(&request));
+            crate::platform::files::message(&self.title, text);
+            self.explained = true;
+            answered.set(true);
+        } else {
+            let spec = crate::platform::plugins::permission_prompt(&request);
+            let (done, asked) = (answered.clone(), request.clone());
+            super::task::TaskDialog::show_then(spec, move |choice, cx| {
+                crate::platform::plugins::answer_permission(&asked, choice, cx.prefs);
+                done.set(true);
+            });
+        }
+        self.asking = Some(Asking {
+            rerun,
+            request,
+            answered,
+            response: None,
+        });
+    }
+
+    /// A Paint.NET plug-in's render ended with an error (its notice): the layer stays as it was.
+    fn plugin_failed(&self) -> bool {
+        self.pending_notice.is_some()
+            && self
+                .session
+                .as_ref()
+                .is_some_and(|s| matches!(s.def.kind, pdn_core::effect::EffectKind::Plugin))
+    }
+
+    /// As a plug-in run that throws without the dialog: say why, and add no history step.
+    fn fail_plugin(&mut self, cx: &mut DialogCx) -> DialogState {
+        let notice = self.pending_notice.take();
+        let state = self.cancel(cx);
+        if !self.explained {
+            self.deliver_notice(notice);
+        }
+        state
+    }
+
+    /// The answer came: run again what stopped at the request.
+    fn rerun_answered(&mut self, cx: &mut DialogCx, ctx: &egui::Context) {
+        let Some(mut asking) = self.asking.take() else {
+            return;
+        };
+        if !asking.answered.get() {
+            self.asking = Some(asking);
+            return;
+        }
+        // An allowed network request: make it, give the host its response, then run again.
+        if let Some(http) = asking.request.http.clone()
+            && pdn_core::effect::permission::with(|p| p.allows(&asking.request))
+        {
+            let Some(slot) = &asking.response else {
+                asking.response = Some(crate::platform::plugins::fetch_for_plugin(
+                    http,
+                    ctx.clone(),
+                ));
+                self.asking = Some(asking);
+                return;
+            };
+            let Some(json) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+                self.asking = Some(asking);
+                return;
+            };
+            pdn_core::effect::dotnet::store_network_response(&asking.request.key, &json);
+            self.fetched.push(asking.request.key.clone());
+        }
+        match asking.rerun {
+            // As `notify`: a new generation, its external input (the clipboard, a file) read again.
+            Rerun::Render => {
+                self.invalidate(cx.app.now_ms, true);
+                self.acquire_external(cx.app, ctx, cx.clipboard.as_deref_mut());
+            }
+            Rerun::Press(key) => {
+                if self.press(&key) {
+                    self.notify(cx, ctx, true);
+                }
+            }
+        }
     }
 }
 
@@ -678,8 +865,9 @@ impl Dialog for EffectConfigDialog {
                 && i.key_pressed(Key::Enter)
         });
         let now = cx.app.now_ms;
+        self.fit_canvas(ui);
         let (width, height) = self.size(ui);
-        let mut changed: Option<bool> = None;
+        let mut changed: Option<bool> = self.settle_live(ui, now);
         let mut action: Option<FooterAction> = None;
         let layout = self.layout();
         let controls = self.controls();
@@ -827,11 +1015,13 @@ impl Dialog for EffectConfigDialog {
         if changed.is_none() {
             changed = self.poll_chooser();
         }
+        changed = merge(changed, self.poll_canvas_pick());
         // A FileType's window has no image to preview.
         if !window {
             if let Some(immediate) = changed {
                 self.notify(cx, &ctx, immediate);
             }
+            self.rerun_answered(cx, &ctx);
             self.acquire_external(cx.app, &ctx, cx.clipboard.as_deref_mut());
             self.poll_external(cx.app);
             self.check_faces(cx);
@@ -1600,10 +1790,17 @@ pub(crate) mod bb29_tests {
         frame_with(&ctx, &mut app, None, &mut d, vec![], true);
         (app, d, ctx)
     }
-    /// A plugin dialog taller than its window scrolls with the wheel to its last row, no further.
+    /// A plugin dialog taller than its window scrolls with the wheel to its last row, no further, in the plugin
+    /// layout and the generic one alike (a plug-in window with canvases and many settings is generic).
     #[test]
     fn tall_plugin_rows_scroll() {
         static UI: IndirectUi = IndirectUi::DEFAULT;
+        for indirect in [Some(&UI), None] {
+            tall_rows_scroll(indirect);
+        }
+    }
+
+    fn tall_rows_scroll(indirect: Option<&'static IndirectUi>) {
         const KEYS: [&str; 16] = [
             "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "r13",
             "r14", "r15",
@@ -1613,7 +1810,7 @@ pub(crate) mod bb29_tests {
             controls: KEYS
                 .map(|k| pdn_core::effect::range(k, k, 0.0, 100.0, 50.0))
                 .to_vec(),
-            indirect: Some(&UI),
+            indirect,
             ..pdn_core::effect::find("invertColorsEffect").unwrap()
         };
         let mut app = fresh_doc(40, 30, Some(4));
@@ -1953,48 +2150,6 @@ pub(crate) mod bb29_tests {
         assert_eq!(d.values["w:0."], json!("Hi"));
     }
 
-    /// A plug-in window's displacement grid keeps the nodes the dialog opened with, and another size (its size
-    /// choice) starts with none moved, as the plug-in's grid does.
-    #[test]
-    fn a_plugin_grid_resets_with_its_size() {
-        let probe = EffectDef {
-            id: "pluginGridProbe",
-            indirect: None,
-            dialog: None,
-            controls: vec![
-                Control::Select {
-                    key: "w:0.",
-                    label: "Columns",
-                    default: "0",
-                    choices: &[("0", "2"), ("1", "4")],
-                },
-                Control::PluginGrid {
-                    key: "w:grid",
-                    label: "Grid",
-                    columns: 2,
-                    rows: 2,
-                    columns_by: Some("w:0."),
-                    rows_by: None,
-                },
-            ],
-            ..pdn_core::effect::find("invertColorsEffect").unwrap()
-        };
-        let mut app = fresh_doc(6, 4, Some(4));
-        let s = EffectSession::begin(&mut app, probe).unwrap();
-        let mut values = s.defaults();
-        let moved = json!([[1, 1, 0.5, -0.25]]);
-        values.insert("w:grid".into(), moved.clone());
-        let mut d = EffectConfigDialog::new(s, values);
-        let ctx = context();
-        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
-        assert_eq!(d.values["w:grid"], moved, "opened with");
-        assert_eq!(d.plugin_grid.map(|g| g.0), Some((2, 2)));
-        d.values.insert("w:0.".into(), json!("1"));
-        frame_with(&ctx, &mut app, None, &mut d, vec![], false);
-        assert_eq!(d.values["w:grid"], json!([]));
-        assert_eq!(d.plugin_grid.map(|g| g.0), Some((4, 2)));
-    }
-
     /// A FileType's window shown while a file opens or saves: no image needed, its settings at their defaults,
     /// typing edits them, Enter (OK) hands them over once, and Escape (Cancel) hands over nothing.
     #[test]
@@ -2065,63 +2220,6 @@ pub(crate) mod bb29_tests {
         assert_eq!(state, DialogState::Closed(DialogResult::Cancel));
         assert_eq!(got.borrow().len(), 2);
         assert!(got.borrow()[1].is_none(), "Cancel hands nothing over");
-    }
-
-    /// A plug-in window's curve shows the channels its mode picks; another mode starts from that mode's own points,
-    /// and the values the dialog opened with are kept.
-    #[test]
-    fn a_plugin_curve_follows_its_mode() {
-        use pdn_core::effect::CurveChannels;
-        let leak = |v: serde_json::Value| -> &'static serde_json::Value { Box::leak(Box::new(v)) };
-        let gray = CurveChannels {
-            names: &["Gray"],
-            colors: &[None],
-            default: leak(json!([[[0, 0], [255, 255]]])),
-        };
-        let colour = CurveChannels {
-            names: &["Red", "Green"],
-            colors: &[Some([255, 0, 0]), Some([0, 255, 0])],
-            default: leak(json!([[[0, 0], [255, 255]], [[0, 0], [255, 255]]])),
-        };
-        let probe = EffectDef {
-            id: "pluginCurveProbe",
-            indirect: None,
-            dialog: None,
-            controls: vec![
-                Control::Select {
-                    key: "w:0.",
-                    label: "Mode",
-                    default: "0",
-                    choices: &[("0", "Gray"), ("1", "Colour")],
-                },
-                Control::PluginCurve {
-                    key: "w:1.curve",
-                    label: "Setting",
-                    max: 255,
-                    own: gray.clone(),
-                    by: Some("w:0."),
-                    sets: Box::leak(vec![gray, colour].into_boxed_slice()),
-                },
-            ],
-            ..pdn_core::effect::find("invertColorsEffect").unwrap()
-        };
-        let mut app = fresh_doc(6, 4, Some(4));
-        let s = EffectSession::begin(&mut app, probe).unwrap();
-        let mut values = s.defaults();
-        let bent = json!([[[0, 0], [128, 90], [255, 255]]]);
-        values.insert("w:1.curve".into(), bent.clone());
-        let mut d = EffectConfigDialog::new(s, values);
-        let ctx = context();
-        frame_with(&ctx, &mut app, None, &mut d, vec![], true);
-        assert_eq!(d.values["w:1.curve"], bent, "opened with");
-        assert_eq!(d.plugin_curve.as_ref().unwrap().1.channels.len(), 1);
-        d.values.insert("w:0.".into(), json!("1"));
-        frame_with(&ctx, &mut app, None, &mut d, vec![], false);
-        assert_eq!(
-            d.values["w:1.curve"],
-            json!([[[0, 0], [255, 255]], [[0, 0], [255, 255]]])
-        );
-        assert_eq!(d.plugin_curve.as_ref().unwrap().1.channels.len(), 2);
     }
 
     /// R157: with no system Impact (Bundled), the session waits for the Impact attempt to
@@ -2395,5 +2493,200 @@ mod bb30_tests {
         assert!(
             labels.iter().any(|e| e.0 == "Noto Sans") && !labels.iter().any(|e| e.0 == "serif")
         );
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::bb28_tests::{context, frame, pending_messages};
+    use super::*;
+    use pdn_core::effect::permission::{self, Grant};
+    use pdn_core::effect::{EffectDef, EffectEnv, EffectKind};
+    use pdn_core::testing::{fresh_doc, layer_bytes};
+
+    fn request() -> Request {
+        Request {
+            plugin: "PermProbe.dll".into(),
+            grant: Grant {
+                category: "network".into(),
+                target: "example.invalid".into(),
+            },
+            detail: "GET http://example.invalid/".into(),
+            ..Default::default()
+        }
+    }
+
+    /// The host's gate, in-process: unanswered, the run stops at the request; allowed, the plug-in inverts the
+    /// layer; denied, it carries on without the network and leaves it.
+    fn gate(src: &ImageData, _: &Values, env: &EffectEnv) -> ImageData {
+        let r = request();
+        if permission::with(|p| p.allows(&r)) {
+            let mut out = src.clone();
+            for px in out.data.as_chunks_mut::<4>().0 {
+                px[..3].iter_mut().for_each(|c| *c = 255 - *c);
+            }
+            return out;
+        }
+        if !permission::with(|p| p.answered(&r))
+            && let Some(notice) = env.notice
+        {
+            *notice.lock().unwrap() = Some(
+                "PermissionRequiredException: pdn-permission:{\"plugin\":\"PermProbe.dll\",\"category\":\"network\",\
+                 \"target\":\"example.invalid\",\"detail\":\"GET http://example.invalid/\"}"
+                    .into(),
+            );
+        }
+        src.clone()
+    }
+
+    fn probe() -> EffectDef {
+        EffectDef {
+            id: "permProbe",
+            kind: EffectKind::Cpu {
+                render: gate,
+                clip_to_selection: true,
+            },
+            ..pdn_core::effect::find("invertColorsEffect").unwrap()
+        }
+    }
+
+    /// Runs a settings-free plug-in effect (its final only) until it asks, answers `choice`, then until it closes;
+    /// the layer before and after.
+    fn run(choice: &str) -> (Vec<u8>, Vec<u8>) {
+        let ctx = context();
+        let mut app = fresh_doc(6, 4, Some(4));
+        let before = layer_bytes(&app, None);
+        let s = EffectSession::begin(&mut app, probe()).unwrap();
+        let mut d = EffectConfigDialog::final_only(s, Values::new());
+        pending_messages();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            assert_eq!(frame(&ctx, &mut app, None, &mut d), DialogState::Open);
+            if d.asking.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(d.asking.is_some(), "no prompt");
+        assert_eq!(pending_messages(), 1, "the prompt opened once");
+        crate::platform::plugins::answer_permission(
+            &request(),
+            choice,
+            &mut crate::prefs::Prefs::default(),
+        );
+        d.asking.as_ref().unwrap().answered.set(true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            match frame(&ctx, &mut app, None, &mut d) {
+                DialogState::Open => std::thread::sleep(std::time::Duration::from_millis(1)),
+                _ => break,
+            }
+        }
+        assert_eq!(pending_messages(), 0, "no second prompt");
+        drop(d);
+        (before, layer_bytes(&app, None))
+    }
+
+    /// The prompt's answer runs the plug-in again: allowed once it renders and the grant ends with the run;
+    /// denied it carries on unchanged and is not asked again until the next start.
+    #[test]
+    fn an_outside_request_is_asked_then_run_with_the_answer() {
+        let (before, after) = run("once");
+        assert_ne!(before, after, "allowed: the plug-in rendered");
+        assert!(
+            !permission::with(|p| p.answered(&request())),
+            "Allow once ended with the run"
+        );
+
+        let (before, after) = run("deny");
+        assert_eq!(before, after, "denied: unchanged");
+        assert!(permission::with(
+            |p| p.answered(&request()) && !p.allows(&request())
+        ));
+        permission::with(|p| p.allow_always(&request()));
+        permission::with(|p| p.revoke("PermProbe.dll", &request().grant));
+    }
+
+    static FETCH_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// The host's network gate for a request it leaves to paint.rs: the first run stops at the request (method,
+    /// URL, key); the next, after paint.rs handed over the response, completes.
+    fn fetch_gate(src: &ImageData, _: &Values, env: &EffectEnv) -> ImageData {
+        use std::sync::atomic::Ordering;
+        if FETCH_RUNS.fetch_add(1, Ordering::SeqCst) > 0 {
+            let mut out = src.clone();
+            out.data.iter_mut().for_each(|c| *c = 255 - *c);
+            return out;
+        }
+        if let Some(notice) = env.notice {
+            *notice.lock().unwrap() = Some(
+                "pdn-permission:{\"plugin\":\"FetchProbe.dll\",\"category\":\"network\",\"target\":\"127.0.0.1\",\
+                 \"detail\":\"http://127.0.0.1:9/\",\"key\":\"k-fetch\",\"request\":{\"key\":\"k-fetch\",\
+                 \"method\":\"GET\",\"url\":\"http://127.0.0.1:9/\",\"headers\":{}}}"
+                    .into(),
+            );
+        }
+        src.clone()
+    }
+
+    /// A network request an Always allow covers is made without a prompt (here refused: nothing listens on port
+    /// 9), its response handed to the host, and the plug-in run again to the end.
+    #[test]
+    fn an_allowed_network_request_is_made_then_the_plug_in_runs_again() {
+        let fetch = Request {
+            plugin: "FetchProbe.dll".into(),
+            grant: Grant {
+                category: "network".into(),
+                target: "127.0.0.1".into(),
+            },
+            ..Default::default()
+        };
+        permission::with(|p| p.allow_always(&fetch));
+        let ctx = context();
+        let mut app = fresh_doc(6, 4, Some(4));
+        let before = layer_bytes(&app, None);
+        let def = EffectDef {
+            id: "fetchProbe",
+            kind: EffectKind::Cpu {
+                render: fetch_gate,
+                clip_to_selection: true,
+            },
+            ..probe()
+        };
+        let s = EffectSession::begin(&mut app, def).unwrap();
+        let mut d = EffectConfigDialog::final_only(s, Values::new());
+        pending_messages();
+        let mut state = DialogState::Open;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            state = frame(&ctx, &mut app, None, &mut d);
+            if state != DialogState::Open {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_ne!(state, DialogState::Open, "the run did not finish");
+        assert_eq!(pending_messages(), 0, "no prompt, no message");
+        assert_eq!(d.fetched, ["k-fetch"]);
+        assert_ne!(
+            before,
+            layer_bytes(&app, None),
+            "the plug-in ran to the end"
+        );
+        permission::with(|p| p.revoke("FetchProbe.dll", &fetch.grant));
+    }
+
+    /// One prompt for every request: the plug-in, the verb and target, the detail beneath, and Deny as what Escape
+    /// (and Enter, on the focused close button) picks.
+    #[test]
+    fn the_prompt_reads_the_request() {
+        let spec = crate::platform::plugins::permission_prompt(&request());
+        assert_eq!(
+            spec.message.as_deref(),
+            Some("PermProbe.dll wants to connect to example.invalid\nGET http://example.invalid/")
+        );
+        let titles: Vec<&str> = spec.choices.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, ["Allow once", "Always allow", "Deny"]);
+        assert_eq!(spec.cancel_value, "deny");
     }
 }

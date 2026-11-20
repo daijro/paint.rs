@@ -87,6 +87,17 @@ using (var attributes = new ImageAttributes())
     Check(Is(b.GetPixel(0, 0), Color.FromArgb(255, 50, 50, 200)), $"colour matrix {b.GetPixel(0, 0)}");
 }
 
+// Bitmap.ApplyEffect recolours the area given (here the right pixel only) with a colour matrix effect.
+using (var b = new Bitmap(2, 1))
+using (var effect = new System.Drawing.Imaging.Effects.ColorMatrixEffect(new ColorMatrix([[0, 0, 1, 0, 0], [0, 0.5f, 0, 0, 0], [1, 0, 0, 0, 0], [0, 0, 0, 1, 0], [0, 0, 0, 0, 1]])))
+{
+    b.SetPixel(0, 0, Color.FromArgb(255, 200, 100, 50));
+    b.SetPixel(1, 0, Color.FromArgb(255, 200, 100, 50));
+    b.ApplyEffect(effect, new Rectangle(1, 0, 1, 1));
+    Check(Is(b.GetPixel(0, 0), Color.FromArgb(255, 200, 100, 50)) && Is(b.GetPixel(1, 0), Color.FromArgb(255, 50, 50, 200)),
+          $"colour matrix effect {b.GetPixel(0, 0)} {b.GetPixel(1, 0)}");
+}
+
 // A hatch is pixel-aligned; a path gradient runs from its centre colour out to the surround colour.
 using (var b = new Bitmap(16, 16))
 using (var g = Graphics.FromImage(b))
@@ -115,6 +126,21 @@ using (var font = new Font("Arial", 12))
     var size = g.MeasureString("ab", font);
     Check(MathF.Abs(size.Width - (20 + 2 * 16f / 6)) < 0.01f && size.Height == 20, $"measured string {size}");
     Check(g.MeasureString("aaaa aaaa", font, 60).Height == 40, "wrapped string");
+}
+
+// JPEG found by its MIME type and saved with a quality, as JPEG Effect does: the quality reaches the host's encoder.
+int quality = -1;
+AppContext.SetData("System.Drawing.EncodeImage", new Func<byte[], string, int, byte[]>((image, format, q) => { quality = q; return [0xFF, 0xD8]; }));
+using (var b = new Bitmap(2, 2))
+{
+    ImageCodecInfo jpeg = Array.Find(ImageCodecInfo.GetImageEncoders(), c => c.MimeType == "image/jpeg");
+    Check(jpeg?.FormatID == ImageFormat.Jpeg.Guid && ImageCodecInfo.GetImageEncoders().Length == 5, "the JPEG encoder in GDI+'s list");
+    using var parameters = new EncoderParameters(1);
+    parameters.Param[0] = new EncoderParameter(Encoder.Quality, 30L);
+    b.Save(new MemoryStream(), jpeg, parameters);
+    Check(quality == 30, $"JPEG quality {quality}");
+    b.Save(new MemoryStream(), jpeg, null);
+    Check(quality == 75, $"JPEG default quality {quality}");
 }
 
 // A font as resources keep it.

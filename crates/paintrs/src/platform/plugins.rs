@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 
+use pdn_core::effect::permission::Request;
 use pdn_core::effect::wasm;
 use pdn_core::extra::fx::lut;
 use pdn_core::extra::plugins::{Limits, Plugin, registry};
@@ -171,6 +172,88 @@ impl PluginStore {
             Self::Unavailable => Pending::ready(Ok(())),
         }
     }
+}
+
+/// The Always allow answers to plug-ins' outside requests (`pdn_core::effect::permission`), in the prefs.
+const PERMISSIONS_KEY: &str = "paintrs.pluginPermissions.v1";
+
+/// Takes back the remembered answers (at start).
+pub fn load_permissions(prefs: &crate::prefs::Prefs) {
+    let json = prefs.get(PERMISSIONS_KEY).unwrap_or("{}");
+    pdn_core::effect::permission::with(|p| p.load(json));
+}
+
+/// Remembers the Always allow answers as they are now.
+pub fn remember_permissions(prefs: &mut crate::prefs::Prefs) {
+    let json = pdn_core::effect::permission::with(|p| p.remembered());
+    prefs.set(PERMISSIONS_KEY, &json);
+}
+
+/// The prompt for an outside request: "<plug-in> wants to <verb> <target>", its detail on a second line, and
+/// Allow once, Always allow and Deny. Deny is the default: Escape and Enter (on the focused close button) pick it.
+pub fn permission_prompt(request: &Request) -> crate::dialogs::task::TaskDialogSpec {
+    use crate::dialogs::task::{TaskChoice, TaskDialogSpec};
+    let choice = |value, title: &str, icon| TaskChoice {
+        value,
+        title: title.into(),
+        icon: Some(icon),
+        ..Default::default()
+    };
+    let mut message = request.message();
+    if !request.detail.is_empty() {
+        message = format!("{message}\n{}", request.detail);
+    }
+    TaskDialogSpec {
+        title: crate::dialogs::about::PRODUCT.into(),
+        message: Some(message),
+        choices: vec![
+            choice("once", "Allow once", "tool_strip_checked.png"),
+            choice("always", "Always allow", "third_party_plugin_indicator.png"),
+            choice("deny", "Deny", "cancel_icon.png"),
+        ],
+        cancel_value: "deny",
+        ..Default::default()
+    }
+}
+
+/// Takes the prompt's answer: Allow once lasts the run in progress, Always allow is remembered, anything else
+/// denies until the next start.
+pub fn answer_permission(request: &Request, choice: &str, prefs: &mut crate::prefs::Prefs) {
+    pdn_core::effect::permission::with(|p| match choice {
+        "once" => p.allow_once(request),
+        "always" => p.allow_always(request),
+        _ => p.deny(request),
+    });
+    if choice == "always" {
+        remember_permissions(prefs);
+    }
+}
+
+/// Makes a plug-in's network request the user allowed (the host leaves it to paint.rs) and returns where its
+/// response lands, as the JSON the host takes (`permission::response_json`): status 0 when it could not be made, a
+/// browser refusing it across origins included. `ctx` repaints when it has.
+pub fn fetch_for_plugin(
+    http: pdn_core::effect::permission::HttpRequest,
+    ctx: egui::Context,
+) -> std::sync::Arc<std::sync::Mutex<Option<String>>> {
+    use pdn_core::effect::permission::response_json;
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let out = slot.clone();
+    let mut request = ehttp::Request::get(&http.url);
+    request.method = http.method;
+    request.body = http.body;
+    request.headers = ehttp::Headers {
+        headers: http.headers,
+    };
+    ehttp::fetch(request, move |result| {
+        let json = match result {
+            Ok(r) => response_json(r.status, &r.headers.headers, &r.bytes),
+            Err(_) => response_json(0, &[], &[]),
+        };
+        *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(json);
+        ctx.request_repaint();
+    });
+    slot
 }
 
 /// A plug-in, look or preset file, judged by its extension.
@@ -351,6 +434,11 @@ impl PluginManager {
         self.ready
     }
 
+    /// The effect an installed PhotoCraft filter or LightCraft look (file `file`) became.
+    pub fn effect_of(&self, file: &str) -> Option<&str> {
+        self.active.get(file).map(String::as_str)
+    }
+
     pub fn busy(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -458,6 +546,8 @@ impl PluginManager {
                 Ok(Event::Loaded(files)) => {
                     self.ready = true;
                     self.items = files;
+                    // By name, as an install sorts them: the store lists them in its own order.
+                    self.items.sort_by_key(|f| f.to_lowercase());
                     self.reload_effects();
                     if self.items.iter().any(|f| !is_dotnet(f)) {
                         let read = self.store.contents(|f| !is_dotnet(f));
@@ -531,7 +621,7 @@ impl PluginManager {
         if n > 5 {
             text.push_str(&format!("\n\n…and {} more.", n - 5));
         }
-        text.push_str("\n\nSettings ▸ Plugins lists them. paint.rs works without them.");
+        text.push_str("\n\nThe Plugins page in Settings lists them. paint.rs works without them.");
         self.notice = Some(text);
     }
 
@@ -634,6 +724,50 @@ mod tests {
         assert_eq!(m.items, installed);
         assert!(pdn_core::effect::find("org.photocraft.example.invert").is_some());
         assert!(pdn_core::effect::find("lut.Film-01").is_some());
+        // The Plugins page shows each one's menu path, and the Effects menu has it directly under
+        // Plugins (WebAssembly plug-ins declare no submenu).
+        {
+            use crate::dialogs::settings::plugins::{Line, row_lines};
+            use crate::kit::menu::MenuEntry;
+            let app = pdn_core::app::AppWorkspace::default();
+            let path = |name: &str| {
+                [Line::Path(vec![
+                    "Effects".into(),
+                    "Plugins".into(),
+                    name.into(),
+                ])]
+            };
+            assert_eq!(
+                row_lines(&app, &m, "org.photocraft.example.invert.wasm", &[]),
+                path("Invert (WebAssembly)")
+            );
+            assert_eq!(
+                row_lines(&app, &m, "Film-01.cube", &[]),
+                path("Test Look...")
+            );
+            let menu = crate::shell::main_menu::effect_entries(
+                &app,
+                pdn_core::effect::menu_categories(true, false),
+                vec![],
+            );
+            let plugins = menu.iter().find_map(|e| match e {
+                MenuEntry::Submenu {
+                    key: "effects.plugins.submenu",
+                    entries,
+                } => Some(entries),
+                _ => None,
+            });
+            let plugins = plugins.expect("an Effects ▸ Plugins submenu");
+            for id in ["org.photocraft.example.invert", "lut.Film-01"] {
+                let action = format!("menu.effects.{id}");
+                assert!(
+                    plugins
+                        .iter()
+                        .any(|e| matches!(e, MenuEntry::Action(a) if *a == action)),
+                    "{action} not under Effects ▸ Plugins: {plugins:?}"
+                );
+            }
+        }
         m.install("notes.wasm", b"\0asm junk");
         assert!(m.status.starts_with("notes.wasm:"), "{}", m.status);
         assert_eq!(m.items, installed);
@@ -706,6 +840,145 @@ mod tests {
     fn host_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A row's subtext on the Plugins page in Settings: where each effect a plug-in added sits in the menus, the formats
+    /// its file types open and save, that it added nothing, or why it did not load; nothing for a file beside a plug-in.
+    #[test]
+    fn a_plugin_rows_subtext() {
+        use crate::dialogs::settings::plugins::{Line, row_lines};
+        use pdn_core::effect::dotnet::{remember_menu, remember_provided};
+        #[cfg(not(target_arch = "wasm32"))]
+        let _host = host_lock();
+        remember_menu("Row.Test.Swirl", "Swirl", Some("Distort"));
+        remember_provided(
+            "Swirl.dll",
+            vec!["Row.Test.Swirl"],
+            &serde_json::json!({ "fileTypes": [{ "name": "XYZ", "loadExtensions": [".xyz"], "saveExtensions": [".xyz"] }] }),
+        );
+        remember_provided("Helper.dll", vec![], &serde_json::json!({}));
+        // A FileType overlapping built-in formats: paint.rs keeps its own codec for those.
+        remember_provided(
+            "Overlap.dll",
+            vec![],
+            &serde_json::json!({ "fileTypes": [
+                { "name": "PS", "loadExtensions": [".psd", ".psb"], "saveExtensions": [".psd", ".psb"] },
+                { "name": "QQ", "loadExtensions": [".qq", ".heic"], "saveExtensions": [".qq", ".heic", ".png"] },
+            ] }),
+        );
+        let manager = PluginManager::new(PluginStore::memory());
+        let app = pdn_core::app::AppWorkspace::default();
+        let path = |p: &[&str]| Line::Path(p.iter().map(|s| s.to_string()).collect());
+        assert_eq!(
+            row_lines(&app, &manager, "Swirl.dll", &[]),
+            [
+                path(&["Effects", "Plugins", "Distort", "Swirl"]),
+                Line::Text("Open and Save: .xyz (XYZ)".into()),
+            ]
+        );
+        let text = |s: &str| Line::Text(s.into());
+        assert_eq!(
+            row_lines(&app, &manager, "Overlap.dll", &[]),
+            [
+                text(".psd, .psb use paint.rs's own reader and writer, not PS's."),
+                text("Open: .qq (QQ)"),
+                // paint.rs reads HEIC but cannot write it, so the plug-in saves it.
+                text("Save: .qq, .heic (QQ)"),
+                text(".heic uses paint.rs's own reader, not QQ's."),
+                text(".png uses paint.rs's own writer, not QQ's."),
+            ]
+        );
+        assert_eq!(
+            row_lines(&app, &manager, "Helper.dll", &[]),
+            [Line::Text(
+                "Loaded, but it adds no effects or file formats.".into()
+            )]
+        );
+        let failed = [(
+            "Bad.dll".to_string(),
+            "it needs a newer Paint.NET".to_string(),
+        )];
+        assert_eq!(
+            row_lines(&app, &manager, "Bad.dll", &failed),
+            [Line::Text(
+                "Did not load: it needs a newer Paint.NET".into()
+            )]
+        );
+        // One that loaded in part lists the effects it added, then why the others did not load.
+        let partly = [(
+            "Swirl.dll".to_string(),
+            "Some of its effects did not load. Twirl: dialog".to_string(),
+        )];
+        assert_eq!(
+            row_lines(&app, &manager, "Swirl.dll", &partly),
+            [
+                path(&["Effects", "Plugins", "Distort", "Swirl"]),
+                Line::Text("Open and Save: .xyz (XYZ)".into()),
+                text("Some of its effects did not load. Twirl: dialog"),
+            ]
+        );
+        assert!(row_lines(&app, &manager, "Swirl.dlc", &[]).is_empty());
+        // The new manager is still loading its store: a plug-in the host has not answered for says so.
+        assert!(manager.busy());
+        assert_eq!(
+            row_lines(&app, &manager, "Pending.dll", &[]),
+            [Line::Text("Loading…".into())]
+        );
+    }
+
+    /// An Always allow answer is remembered in the prefs, comes back at the next start, and is listed (revocable)
+    /// under its plug-in's row.
+    #[test]
+    fn an_always_allow_is_remembered_and_listed() {
+        use crate::dialogs::settings::plugins::{Line, row_lines};
+        use pdn_core::effect::permission::{self, Grant};
+        #[cfg(not(target_arch = "wasm32"))]
+        let _host = host_lock();
+        let request = Request {
+            plugin: "Remembered.dll".into(),
+            grant: Grant {
+                category: "processes".into(),
+                target: "notepad.exe".into(),
+            },
+            ..Default::default()
+        };
+        let mut prefs = crate::prefs::Prefs::default();
+        answer_permission(&request, "always", &mut prefs);
+        permission::with(|p| p.revoke("Remembered.dll", &request.grant));
+        load_permissions(&prefs);
+        let manager = PluginManager::new(PluginStore::memory());
+        let app = pdn_core::app::AppWorkspace::default();
+        let lines = row_lines(&app, &manager, "Remembered.dll", &[]);
+        assert_eq!(lines.last(), Some(&Line::Grant(request.grant.clone())));
+        assert_eq!(request.grant.wants(), "run notepad.exe");
+        permission::with(|p| p.revoke("Remembered.dll", &request.grant));
+        remember_permissions(&mut prefs);
+        load_permissions(&prefs);
+        assert!(permission::with(|p| p
+            .always_of("Remembered.dll")
+            .is_empty()));
+    }
+
+    /// The Installed list is by name, case-insensitively, after installs and after the next start.
+    #[test]
+    fn installed_list_is_sorted_by_name() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _host = host_lock();
+        let store = PluginStore::memory();
+        let mut m = PluginManager::new(store.clone());
+        m.poll();
+        for name in ["b.dll", "C.dll", "a.dll"] {
+            m.install(name, b"MZ fake assembly");
+        }
+        while m.busy() {
+            m.poll();
+        }
+        assert_eq!(m.items, ["a.dll", "b.dll", "C.dll"]);
+        let mut again = PluginManager::new(store);
+        while again.busy() {
+            again.poll();
+        }
+        assert_eq!(again.items, ["a.dll", "b.dll", "C.dll"]);
     }
 
     /// A batch of installs (a pack's .zip) reloads the plug-ins once, not once per file.

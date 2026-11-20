@@ -1,6 +1,6 @@
 // More of Paint.NET's own Direct2D effects (PaintDotNet.Direct2D1.Effects in PaintDotNet.Windows.Framework) that GPU
 // plug-ins build on (Koh's, Median Sketch), composed from Direct2D built-ins as CustomEffects.cs's are: the meaning,
-// not genuine's shaders. Enum values are genuine's.
+// not genuine's shaders, except RandomNoiseEffect, which runs Paint.NET's own (PdnShaders). Enum values are genuine's.
 using System;
 using System.Collections.Generic;
 using PaintDotNet.Imaging;
@@ -361,26 +361,20 @@ namespace PaintDotNet.Direct2D1.Effects
         }
     }
 
-    /// An endless image whose every channel is a random value between MinValue and MaxValue, from Seed; Straight
-    /// values are premultiplied. ponytail: the noise is a 256×256 tile at 8 bits a channel, repeated by a wrapping
-    /// border; give it a per-pixel hash shader if the repetition or the 256 levels show.
+    /// An endless image of Paint.NET's noise (PcgNoiseShader): per pixel and channel a value between MinValue and
+    /// MaxValue (taken channel by channel as the lower and the higher), from Seed and the pixel's scene position.
+    /// The values are premultiplied in Premultiplied mode unless the alpha range is opaque; Straight keeps them as made.
     public sealed class RandomNoiseEffect : ComposedEffect<RandomNoiseEffect.Props>
     {
-        private const int Tile = 256;
-        private readonly IDeviceEffect border, scale, premultiply;
-        private IDeviceImage? tile;
-        private uint seed, tileSeed;
+        private readonly IDeviceEffect noise, premultiply;
+        private uint seed;
         private ColorRgba128Float min = new(0, 0, 0, 0), max = new(1, 1, 1, 1);
         private bool straight;
 
         public RandomNoiseEffect(IDeviceEffectFactory factory) : base(factory, 0)
         {
-            border = Node(Clsid.D2D1Border);
-            Set(border, 0, DeviceEffectPropertyType.Enum, (int)BorderEdgeMode2.Wrap);
-            Set(border, 1, DeviceEffectPropertyType.Enum, (int)BorderEdgeMode2.Wrap);
-            scale = RawMatrix(Matrix5x4Float.Identity);
-            scale.SetInput(0, border);
-            premultiply = Node(Clsid.D2D1Premultiply, scale);
+            noise = Node(PdnShaders.Register<PcgNoiseShader>(EffectFactory));
+            premultiply = Node(Clsid.D2D1Premultiply, noise);
             Rewire();
         }
 
@@ -408,26 +402,18 @@ namespace PaintDotNet.Direct2D1.Effects
 
         protected override void Rewire()
         {
-            if (tile is null || tileSeed != seed)
+            ReadOnlySpan<float> a = [min.R, min.G, min.B, min.A], b = [max.R, max.G, max.B, max.A];
+            Span<float> cb = stackalloc float[12];   // seed, (pad), low 16, delta 32
+            cb[0] = BitConverter.UInt32BitsToSingle(seed);
+            for (int k = 0; k < 4; k++)
             {
-                var noise = new ManagedBitmap<ColorBgra32>(Tile, Tile);
-                new Random((int)seed).NextBytes(noise.Pixels);
-                IDeviceImage? old = tile;
-                tile = ((IDeviceContext)EffectFactory).CreateImageFromBitmap(noise, BitmapImageOptions.UseStraightAlpha);
-                tileSeed = seed;
-                border.SetInput(0, tile);
-                old?.Dispose();
+                float low = Math.Min(a[k], b[k]);
+                cb[4 + k] = low;
+                cb[8 + k] = Math.Max(a[k], b[k]) - low;
             }
-            // Each stored byte n/255 becomes min + (max - min)·n/255 (the matrix maps B,G,R,A as the tile stores them).
-            Set(scale, 0, DeviceEffectPropertyType.Matrix5x4Float, new Matrix5x4Float(
-                max.R - min.R, 0, 0, 0, 0, max.G - min.G, 0, 0, 0, 0, max.B - min.B, 0, 0, 0, 0, max.A - min.A, min.R, min.G, min.B, min.A));
-            SetTail(straight ? premultiply : scale);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) tile?.Dispose();
-            base.Dispose(disposing);
+            ((IPropertySink)noise).SetPropertyBytes(0, DeviceEffectPropertyType.Blob, System.Runtime.InteropServices.MemoryMarshal.AsBytes(cb));
+            bool opaque = Math.Min(min.A, max.A) == 1 && Math.Max(min.A, max.A) == 1;
+            SetTail(straight || opaque ? noise : premultiply);
         }
 
         public sealed class Props : DeviceEffectProperties
@@ -456,15 +442,40 @@ namespace PaintDotNet.Direct2D1.Effects
         public sealed class Props : DeviceEffectProperties { }
     }
 
-    /// Its input, unchanged.
+    /// Its input, unchanged. Paint.NET's flag is the node's Cached property (D2D1_PROPERTY_CACHED): cached, the input goes
+    /// through a passthrough node whose output Direct2D keeps, so the effects after it sample that realized image, as
+    /// they do in Paint.NET; not cached, the input itself.
     public sealed class PassthroughEffect : ComposedEffect<PassthroughEffect.Props>
     {
-        public PassthroughEffect(IDeviceEffectFactory factory) : base(factory, 1) => Rewire();
+        private const int CachedIndex = unchecked((int)0x80000006);
+        private readonly IDeviceEffect node;
+        private bool cached;
 
-        /// ponytail: the flag (whether genuine's pass may be optimized away) changes nothing here.
-        public PassthroughEffect(IDeviceEffectFactory factory, IDeviceImage? input, bool optimizable) : this(factory) => Properties.Input.Set(input);
+        public PassthroughEffect(IDeviceEffectFactory factory) : base(factory, 1)
+        {
+            node = Node(PdnShaders.Register<PrecisionShader>(EffectFactory));
+            Rewire();
+        }
 
-        protected override void Rewire() => SetTail(InputImage(0));
+        public PassthroughEffect(IDeviceEffectFactory factory, IDeviceImage? input, bool cached) : this(factory)
+        {
+            Properties.Input.Set(input);
+            Properties.Cached.SetValue(cached);
+        }
+
+        protected override void Rewire()
+        {
+            node.SetInput(0, InputImage(0));
+            SetTail(cached ? node : InputImage(0));
+        }
+
+        protected override void OnSetProperty<T>(int index, in T value)
+        {
+            if (index != CachedIndex) return;
+            cached = Convert.ToBoolean(value);
+            ((IPropertySink)node).SetProperty(CachedIndex, DeviceEffectPropertyType.Boolean, cached);
+            Rewire();
+        }
 
         public sealed class Props : DeviceEffectProperties
         {
@@ -567,7 +578,7 @@ namespace PaintDotNet.Direct2D1.Effects
     public sealed class HistogramEffect2 : ComposedEffect<HistogramEffect2.Props>, IAnalysisEffect, IAnalysisRunner, IPropertySource
     {
         private int binCount = 256;
-        private bool straight;
+        private bool premultiplied = true;
         private IHistogramData? output;
 
         public HistogramEffect2(IDeviceEffectFactory factory) : base(factory, 1) => Rewire();
@@ -585,26 +596,24 @@ namespace PaintDotNet.Direct2D1.Effects
         protected override void OnSetProperty<T>(int index, in T value)
         {
             if (index == 0) binCount = Math.Max(1, Int(value));
-            else if (index == 1) straight = Int(value) == (int)HistogramAlphaMode2.Straight;
+            else if (index == 1) premultiplied = Int(value) == (int)HistogramAlphaMode2.Premultiplied;
         }
 
         void IAnalysisRunner.RunAnalysis(IDeviceContext dc)
         {
+            // Paint.NET's binning, established by probing it: each channel's float value (straight colour when the
+            // input is premultiplied) goes to bin round-half-even(v * (BinCount - 1)), clamped to the bins.
             var bins = new Vector4Int64[binCount];
-            foreach (ColorBgra32 p in AnalysisPixels.Of(dc, InputImage(0)))
+            int Bin(float v) => float.IsNaN(v) ? 0 : (int)Math.Clamp(MathF.Round(v * (binCount - 1), MidpointRounding.ToEven), 0, binCount - 1);
+            ReadOnlySpan<float> px = AnalysisPixels.RenderFloat(dc, InputImage(0)).Pixels;
+            for (int i = 0; i + 3 < px.Length; i += 4)
             {
-                ColorBgra32 c = straight ? UnPremultiplied(p) : p;
-                int Bin(byte v) => Math.Min(binCount - 1, v * binCount / 256);
-                bins[Bin(c.R)].X++; bins[Bin(c.G)].Y++; bins[Bin(c.B)].Z++; bins[Bin(c.A)].W++;
+                float r = px[i], g = px[i + 1], b = px[i + 2], a = px[i + 3];
+                if (premultiplied)
+                    (r, g, b) = a != 0 ? (r / a, g / a, b / a) : (0, 0, 0);
+                bins[Bin(r)].X++; bins[Bin(g)].Y++; bins[Bin(b)].Z++; bins[Bin(a)].W++;
             }
             output = new Data(bins);
-        }
-
-        private static ColorBgra32 UnPremultiplied(ColorBgra32 c)
-        {
-            if (c.A is 0 or 255) return c;
-            byte U(byte v) => (byte)Math.Min(255, (v * 255 + c.A / 2) / c.A);
-            return ColorBgra32.FromBgra(U(c.B), U(c.G), U(c.R), c.A);
         }
 
         bool IPropertySource.TryGetProperty<T>(int index, out T value)
@@ -687,6 +696,17 @@ namespace PaintDotNet.Direct2D1.Effects
         }
 
         internal static ColorBgra32[] Of(IDeviceContext dc, IDeviceImage? input) => Render(dc, input).Pixels;
+
+        /// The same render as Render, as premultiplied Float32 RGBA (four floats per pixel).
+        internal static (float[] Pixels, SizeInt32 Size) RenderFloat(IDeviceContext dc, IDeviceImage? input)
+        {
+            if (input is null) return ([], default);
+            RectFloat bounds = ((DeviceContextImpl)dc).GetImageLocalBounds(input);
+            int w = (int)Math.Clamp(MathF.Ceiling(bounds.Right), 0, 4096), h = (int)Math.Clamp(MathF.Ceiling(bounds.Bottom), 0, 4096);
+            if (w == 0 || h == 0) return ([], default);
+            byte[] bytes = ((DeviceContextImpl)dc).RenderToPixels(input, new SizeInt32(w, h), D2D.FormatR32G32B32A32Float);
+            return (System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(bytes).ToArray(), new SizeInt32(w, h));
+        }
     }
 
     /// Each channel the given percentile (50: the median) of its values in a square window of the given radius. Direct2D
@@ -772,40 +792,74 @@ namespace PaintDotNet.Direct2D1.Effects
         }
     }
 
-    /// Each channel through its lookup table (values spread evenly from 0 to 1), as Direct2D's table transfer does.
-    /// ponytail: both alpha modes run Direct2D's, which works on straight colour.
+    /// Each channel through its lookup table as Paint.NET samples it (TableTransfer2Shader, PdnShaders.cs): tables are
+    /// textures of their own length, read at 1/256 weights; a disabled channel passes through, ClampOutput saturates, and
+    /// Premultiplied divides colour by alpha before the tables and by the new alpha after. Properties as Paint.NET's: the
+    /// tables and their Disable flags alternate (0-7), then ClampOutput (8) and AlphaMode (9).
     public sealed class TableTransferEffect2 : ComposedEffect<TableTransferEffect2.Props>
     {
-        private readonly IDeviceEffect table;
+        private readonly IDeviceEffect shader;
+        private readonly int[] sizes = { 2, 2, 2, 2 };
+        private readonly bool[] disabled = new bool[4];
+        private bool clampOutput;
+        private TableTransferAlphaMode2 alphaMode = TableTransferAlphaMode2.Premultiplied;
 
         public TableTransferEffect2(IDeviceEffectFactory factory) : base(factory, 1)
         {
-            table = Node(Clsid.D2D1TableTransfer);
+            shader = Node(PdnShaders.Register<TableTransfer2Shader>(EffectFactory));
+            for (int c = 0; c < 4; c++)
+                PdnShaders.SetResourceTexture1D(shader, c, (ReadOnlySpan<float>)[0f, 1f]);
             Rewire();
         }
 
         protected override void Rewire()
         {
-            table.SetInput(0, InputImage(0));
-            SetTail(table);
+            shader.SetInput(0, InputImage(0));
+            Span<int> cb = stackalloc int[16];
+            for (int c = 0; c < 4; c++)
+            {
+                cb[c] = sizes[c];
+                cb[4 + c] = (sizes[c] & (sizes[c] - 1)) == 0 ? 1 : 0;
+                cb[8 + c] = disabled[c] ? 1 : 0;
+            }
+            cb[12] = alphaMode == TableTransferAlphaMode2.Premultiplied ? 1 : 0;
+            cb[13] = clampOutput ? 1 : 0;
+            ((IPropertySink)shader).SetPropertyBytes((int)ComputeSharp.D2D1.Interop.D2D1PixelShaderEffectProperty.ConstantBuffer,
+                DeviceEffectPropertyType.Blob, System.Runtime.InteropServices.MemoryMarshal.AsBytes(cb));
+            SetTail(shader);
         }
 
         protected override void OnSetProperty<T>(int index, in T value)
         {
-            if (index > 3 || value is not IReadOnlyList<float> list) return;
-            float[] values = list as float[] ?? [.. list];
-            ((IPropertySink)table).SetPropertyBytes(2 * index, DeviceEffectPropertyType.Blob,
-                System.Runtime.InteropServices.MemoryMarshal.AsBytes(values.AsSpan()));
+            switch (index)
+            {
+                case 0 or 2 or 4 or 6 when value is IReadOnlyList<float> list && list.Count > 0:
+                    // ponytail: Paint.NET's texture fails past 16384 entries (Direct3D's 1-D limit); longer tables load here.
+                    float[] table = list as float[] ?? [.. list];
+                    sizes[index / 2] = table.Length;
+                    PdnShaders.SetResourceTexture1D(shader, index / 2, table);
+                    break;
+                case 1 or 3 or 5 or 7: disabled[index / 2] = Convert.ToBoolean(value); break;
+                case 8: clampOutput = Convert.ToBoolean(value); break;
+                case 9: alphaMode = (TableTransferAlphaMode2)Int(value); break;
+                default: return;
+            }
+            Rewire();
         }
 
         public sealed class Props : DeviceEffectProperties
         {
             public EffectInputAccessor Input => GetInput(0);
             public EffectPropertyAccessor<IReadOnlyList<float>> RedTable => GetProperty<IReadOnlyList<float>>(0, DeviceEffectPropertyType.Blob);
-            public EffectPropertyAccessor<IReadOnlyList<float>> GreenTable => GetProperty<IReadOnlyList<float>>(1, DeviceEffectPropertyType.Blob);
-            public EffectPropertyAccessor<IReadOnlyList<float>> BlueTable => GetProperty<IReadOnlyList<float>>(2, DeviceEffectPropertyType.Blob);
-            public EffectPropertyAccessor<IReadOnlyList<float>> AlphaTable => GetProperty<IReadOnlyList<float>>(3, DeviceEffectPropertyType.Blob);
-            public EffectPropertyAccessor<TableTransferAlphaMode2> AlphaMode => GetProperty<TableTransferAlphaMode2>(4, DeviceEffectPropertyType.Enum);
+            public EffectPropertyAccessor<bool> RedDisable => GetProperty<bool>(1, DeviceEffectPropertyType.Boolean);
+            public EffectPropertyAccessor<IReadOnlyList<float>> GreenTable => GetProperty<IReadOnlyList<float>>(2, DeviceEffectPropertyType.Blob);
+            public EffectPropertyAccessor<bool> GreenDisable => GetProperty<bool>(3, DeviceEffectPropertyType.Boolean);
+            public EffectPropertyAccessor<IReadOnlyList<float>> BlueTable => GetProperty<IReadOnlyList<float>>(4, DeviceEffectPropertyType.Blob);
+            public EffectPropertyAccessor<bool> BlueDisable => GetProperty<bool>(5, DeviceEffectPropertyType.Boolean);
+            public EffectPropertyAccessor<IReadOnlyList<float>> AlphaTable => GetProperty<IReadOnlyList<float>>(6, DeviceEffectPropertyType.Blob);
+            public EffectPropertyAccessor<bool> AlphaDisable => GetProperty<bool>(7, DeviceEffectPropertyType.Boolean);
+            public EffectPropertyAccessor<bool> ClampOutput => GetProperty<bool>(8, DeviceEffectPropertyType.Boolean);
+            public EffectPropertyAccessor<TableTransferAlphaMode2> AlphaMode => GetProperty<TableTransferAlphaMode2>(9, DeviceEffectPropertyType.Enum);
         }
     }
 }

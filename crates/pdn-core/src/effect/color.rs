@@ -2,11 +2,12 @@
 //! Port of: js/src/engine/document/effect/BitmapEffectEngine.js (`EFFECTS.quantizeEffect`: id,
 //! icon and control keys only).
 
-use super::{Category, Control, EffectDef, EffectEnv, EffectKind, Values, num, range};
+use super::{Category, Control, EffectDef, EffectEnv, EffectKind, Values, choice, num, range};
 use crate::canvas::ImageData;
 use crate::pixel::Px;
 use crate::util::quantize::{
-    AlphaMixture, PaletteMap, analyze, flatten_alpha, map_indices, octree_palette, palette_table,
+    AlphaMixture, PaletteMap, analyze, flatten_alpha, map_indices, median_cut_palette,
+    octree_palette, palette_table,
 };
 
 /// The Color submenu (§2.0 row): paintdotjs id, icon and labels; Paint.NET choices and ranges (R19).
@@ -36,8 +37,9 @@ pub fn effects() -> Vec<EffectDef> {
     }]
 }
 
-/// §2.4 on the whole 8-bit layer: the lossless palette when it fits, else the Octree (with the
-/// last slot reserved for #00000000 when transparency is on); the alpha flatten; the proximity map
+/// §2.4 on the whole 8-bit layer: the lossless palette when it fits, else the Octree or WIC's
+/// Median Cut (with the last slot reserved for #00000000 when transparency is on); the alpha
+/// flatten; the proximity map
 /// and integer Floyd–Steinberg from row 0; indices expanded through the palette.
 fn quantize(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
     if src.data.is_empty() {
@@ -58,8 +60,11 @@ fn quantize(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
         .collect();
     let palette: Vec<Px> = match analysis.palette {
         Some(lossless) if lossless.len() <= colors => palette_table(&lossless),
+        // Paint.NET hands WIC the layer as it is, before the alpha flatten.
+        _ if choice(v, "algorithm") == "medianCut" => {
+            median_cut_palette(&src.data, colors, transparency)
+        }
         _ => {
-            // approximation: WIC Median Cut is unpublished (effects-1.md §6 item 7; B-E7)
             let mut p: Vec<Px> = octree_palette(&pre, colors - transparency as usize)
                 .into_iter()
                 .map(|[r, g, b]| [r, g, b, 255])
@@ -82,6 +87,7 @@ fn quantize(src: &ImageData, v: &Values, _: &EffectEnv) -> ImageData {
 #[cfg(test)]
 mod tests {
     use crate::effect::test_util::{from_fn, px, run};
+    use crate::util::quantize::{flatten_alpha, median_cut_palette};
     use serde_json::json;
 
     /// effects-1.md §5 Task 40 Quantize.
@@ -159,15 +165,49 @@ mod tests {
         );
     }
 
-    /// effects-1.md §6 item 7: WIC Median Cut is unpublished, so it runs the Octree (B-E7).
+    /// Median Cut is WIC's: three greys cut to two colours give its two boxes' colours, 3A7B7B and
+    /// BD7B7B (native WIC's palette for these pixels), not the Octree's.
     #[test]
-    fn quantize_median_cut_falls_back_to_octree() {
+    fn quantize_median_cut_is_wics() {
+        let (k, g, w) = ([0, 0, 0, 255], [128, 128, 128, 255], [255; 4]);
+        let src = from_fn(5, 1, |x, _| [k, k, k, g, w][x as usize]);
+        let q = |a: &str| {
+            let v = json!({"algorithm": a, "colors": 2, "dithering": 0});
+            run("quantizeEffect", v, &src).data
+        };
+        let (lo, hi) = ([0x3A, 0x7B, 0x7B, 255], [0xBD, 0x7B, 0x7B, 255]);
+        assert_eq!(q("medianCut"), [lo, lo, lo, hi, hi].concat());
+        assert_ne!(q("octree"), q("medianCut"));
+    }
+
+    /// Paint.NET's Quantize hands WIC the layer before the alpha flatten, so a transparent pixel's
+    /// hidden colour counts in Median Cut's palette; the output still flattens it to #00000000.
+    #[test]
+    fn quantize_median_cut_reads_the_layer_before_the_flatten() {
         let img = from_fn(16, 16, |x, y| {
-            [(x * 16) as u8, (y * 16) as u8, ((x + y) * 8) as u8, 255]
+            let a = if (x + y) % 3 == 0 { 0 } else { 255 };
+            [(x * 16) as u8, (y * 16) as u8, ((x + y) * 8) as u8, a]
         });
-        let q = |a: &str| run("quantizeEffect", json!({"algorithm": a, "colors": 5}), &img).data;
-        assert_eq!(q("medianCut"), q("octree"));
-        assert_ne!(q("octree"), img.data);
+        let flat: Vec<u8> = img
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&p| flatten_alpha(p, 128))
+            .collect();
+        let raw = median_cut_palette(&img.data, 6, true);
+        assert_ne!(raw, median_cut_palette(&flat, 6, true));
+        let v = json!({"algorithm": "medianCut", "colors": 6, "dithering": 0});
+        let out = run("quantizeEffect", v, &img).data;
+        for (o, i) in out
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(img.data.as_chunks::<4>().0)
+        {
+            assert!(raw.contains(o), "{o:?}");
+            assert_eq!(o[3] == 0, i[3] == 0);
+        }
     }
 
     /// Out-of-range values clamp to the control ranges. On this 512-colour image Colors 0 would

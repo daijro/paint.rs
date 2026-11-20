@@ -8,6 +8,8 @@
     <ProjectReference Include="../Primitives/Primitives.csproj" />
     <ProjectReference Include="../Windows/Windows.csproj" />
     <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+    <!-- So Forwards.cs can forward ManagedColor / ManagedColorExtensions to PaintDotNet.Core. -->
+    <ProjectReference Include="../Core/Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="PaintDotNet.Windows.Framework" />

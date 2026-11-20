@@ -47,8 +47,8 @@ namespace System.Drawing
         public float Width { get; set; }
         public LineCap StartCap { get; set; }
         public LineCap EndCap { get; set; }
-        public CustomLineCap CustomStartCap { get => throw Unsupported.Member("System.Drawing.Pen.CustomStartCap"); set { } }
-        public CustomLineCap CustomEndCap { get => throw Unsupported.Member("System.Drawing.Pen.CustomEndCap"); set { } }
+        public CustomLineCap CustomStartCap { get; set; }
+        public CustomLineCap CustomEndCap { get; set; }
         public DashCap DashCap { get; set; }
         public LineJoin LineJoin { get; set; }
         public float MiterLimit { get; set; } = 10;
@@ -78,7 +78,8 @@ namespace System.Drawing
 
         public object Clone() => new Pen((Brush)brush.Clone(), Width)
         {
-            StartCap = StartCap, EndCap = EndCap, DashCap = DashCap, LineJoin = LineJoin, MiterLimit = MiterLimit,
+            StartCap = StartCap, EndCap = EndCap, CustomStartCap = CustomStartCap, CustomEndCap = CustomEndCap,
+            DashCap = DashCap, LineJoin = LineJoin, MiterLimit = MiterLimit,
             Alignment = Alignment, dashStyle = dashStyle, dashPattern = dashPattern, DashOffset = DashOffset,
         };
         public void Dispose() { }

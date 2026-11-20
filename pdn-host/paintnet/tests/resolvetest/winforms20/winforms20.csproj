@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Reference only: an assembly named as .NET Framework 2.0's System.Windows.Forms, holding the one enum
+       ResolveTest uses, so ResolveTest references WinForms 2.0.0.0 as Simon Brown's SBCommon does. Never deployed:
+       at run time the host's own WinForms stand-in answers the reference. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>System.Windows.Forms</AssemblyName>
+    <Version>2.0.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+</Project>

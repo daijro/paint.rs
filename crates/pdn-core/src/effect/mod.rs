@@ -16,6 +16,7 @@ pub mod mix;
 pub mod noise;
 pub mod object;
 pub mod perlin;
+pub mod permission;
 pub mod photo;
 pub mod render;
 pub mod rng;
@@ -397,27 +398,26 @@ pub enum Control {
         items: &'static [&'static str],
         default: i64,
     },
-    /// A plug-in window's curve editor (pyrochild's Curves+): the value is its points, a list per channel of
-    /// `[x, y]` from 0 to `max`. `by`, when set, is the choice whose value picks its channels from `sets`
-    /// (Curves+'s mode); else they are `own`'s.
-    PluginCurve {
+    /// A plug-in window's own custom-drawn control (pyrochild's Liquify brush): paint.rs shows what it draws and
+    /// sends it the pointer and keys, through the window the host keeps open while the dialog is
+    /// (`dotnet::Canvas`). `width` × `height` is its size in the window's pixels. Its value stays `[]`: the open
+    /// window holds what the input did, and the effect renders with its token.
+    PluginCanvas {
         key: &'static str,
         label: &'static str,
-        max: i64,
-        own: CurveChannels,
-        by: Option<&'static str>,
-        sets: &'static [CurveChannels],
+        width: u32,
+        height: u32,
     },
-    /// A plug-in window's displacement grid (pyrochild's Grid Warp): `columns` × `rows` cells over the image, its
-    /// value the nodes moved, `[x, y, dx, dy]` each, in cells. `columns_by`/`rows_by`, when set, are the choices
-    /// whose labels give the size instead ([`grid_size`]).
-    PluginGrid {
+    /// A plug-in window's code editor (BoltBait's CodeLab script box): paint.rs edits the window's text through the
+    /// window the host keeps open (`dotnet::Canvas`, as for a canvas). The value is the window's own, as the host
+    /// reads it back: `{"text", "sel": [start, end], "readOnly", "dirty", "errors": [[line, column, length,
+    /// message], ...]}` (positions in UTF-16 code units, as .NET counts them); `Null` until the window is read.
+    /// `width` × `height` is its size in the window's pixels.
+    PluginCode {
         key: &'static str,
         label: &'static str,
-        columns: u32,
-        rows: u32,
-        columns_by: Option<&'static str>,
-        rows_by: Option<&'static str>,
+        width: u32,
+        height: u32,
     },
     /// A pan (offset) control; the value is `[x, y]`.
     Pan {
@@ -429,55 +429,6 @@ pub enum Control {
         step: f64,
         thumb: PanThumb,
     },
-}
-
-/// A plug-in curve's channels: their names, colours (none: the editor's own) and default points.
-#[derive(Clone, Debug)]
-pub struct CurveChannels {
-    pub names: &'static [&'static str],
-    pub colors: &'static [Option<[u8; 3]>],
-    pub default: &'static Value,
-}
-
-/// The channels a `Control::PluginCurve` has with `values`: those its `by` choice picks, else its own.
-pub fn curve_channels<'a>(
-    own: &'a CurveChannels,
-    by: Option<&str>,
-    sets: &'a [CurveChannels],
-    values: &Values,
-) -> &'a CurveChannels {
-    by.and_then(|k| choice(values, k).parse::<usize>().ok())
-        .and_then(|i| sets.get(i))
-        .filter(|s| !s.names.is_empty())
-        .unwrap_or(own)
-}
-
-/// A `Control::PluginGrid`'s size in cells with `values`: a size its choice sets is that choice's label.
-pub fn grid_size(grid: &Control, controls: &[Control], values: &Values) -> (u32, u32) {
-    let Control::PluginGrid {
-        columns,
-        rows,
-        columns_by,
-        rows_by,
-        ..
-    } = grid
-    else {
-        return (1, 1);
-    };
-    let by = |key: Option<&str>, fallback: u32| {
-        key.and_then(|k| {
-            controls.iter().find_map(|c| match c {
-                Control::Select { key, choices, .. } if *key == k => choices
-                    .iter()
-                    .find(|(v, _)| *v == choice(values, k))
-                    .and_then(|(_, l)| l.trim().parse::<u32>().ok()),
-                _ => None,
-            })
-        })
-        .filter(|&n| n > 0)
-        .unwrap_or(fallback)
-    };
-    (by(*columns_by, *columns), by(*rows_by, *rows))
 }
 
 /// A range with step 1, linear, on the default track.
@@ -538,8 +489,8 @@ impl Control {
             | Self::File { key, .. }
             | Self::Button { key, .. }
             | Self::List { key, .. }
-            | Self::PluginCurve { key, .. }
-            | Self::PluginGrid { key, .. }
+            | Self::PluginCanvas { key, .. }
+            | Self::PluginCode { key, .. }
             | Self::Pan { key, .. } => key,
         }
     }
@@ -566,8 +517,8 @@ impl Control {
             Self::File { .. } => Value::from(""),
             Self::Button { .. } => Value::Null,
             Self::List { default, .. } => Value::from(*default),
-            Self::PluginCurve { own, .. } => own.default.clone(),
-            Self::PluginGrid { .. } => Value::Array(vec![]),
+            Self::PluginCanvas { .. } => Value::Array(vec![]),
+            Self::PluginCode { .. } => Value::Null,
             Self::Pan { default, .. } => Value::from(&default[..]),
         }
     }

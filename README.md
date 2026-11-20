@@ -179,37 +179,98 @@ yet, and how to write a WebAssembly plug-in.
 
 ## Download
 
-Builds for Linux (x86-64 and arm64, glibc or musl), Windows (x86-64 and arm64), macOS (Apple Silicon and
-Intel), FreeBSD and the web are on the [Releases](https://github.com/daijro/paint.rs/releases) page.
+Get paint.rs from the [Releases](https://github.com/daijro/paint.rs/releases) page. Find your system
+below to see which file to take. The names here leave out the `paint.rs-<version>-` that each
+one starts with.
 
-- The plain x86-64 downloads run on any x86-64 CPU. The `-avx2` ones are faster but need AVX2 (most
-  Intel Core CPUs since 2013 and AMD CPUs since 2015, but not every Pentium, Celeron or Atom). If
-  unsure, take the plain one.
-- On Linux, the `.AppImage` is the whole app in one file. Make it executable with `chmod +x` and
-  run it. It needs FUSE, which most desktops have. Without FUSE, run it with
-  `--appimage-extract-and-run`. The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04,
-  Debian 12, Fedora 36 or later).
-- On Alpine (3.22 or newer) and other musl systems, take the `-musl.tar.gz`. It needs libstdc++
-  (`apk add libstdc++`).
-- The FreeBSD `.tar.gz` runs on FreeBSD 14.4 or newer with an X11 or Wayland desktop.
-- For a launcher entry and the taskbar icon, use AppImageLauncher, or run the AppImage once with
-  `--appimage-extract` and then
-  `sh squashfs-root/usr/share/paint.rs/scripts/linux-install-desktop.sh /path/to/the.AppImage`.
-  You can delete `squashfs-root` after that.
-  From the `.tar.gz`, run `sh scripts/linux-install-desktop.sh ./paintrs` once.
-- The macOS and Windows builds are unsigned, so the system warns the first time you open them.
-  The macOS downloads need macOS 11 or newer.
-- Pen tablets paint with pressure on every platform. On a Wayland desktop with a pen plugged in,
-  the app opens its window through Xwayland, because Wayland gives a pen only to apps that speak
-  its tablet protocol. Started from a terminal, it prints which it chose and why. If the pen still
-  does nothing, start it with `PAINTRS_X11=1` to open through Xwayland anyway.
-  `PAINTRS_NATIVE_WAYLAND=1` keeps Wayland, where a pen can't paint.
-- In the Linux, Alpine and FreeBSD `.tar.gz` and the Windows `.zip`, keep `paintrs` beside its
-  `assets` folder. The fonts load from there.
-- If the Windows app doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach
-  that file when you report the problem. Setting the environment variable
-  `PAINTRS_RENDERER=software` makes it draw without the graphics card. If there is no log at all,
-  use the download without `-avx2`.
+| System | File |
+| --- | --- |
+| Windows on a PC | `windows-x86_64.zip` |
+| Windows on Arm | `windows-arm64.zip` |
+| Mac with Apple Silicon (M1 or later) | `macos-arm64.tar.gz` |
+| Mac with an Intel CPU | `macos-x86_64.tar.gz` |
+| Debian, Ubuntu and similar on a PC | `linux-x86_64.deb` |
+| Other Linux on a PC | `linux-x86_64.AppImage` or `linux-x86_64.tar.gz` |
+| Debian, Ubuntu and similar on Arm | `linux-aarch64.deb` |
+| Other Linux on Arm | `linux-aarch64.AppImage` or `linux-aarch64.tar.gz` |
+| Alpine and other musl systems | `linux-x86_64-musl.tar.gz` or `linux-aarch64-musl.tar.gz` |
+| FreeBSD | `freebsd-x86_64.tar.gz` |
+| A web browser | `paintrs-web-<version>.zip`, see [Web](#web) |
+
+### Plain or -avx2
+
+Some downloads also come in an `-avx2` version. It is faster, but it needs a CPU with AVX2. Most Intel
+Core CPUs since 2013 and AMD CPUs since 2015 have it, but not every Pentium, Celeron or Atom. If you
+are not sure, take the plain one.
+
+### Windows
+
+Unzip it and run `paintrs.exe`. Keep it next to its `assets` folder, because the fonts load from
+there.
+
+The build is unsigned, so Windows warns you the first time you open it.
+
+If it doesn't start, the reason is in `%LOCALAPPDATA%\paint.rs\startup.log`. Attach that file when
+you report the problem. Setting the environment variable `PAINTRS_RENDERER=software` makes it draw
+without the graphics card. If there is no log at all, try the download without `-avx2`.
+
+### macOS
+
+Unpack it and open `paint.rs.app`. It needs macOS 11 or newer.
+
+The build is unsigned, so macOS warns you the first time you open it.
+
+### Linux
+
+On Debian, Ubuntu and their derivatives, install the `.deb`. It also adds the launcher entry:
+
+```sh
+sudo apt install ./paint.rs-*.deb
+```
+
+On other distributions, take the `.AppImage`. It is the whole app in one file. Make it executable
+and run it:
+
+```sh
+chmod +x paint.rs-*.AppImage
+./paint.rs-*.AppImage
+```
+
+It needs FUSE, which most desktops have. Without FUSE, run it with `--appimage-extract-and-run`.
+The Linux downloads need glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36 or later).
+
+To get a launcher entry and a taskbar icon, use AppImageLauncher, or run this once and then delete
+`squashfs-root`:
+
+```sh
+./paint.rs-*.AppImage --appimage-extract
+sh squashfs-root/usr/share/paint.rs/scripts/linux-install-desktop.sh /path/to/the.AppImage
+```
+
+The `.tar.gz` has the same app as plain files. Keep `paintrs` next to its `assets` folder, and run
+`sh scripts/linux-install-desktop.sh ./paintrs` once for the launcher entry.
+
+### Alpine and other musl systems
+
+Take the `-musl.tar.gz`. It needs Alpine 3.22 or newer and libstdc++ (`apk add libstdc++`). Keep
+`paintrs` next to its `assets` folder.
+
+### FreeBSD
+
+The `.tar.gz` runs on FreeBSD 14.4 or newer with an X11 or Wayland desktop. Keep `paintrs` next to
+its `assets` folder.
+
+### Pen tablets
+
+Pens paint with pressure on every system.
+
+On a Wayland desktop with a pen plugged in, paint.rs opens through Xwayland, because Wayland only
+gives a pen to apps that support its tablet protocol. Started from a terminal, it prints which one it
+picked and why.
+
+If the pen still does nothing, start it with `PAINTRS_X11=1` to use Xwayland anyway.
+`PAINTRS_NATIVE_WAYLAND=1` keeps Wayland, but then the pen can't paint.
+
 
 ---
 
@@ -258,7 +319,11 @@ tools/web-dist.sh --zip    # also write a zip
 ```
 
 - The site works from any folder of a web server. Example configs for nginx, Caddy and Cloudflare
-  are in `deploy/`.
+  are in `deploy/`. Any server that sends files as they are works too, such as
+  `python3 -m http.server -d dist`.
+- The wasm files are in the site only gzipped (`.wasm.gz`; one over 25 MiB in parts, `.wasm.gz.0`,
+  `.1` and so on), and the page unzips them itself, so no file is over 25 MiB and the server needs no
+  gzip setup.
 - Serve it over HTTPS or localhost. Otherwise the clipboard won't work and the MobileSAM model is
   downloaded again each time it's picked.
 - `dist/models/` holds the MobileSAM model (41 MB). Browsers only fetch it when someone picks
@@ -277,7 +342,8 @@ tools/web-dist.sh --zip    # also write a zip
 | WebP, AVIF | Yes | Yes |
 | JPEG XL | Yes | Yes (lossless only on the web) |
 | DDS | Yes | Yes, uncompressed 32-bit |
-| HEIC / HEIF, JPEG XR | Yes | No |
+| JPEG XR | Yes | Yes |
+| HEIC / HEIF | Yes | No |
 | Photoshop (`.psd`, `.psb`), with its layers | Yes | Yes |
 
 Photoshop files open as Paint.NET's PSD plugin opens them: every layer with its name, opacity,

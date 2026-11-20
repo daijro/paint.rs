@@ -102,7 +102,7 @@ impl BatchExportDialog {
             .iter()
             .map(|ws| {
                 let own = ws.file_format.as_deref().and_then(|f| {
-                    save_image::formats().find(|i| i.id == f && !matches!(f, "heic" | "jxr"))
+                    save_image::formats().find(|i| i.id == f && pdn_core::io::encode::can_encode(f))
                 });
                 let format = own.map_or("png", |f| f.id);
                 let initial = own.map_or(serde_json::Value::Null, |_| ws.save_options.clone());

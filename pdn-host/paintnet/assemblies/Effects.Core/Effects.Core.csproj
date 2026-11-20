@@ -2,6 +2,8 @@
   <PropertyGroup>
     <AssemblyName>PaintDotNet.Effects.Core</AssemblyName>
     <RootNamespace>PaintDotNet.Effects</RootNamespace>
+    <!-- IBitmapEffectRenderer.Render takes a void* buffer, as in Paint.NET 5 (BitmapEffectHosting.cs). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Core/Core.csproj" />

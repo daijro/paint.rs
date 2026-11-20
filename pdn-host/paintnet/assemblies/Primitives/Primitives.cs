@@ -46,6 +46,7 @@ namespace PaintDotNet.Rendering
         public int Y { get; }
         public static Point2Int32 Zero => new Point2Int32(0, 0);
         public static implicit operator System.Drawing.Point(Point2Int32 p) => new System.Drawing.Point(p.X, p.Y);
+        public static implicit operator Point2Int32(System.Drawing.Point p) => new Point2Int32(p.X, p.Y);
         public static explicit operator System.Numerics.Vector2(Point2Int32 p) => new(p.X, p.Y);
         public static Point2Int32 operator -(Point2Int32 p) => new(-p.X, -p.Y);
         public static Point2Int32 operator +(Point2Int32 a, Point2Int32 b) => new(a.X + b.X, a.Y + b.Y);
@@ -58,18 +59,20 @@ namespace PaintDotNet.Rendering
         public override string ToString() => $"({X}, {Y})";
     }
 
-    public readonly struct RectInt32 : IEquatable<RectInt32>
+    public struct RectInt32 : IEquatable<RectInt32>
     {
         public RectInt32(int x, int y, int width, int height) { X = x; Y = y; Width = width; Height = height; }
         public RectInt32(int x, int y, SizeInt32 size) : this(x, y, size.Width, size.Height) { }
         public RectInt32(Point2Int32 location, SizeInt32 size) : this(location.X, location.Y, size.Width, size.Height) { }
         public RectInt32(Point2Int32 location, int width, int height) : this(location.X, location.Y, width, height) { }
-        public SizeInt32 Size => new(Width, Height);
+        public SizeInt32 Size { readonly get => new(Width, Height); set { Width = value.Width; Height = value.Height; } }
+        public static RectInt32 Offset(RectInt32 rect, Point2Int32 by) => new(rect.X + by.X, rect.Y + by.Y, rect.Width, rect.Height);
         public Point2Int32 TopLeft => new(Left, Top);
         public Point2Int32 TopRight => new(Right, Top);
         public Point2Int32 BottomLeft => new(Left, Bottom);
         public Point2Int32 BottomRight => new(Right, Bottom);
         public bool IsEmpty => Width == 0 || Height == 0;
+        public readonly bool HasPositiveArea => Width > 0 && Height > 0;
         public static RectInt32 Empty => default;
         public static RectInt32 FromEdges(int left, int top, int right, int bottom) => new(left, top, right - left, bottom - top);
         /// Where both overlap (Empty when they do not).
@@ -91,14 +94,14 @@ namespace PaintDotNet.Rendering
         public static bool operator ==(RectInt32 a, RectInt32 b) => a.Equals(b);
         public static bool operator !=(RectInt32 a, RectInt32 b) => !a.Equals(b);
         public override string ToString() => $"{X}, {Y}, {Width}, {Height}";
-        public int X { get; }
-        public int Y { get; }
-        public int Width { get; }
-        public int Height { get; }
-        public int Left => X;
-        public int Top => Y;
-        public int Right => X + Width;
-        public int Bottom => Y + Height;
+        public int X { readonly get; set; }
+        public int Y { readonly get; set; }
+        public int Width { readonly get; set; }
+        public int Height { readonly get; set; }
+        public readonly int Left => X;
+        public readonly int Top => Y;
+        public readonly int Right => X + Width;
+        public readonly int Bottom => Y + Height;
         public static implicit operator System.Drawing.Rectangle(RectInt32 r) => new(r.X, r.Y, r.Width, r.Height);
         public Point2Int32 Location => new(X, Y);
         public static RectInt32 Inflate(RectInt32 r, int dx, int dy) => new(r.X - dx, r.Y - dy, r.Width + 2 * dx, r.Height + 2 * dy);
@@ -137,6 +140,31 @@ namespace PaintDotNet.Rendering
             }
         }
 
+        /// Writes src over dst weighted by the alpha mask (0..255) -- a selection-masked overwrite; the three regions
+        /// share a size. ponytail: a linear per-channel blend by the mask, enough for the config preview; replace with
+        /// the exact kernel if a plug-in's output must match byte-for-byte.
+        public static unsafe void Overwrite(PaintDotNet.RegionPtr<PaintDotNet.Imaging.ColorBgra32> dst, PaintDotNet.RegionPtr<PaintDotNet.Imaging.ColorBgra32> src, PaintDotNet.RegionPtr<PaintDotNet.Imaging.ColorAlpha8> mask)
+        {
+            int h = Math.Min(dst.Height, Math.Min(src.Height, mask.Height));
+            int w = Math.Min(dst.Width, Math.Min(src.Width, mask.Width));
+            for (int y = 0; y < h; y++)
+            {
+                var d = (PaintDotNet.Imaging.ColorBgra32*)((byte*)dst.Ptr + (long)y * dst.Stride);
+                var s = (PaintDotNet.Imaging.ColorBgra32*)((byte*)src.Ptr + (long)y * src.Stride);
+                byte* m = (byte*)mask.Ptr + (long)y * mask.Stride;
+                for (int x = 0; x < w; x++)
+                {
+                    int cov = m[x];
+                    if (cov == 0) continue;
+                    if (cov == 255) { d[x] = s[x]; continue; }
+                    d[x].B = (byte)((s[x].B * cov + d[x].B * (255 - cov)) / 255);
+                    d[x].G = (byte)((s[x].G * cov + d[x].G * (255 - cov)) / 255);
+                    d[x].R = (byte)((s[x].R * cov + d[x].R * (255 - cov)) / 255);
+                    d[x].A = (byte)((s[x].A * cov + d[x].A * (255 - cov)) / 255);
+                }
+            }
+        }
+
         private static unsafe void Extract(PaintDotNet.RegionPtr<byte> dst, PaintDotNet.RegionPtr<uint> src, int channel)
         {
             if ((uint)channel > 3) throw new ArgumentOutOfRangeException(nameof(channel));
@@ -146,6 +174,54 @@ namespace PaintDotNet.Rendering
                 byte* s = (byte*)src.Ptr + (long)y * src.Stride + channel;
                 byte* d = dst.Ptr + (long)y * dst.Stride;
                 for (int x = 0; x < src.Width; x++) d[x] = s[x * 4];
+            }
+        }
+
+        /// One channel of each 32-bit XYZW pixel into dst, the channel by its byte index (0..3) as ExtractChannel
+        /// numbers it. Pulls a single plane out of a packed 32-bit image.
+        public static void ExtractChannelXyzw32(PaintDotNet.RegionPtr<byte> dst, PaintDotNet.RegionPtr<uint> src, int channelIndex)
+            => Extract(dst, src, channelIndex);
+
+        /// Swap the X and Z bytes of each 32-bit XYZW pixel (RGBA <-> BGRA), keeping Y and W. Reorders a packed channel
+        /// order into the host's.
+        public static unsafe void ConvertXyzw32ToZyxw32(PaintDotNet.RegionPtr<uint> dst, PaintDotNet.RegionPtr<uint> src)
+        {
+            int h = Math.Min(dst.Height, src.Height);
+            int w = Math.Min(dst.Width, src.Width);
+            for (int y = 0; y < h; y++)
+            {
+                uint* s = (uint*)((byte*)src.Ptr + (long)y * src.Stride);
+                uint* d = (uint*)((byte*)dst.Ptr + (long)y * dst.Stride);
+                for (int x = 0; x < w; x++)
+                {
+                    uint p = s[x];
+                    d[x] = (p & 0xFF00FF00u) | ((p & 0x000000FFu) << 16) | ((p >> 16) & 0x000000FFu);
+                }
+            }
+        }
+
+        /// Writes src beneath dst weighted by the alpha mask (0..255): dst stays on top where it is opaque, src shows
+        /// through where dst is masked-in and not already opaque. The three regions share a size. ponytail: a linear
+        /// per-channel blend weighted by the mask and dst's alpha, enough for the config preview; replace with the exact
+        /// kernel if a plug-in's output must match byte-for-byte.
+        public static unsafe void Underwrite(PaintDotNet.RegionPtr<PaintDotNet.Imaging.ColorBgra32> dst, PaintDotNet.RegionPtr<PaintDotNet.Imaging.ColorBgra32> src, PaintDotNet.RegionPtr<PaintDotNet.Imaging.ColorAlpha8> mask)
+        {
+            int h = Math.Min(dst.Height, Math.Min(src.Height, mask.Height));
+            int w = Math.Min(dst.Width, Math.Min(src.Width, mask.Width));
+            for (int y = 0; y < h; y++)
+            {
+                var d = (PaintDotNet.Imaging.ColorBgra32*)((byte*)dst.Ptr + (long)y * dst.Stride);
+                var s = (PaintDotNet.Imaging.ColorBgra32*)((byte*)src.Ptr + (long)y * src.Stride);
+                byte* m = (byte*)mask.Ptr + (long)y * mask.Stride;
+                for (int x = 0; x < w; x++)
+                {
+                    int cov = m[x] * (255 - d[x].A) / 255;
+                    if (cov == 0) continue;
+                    d[x].B = (byte)((d[x].B * (255 - cov) + s[x].B * cov) / 255);
+                    d[x].G = (byte)((d[x].G * (255 - cov) + s[x].G * cov) / 255);
+                    d[x].R = (byte)((d[x].R * (255 - cov) + s[x].R * cov) / 255);
+                    d[x].A = (byte)Math.Min(255, d[x].A + cov);
+                }
             }
         }
 
@@ -226,14 +302,21 @@ namespace PaintDotNet.Imaging
 {
     public enum PixelFormatNumericRepresentation { Unspecified, Indexed, UnsignedInteger, SignedInteger, Fixed, Float }
 
-    // The two members the plugins read off a pixel type (via (IPixelInfo)default(T)).
+    // The members the plugins read off a pixel type (via (IPixelInfo)default(T)). SupportsTransparency and BytesPerPixel
+    // are default implementations computed from the boxed value's own type, so every pixel struct answers them without
+    // its own copy: a type carries alpha when it has an A member, and its bytes-per-pixel is its marshalled size (these
+    // structs are laid out to the genuine pixel size).
     public interface IPixelInfo
     {
         PixelFormat PixelFormat { get; }
         PixelFormatNumericRepresentation NumericRepresentation { get; }
+        bool SupportsTransparency => GetType().GetMember("A").Length != 0;
     }
 
-    public interface INaturalPixelInfo : IPixelInfo { }
+    public interface INaturalPixelInfo : IPixelInfo
+    {
+        int BytesPerPixel => System.Runtime.InteropServices.Marshal.SizeOf(GetType());
+    }
 
     // Pixel-format identity, a WIC GUID (the AVIF saver's AsRegionPtr<T> compares the
     // lock's format against default(T)'s). Equality is by GUID.
@@ -280,6 +363,7 @@ namespace PaintDotNet.Imaging
         public byte R { readonly get => (byte)(Bgra >> 16); set => Bgra = (Bgra & 0xFF00FFFFu) | ((uint)value << 16); }
         public byte A { readonly get => (byte)(Bgra >> 24); set => Bgra = (Bgra & 0x00FFFFFFu) | ((uint)value << 24); }
         public static ColorBgra32 FromBgra(byte b, byte g, byte r, byte a) => new() { Bgra = b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24) };
+        public static ColorBgra32 FromUInt32(uint bgra) => new() { Bgra = bgra };
         public static implicit operator ColorBgra32(ColorGray8 c) => FromBgra(c.V, c.V, c.V, 255);
         readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Bgra32;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
@@ -296,6 +380,7 @@ namespace PaintDotNet.Imaging
         public byte G { readonly get => (byte)(Bgra >> 8);  set => Bgra = (Bgra & 0xFFFF00FFu) | ((uint)value << 8); }
         public byte R { readonly get => (byte)(Bgra >> 16); set => Bgra = (Bgra & 0xFF00FFFFu) | ((uint)value << 16); }
         public byte A { readonly get => (byte)(Bgra >> 24); set => Bgra = (Bgra & 0x00FFFFFFu) | ((uint)value << 24); }
+        public static ColorPbgra32 FromBgra(byte b, byte g, byte r, byte a) => new() { Bgra = b | ((uint)g << 8) | ((uint)r << 16) | ((uint)a << 24) };
         readonly PixelFormat IPixelInfo.PixelFormat => FormatGuid;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
@@ -322,7 +407,10 @@ namespace PaintDotNet.Imaging
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorRgba64 : INaturalPixelInfo
     {
-        public ushort R, G, B, A;
+        public ushort R { get; set; }
+        public ushort G { get; set; }
+        public ushort B { get; set; }
+        public ushort A { get; set; }
         readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgba64;
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
@@ -346,6 +434,8 @@ namespace PaintDotNet.Imaging
         public readonly ColorPrgba128Float ToPremultiplied() => new(R * A, G * A, B * A, A);
         public static implicit operator ColorRgba128Float(ColorBgra32 c) => new(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f);
         public static implicit operator ColorRgba128Float(ColorRgb96Float c) => new(c.R, c.G, c.B, 1);
+        public static implicit operator ColorRgba128Float(ColorRgb24 c) => new(c.R / 255f, c.G / 255f, c.B / 255f, 1);
+        public static implicit operator ColorRgba128Float(System.Drawing.Color c) => new(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f);
         public ColorRgba128Float(ColorRgb96Float rgb, float a) : this(rgb.R, rgb.G, rgb.B, a) { }
         public static explicit operator ColorRgba128Float(PaintDotNet.Rendering.Vector4Float v) => new(v.X, v.Y, v.Z, v.W);
         public static explicit operator PaintDotNet.Rendering.Vector4Float(ColorRgba128Float c) => new(c.R, c.G, c.B, c.A);
@@ -372,12 +462,25 @@ namespace PaintDotNet.Imaging
     // as a JIT type token. The host only materialises 8-bit BGRA, so these exist purely so
     // that dispatch loads; each carries the right element size and numeric kind.
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorRgb24 : INaturalPixelInfo { public byte R, G, B; readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgb24; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorRgb24 : INaturalPixelInfo
+    {
+        public ColorRgb24(byte r, byte g, byte b) { R = r; G = g; B = b; }
+        public byte R { readonly get; set; }
+        public byte G { readonly get; set; }
+        public byte B { readonly get; set; }
+        public static ColorRgb24 FromRgb(byte r, byte g, byte b) => new(r, g, b);
+        readonly PixelFormat IPixelInfo.PixelFormat => PixelFormats.Rgb24;
+        readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
+    }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorRgba32 : INaturalPixelInfo
     {
         public ColorRgba32(byte r, byte g, byte b, byte a) { R = r; G = g; B = b; A = a; }
         public static implicit operator ColorRgba32(ColorBgra32 c) => new() { R = c.R, G = c.G, B = c.B, A = c.A };
+        public static ColorRgba32 FromRgba(byte r, byte g, byte b, byte a) => new(r, g, b, a);
+        // Channels packed little-endian in the struct's sequential R,G,B,A order.
+        public static ColorRgba32 FromUInt32(uint rgba) => new((byte)rgba, (byte)(rgba >> 8), (byte)(rgba >> 16), (byte)(rgba >> 24));
+        public readonly uint Rgba => (uint)(R | (G << 8) | (B << 16) | (A << 24));
         public byte R { readonly get; set; }
         public byte G { readonly get; set; }
         public byte B { readonly get; set; }
@@ -390,13 +493,15 @@ namespace PaintDotNet.Imaging
         readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger;
     }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct ColorRgb48 : INaturalPixelInfo { public ushort R, G, B; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
+    public struct ColorRgb48 : INaturalPixelInfo { public ushort R { get; set; } public ushort G { get; set; } public ushort B { get; set; } readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.UnsignedInteger; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorRgb48Half : INaturalPixelInfo { public ushort R, G, B; readonly PixelFormat IPixelInfo.PixelFormat => default; readonly PixelFormatNumericRepresentation IPixelInfo.NumericRepresentation => PixelFormatNumericRepresentation.Float; }
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct ColorRgb96Float : INaturalPixelInfo
     {
-        public float R, G, B;
+        public float R { readonly get; set; }
+        public float G { readonly get; set; }
+        public float B { readonly get; set; }
         public ColorRgb96Float(float r, float g, float b) { R = r; G = g; B = b; }
         public static explicit operator ColorRgb96Float(System.Numerics.Vector3 v) => new(v.X, v.Y, v.Z);
         public static explicit operator System.Numerics.Vector3(ColorRgb96Float c) => new(c.R, c.G, c.B);
@@ -465,6 +570,7 @@ namespace PaintDotNet
         public bool IsEmpty => ptr == null || Width == 0 || Height == 0;
 
         public ref T this[int x, int y] => ref *(T*)((byte*)ptr + (long)y * Stride + (long)x * sizeof(T));
+        public ref T this[Point2Int32 point] => ref this[point.X, point.Y];
 
         public RegionRowPtrCollection<T> Rows => new RegionRowPtrCollection<T>(ptr, Width, Height, Stride);
 

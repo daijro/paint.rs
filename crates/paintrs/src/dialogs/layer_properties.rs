@@ -186,6 +186,9 @@ impl LayerPropertiesDialog {
                 self.drag = None;
             }
         }
+        // The wheel over the slider steps it as its number field's arrows do.
+        self.opacity =
+            (self.opacity + inputs::value_wheel(ui, response.id, range, None)).clamp(0.0, 255.0);
         let number = Rect::from_min_size(
             Pos2::new(x1 - num_w, y + (row_h - LAYER_PROPS_NUMBER_HEIGHT) / 2.0),
             Vec2::new(num_w, LAYER_PROPS_NUMBER_HEIGHT),

@@ -116,6 +116,21 @@ namespace PaintDotNet.Direct2D1
         public static BrushProperties Default => new(1f, Matrix3x2Float.Identity);
     }
 
+    public struct BitmapBrushProperties : IEquatable<BitmapBrushProperties>
+    {
+        public BitmapBrushProperties(ExtendMode extendModeX, ExtendMode extendModeY, InterpolationMode interpolationMode)
+        {
+            ExtendModeX = extendModeX; ExtendModeY = extendModeY; InterpolationMode = interpolationMode;
+        }
+        public ExtendMode ExtendModeX { readonly get; set; }
+        public ExtendMode ExtendModeY { readonly get; set; }
+        public InterpolationMode InterpolationMode { readonly get; set; }
+        public static BitmapBrushProperties Default => new(ExtendMode.Clamp, ExtendMode.Clamp, InterpolationMode.Linear);
+        public readonly bool Equals(BitmapBrushProperties other) => ExtendModeX == other.ExtendModeX && ExtendModeY == other.ExtendModeY && InterpolationMode == other.InterpolationMode;
+        public override readonly bool Equals(object? obj) => obj is BitmapBrushProperties o && Equals(o);
+        public override readonly int GetHashCode() => HashCode.Combine(ExtendModeX, ExtendModeY, InterpolationMode);
+    }
+
     public struct ImageBrushProperties
     {
         public ImageBrushProperties(RectFloat sourceRectangle, ExtendMode extendModeX, ExtendMode extendModeY, InterpolationMode interpolationMode)
@@ -176,7 +191,25 @@ namespace PaintDotNet.Direct2D1
         void Close();
     }
 
-    public interface IDeviceEffectProperties : IObjectRef, IDisposable, IIsDisposed { }
+    /// An effect's properties by index or name, as bytes of a Direct2D property type: ID2D1Properties for a native
+    /// effect. A composed stand-in effect takes writes (routed to its typed setters) but has nothing to read back.
+    public interface IDeviceEffectProperties : IObjectRef, IDisposable, IIsDisposed
+    {
+        int PropertyCount => EffectProperties.Count(this);
+        bool TryGetSubProperties(int index, out IDeviceEffectProperties? subProperties) => EffectProperties.TryGetSubProperties(this, index, out subProperties);
+        bool TryGetPropertyName(int index, out string? name) => EffectProperties.TryGetName(this, index, out name);
+        bool TryGetPropertyIndex(string name, out int index) => EffectProperties.TryGetIndex(this, name, out index);
+        bool TryGetPropertyType(int index, out DeviceEffectPropertyType type) => EffectProperties.TryGetType(this, index, out type);
+        bool TryGetValueSize(int index, out int size) => EffectProperties.TryGetSize(this, index, out size);
+        IObjectRef GetValueRef(int index, DeviceEffectPropertyType type, Type interfaceType) => EffectProperties.GetValueRef(this, index, type, interfaceType);
+        IObjectRef GetValueRefByName(string name, DeviceEffectPropertyType type, Type interfaceType) => GetValueRef(EffectProperties.IndexOf(this, name), type, interfaceType);
+        void GetValue(int index, DeviceEffectPropertyType type, Span<byte> data) => EffectProperties.GetValue(this, index, type, data);
+        void GetValueByName(string name, DeviceEffectPropertyType type, Span<byte> data) => GetValue(EffectProperties.IndexOf(this, name), type, data);
+        void SetValueRef(int index, DeviceEffectPropertyType type, IObjectRef valueRef) => EffectProperties.SetValueRef(this, index, type, valueRef);
+        void SetValueRefByName(string name, DeviceEffectPropertyType type, IObjectRef valueRef) => SetValueRef(EffectProperties.IndexOf(this, name), type, valueRef);
+        void SetValue(int index, DeviceEffectPropertyType type, ReadOnlySpan<byte> data) => EffectProperties.SetValue(this, index, type, data);
+        void SetValueByName(string name, DeviceEffectPropertyType type, ReadOnlySpan<byte> data) => SetValue(EffectProperties.IndexOf(this, name), type, data);
+    }
 
     public interface IDeviceEffect : IDeviceImage, IDeviceEffectProperties
     {
@@ -216,6 +249,9 @@ namespace PaintDotNet.Direct2D1
         IDeviceColorContext CreateColorContext(DeviceColorSpace colorSpace);
         /// A device colour context for a bitmap's colour space (its profile; none: sRGB).
         IDeviceColorContext CreateColorContext(PaintDotNet.Imaging.IColorContext colorContext);
+        /// A device colour context for a DXGI colour space. Inert default (the host has no device colour contexts).
+        IDeviceColorContext CreateColorContext(PaintDotNet.Dxgi.DxgiColorSpace colorSpace)
+            => throw new System.NotSupportedException();
     }
 
     public static class Direct2D1ObjectRefExtensions
@@ -225,9 +261,27 @@ namespace PaintDotNet.Direct2D1
         public static IDeviceImage CreateRef(this IDeviceImage image) => image.CreateRef<IDeviceImage>();
     }
 
+    /// A rectangle with rounded corners, as the rounded-rectangle draw and fill calls take.
+    public struct RoundedRect : IEquatable<RoundedRect>
+    {
+        public RectFloat Rect;
+        public float RadiusX;
+        public float RadiusY;
+        public RoundedRect(RectFloat rect, float radiusX, float radiusY) { Rect = rect; RadiusX = radiusX; RadiusY = radiusY; }
+        public RoundedRect(RectFloat rect, float radius) : this(rect, radius, radius) { }
+        public readonly bool Equals(RoundedRect other) => Rect.Equals(other.Rect) && RadiusX == other.RadiusX && RadiusY == other.RadiusY;
+        public override readonly bool Equals(object? obj) => obj is RoundedRect r && Equals(r);
+        public override readonly int GetHashCode() => HashCode.Combine(Rect, RadiusX, RadiusY);
+        public static bool operator ==(RoundedRect a, RoundedRect b) => a.Equals(b);
+        public static bool operator !=(RoundedRect a, RoundedRect b) => !a.Equals(b);
+    }
+
     public interface IGeometry : IDirect2DResource
     {
         RectFloat GetBounds(in Matrix3x2Float? worldTransform = null);
+        // ponytail: the fill bounds inflated by half the stroke; good enough for layout, not a true widened outline.
+        RectFloat GetWidenedBounds(float strokeWidth, IStrokeStyle? strokeStyle = null, in Matrix3x2Float? worldTransform = null, float? flatteningTolerance = null)
+            => RectFloat.Inflate(GetBounds(worldTransform), strokeWidth / 2f, strokeWidth / 2f);
     }
 
     public interface IRectangleGeometry : IGeometry { }
@@ -238,6 +292,9 @@ namespace PaintDotNet.Direct2D1
     {
         IRectangleGeometry CreateRectangleGeometry(RectFloat rect);
         ITransformedGeometry CreateTransformedGeometry(IGeometry sourceGeometry, in Matrix3x2Float transform);
+        /// A GDI-interop device context. The host draws through its own path, so this is an inert default.
+        IDCDeviceContext CreateDCDeviceContext(in DeviceContextProperties properties)
+            => throw new System.NotSupportedException();
     }
 
     /// A 3D lookup table, for LookupTable3DEffect.
@@ -270,6 +327,12 @@ namespace PaintDotNet.Direct2D1
     public interface IDeviceContext : IDirect2DResource, IDeviceEffectFactory, IDeviceColorContextFactory, ILookupTable3DFactory
     {
         void FillRectangle(RectFloat rect, IDeviceBrush brush);
+        /// Draw a device bitmap, read the context's pixel format, and set the effect buffer precision. The host's own
+        /// context implementation draws through its native path; these are default-implemented inert so a plug-in that
+        /// names them binds (a real IDeviceContext overrides them).
+        void DrawBitmap(IDeviceBitmap bitmap, in System.Nullable<RectFloat> destinationRectangle, float opacity, InterpolationMode interpolationMode, in System.Nullable<RectFloat> sourceRectangle, in System.Nullable<PaintDotNet.Rendering.Matrix4x4Float> perspectiveTransform) { }
+        DevicePixelFormat PixelFormat => default;
+        BufferPrecision EffectBufferPrecision { get => default; set { } }
         AntialiasMode AntialiasMode { get; set; }
         TextAntialiasMode TextAntialiasMode { get; set; }
         PrimitiveBlend PrimitiveBlend { get; set; }
@@ -283,6 +346,7 @@ namespace PaintDotNet.Direct2D1
         ICommandList CreateCommandList();
         IGradientStopCollection CreateGradientStopCollection(ReadOnlySpan<GradientStop> gradientStops,
             GradientStopGamma colorInterpolationGamma = GradientStopGamma.Srgb, ExtendMode extendMode = ExtendMode.Clamp);
+        IBitmapBrush CreateBitmapBrush(IDeviceBitmap bitmap, in BitmapBrushProperties? bitmapBrushProperties = null, in BrushProperties? brushProperties = null);
         IImageBrush CreateImageBrush(IDeviceImage image, in ImageBrushProperties imageBrushProperties, in BrushProperties? brushProperties = null);
         ISolidColorBrush CreateSolidColorBrush(ColorRgba128Float color, in BrushProperties? brushProperties = null);
         void DrawGeometry(IGeometry geometry, IDeviceBrush brush, float strokeWidth = 1f, IStrokeStyle? strokeStyle = null);
@@ -293,6 +357,10 @@ namespace PaintDotNet.Direct2D1
             DrawTextOptions options = DrawTextOptions.None,
             PaintDotNet.DirectWrite.TextMeasuringMode measuringMode = PaintDotNet.DirectWrite.TextMeasuringMode.Natural);
         void FillGeometry(IGeometry geometry, IDeviceBrush brush, IDeviceBrush? opacityBrush = null);
+        // ponytail: square corners (fills the bounding rect); add true rounded corners if a plug-in's output needs them.
+        void FillRoundedRectangle(in RoundedRect roundedRect, IDeviceBrush brush) => FillRectangle(roundedRect.Rect, brush);
+        // ponytail: no-op; the config dialog's own Direct2D text does not render headless (paint.rs captures the control).
+        void DrawTextLayout(Point2Float origin, PaintDotNet.DirectWrite.ITextLayout textLayout, IDeviceBrush brush, DrawTextOptions options = DrawTextOptions.None) { }
     }
 
     public static class DeviceEffectPropertiesExtensions
@@ -322,13 +390,13 @@ namespace PaintDotNet.Direct2D1
     public static class Direct2DFactoryExtensions
     {
         public static IStrokeStyle CreateStrokeStyle(this IDirect2DFactory factory, in StrokeStyleProperties strokeStyleProperties)
-            => ((Direct2DFactory)factory).CreateStrokeStyle(strokeStyleProperties, default);
+            => ((HostDirect2DFactory)factory).CreateStrokeStyle(strokeStyleProperties, default);
 
         public static IStrokeStyle CreateStrokeStyle(this IDirect2DFactory factory, in StrokeStyleProperties strokeStyleProperties, ReadOnlySpan<float> dashes)
-            => ((Direct2DFactory)factory).CreateStrokeStyle(strokeStyleProperties, dashes);
+            => ((HostDirect2DFactory)factory).CreateStrokeStyle(strokeStyleProperties, dashes);
 
         /// A device context drawing into `bitmap`: its pixels are read in at creation and written back by EndDraw.
         public static IDeviceContext CreateBitmapDeviceContext(this IDirect2DFactory factory, IBitmap bitmap)
-            => ((Direct2DFactory)factory).CreateBitmapDeviceContext(bitmap);
+            => ((HostDirect2DFactory)factory).CreateBitmapDeviceContext(bitmap);
     }
 }

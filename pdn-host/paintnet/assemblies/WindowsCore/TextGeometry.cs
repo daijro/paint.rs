@@ -16,7 +16,7 @@ namespace PaintDotNet.Direct2D1
     {
         public static IGeometry CreateGeometryFromTextLayout(this IDirect2DFactory factory, ITextLayout textLayout, float originX = 0f, float originY = 0f,
             bool isPixelSnappingDisabled = false, in Matrix3x2Float? transform = null, float pixelsPerDip = 1f)
-            => TextGeometry.Create((Direct2DFactory)factory, (TextFormat)textLayout, originX, originY, isPixelSnappingDisabled, transform ?? Matrix3x2Float.Identity, pixelsPerDip);
+            => TextGeometry.Create((HostDirect2DFactory)factory, (TextFormat)textLayout, originX, originY, isPixelSnappingDisabled, transform ?? Matrix3x2Float.Identity, pixelsPerDip);
 
         public static IGeometry CreateGeometryFromTextLayout(this IDirect2DFactory factory, ITextLayout textLayout, Point2Float origin,
             bool isPixelSnappingDisabled, in Matrix3x2Float? transform, float pixelsPerDip)
@@ -47,9 +47,9 @@ namespace PaintDotNet.Direct2D1
             public GCHandle State;
         }
 
-        private sealed class State(Direct2DFactory factory, bool snappingDisabled, Matrix3x2Float transform, float pixelsPerDip)
+        private sealed class State(HostDirect2DFactory factory, bool snappingDisabled, Matrix3x2Float transform, float pixelsPerDip)
         {
-            public readonly Direct2DFactory Factory = factory;
+            public readonly HostDirect2DFactory Factory = factory;
             public readonly bool SnappingDisabled = snappingDisabled;
             public readonly Matrix3x2Float Transform = transform;
             public readonly float PixelsPerDip = pixelsPerDip;
@@ -78,7 +78,7 @@ namespace PaintDotNet.Direct2D1
             return v;
         }
 
-        public static IGeometry Create(Direct2DFactory factory, TextFormat layout, float originX, float originY, bool snappingDisabled,
+        public static IGeometry Create(HostDirect2DFactory factory, TextFormat layout, float originX, float originY, bool snappingDisabled,
                                        Matrix3x2Float transform, float pixelsPerDip)
         {
             var state = new State(factory, snappingDisabled, transform, pixelsPerDip);

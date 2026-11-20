@@ -107,6 +107,14 @@ impl EffectConfigDialog {
             self.failed = self.finalizing;
             return false;
         };
+        // The plug-in stopped at an outside request: no result until it has the answer.
+        if let Some(request) = notice
+            .as_deref()
+            .and_then(pdn_core::effect::permission::Request::from_error)
+        {
+            self.ask(request, super::Rerun::Render);
+            return false;
+        }
         self.due = None;
         self.delay = preview_delay(result.elapsed);
         // Keep this generation's notice on its owner until this frame's edits/cancel resolve.
@@ -164,9 +172,13 @@ impl EffectConfigDialog {
             return None;
         }
         let (_, pixels) = self.shown.take().unwrap();
+        if self.plugin_failed() {
+            return Some(self.fail_plugin(cx));
+        }
         let file_key = self.file_key();
         let session = self.session.take().unwrap();
         if session.commit_with(cx.app, self.values.clone(), Some(pixels)) {
+            self.keep_canvas();
             self.publish_file_source(file_key);
             let notice = self.pending_notice.take();
             self.deliver_notice(notice);

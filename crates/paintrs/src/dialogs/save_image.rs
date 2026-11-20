@@ -17,8 +17,9 @@ use crate::{
     theme::{self, *},
 };
 use egui::{Color32, Key, Pos2, Rect, Sense, TextureHandle, TextureOptions, Ui, Vec2};
+use pdn_core::canvas::ImageData;
 use pdn_core::effect::Control;
-use pdn_core::io::encode::SaveOptions;
+use pdn_core::io::encode::{BitDepth, Quantizer, SaveOptions};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +50,156 @@ pub const FORMATS: &[FormatInfo] = &[
     format_info!("psd", "Photoshop", [".psd", ".psb"], None, true),
 ];
 pub const CHROMA_CHOICES: [&str; 4] = ["4:4:4", "4:4:0", "4:2:2", "4:2:0"];
+
+/// One of Paint.NET's own save options of the 8-bit pipeline formats (document-ops-and-formats
+/// §2.1; `PngFileType`, `BmpFileType`, `TiffFileType`, `GifFileType`, `TgaFileType` save property
+/// collections and config UIs), shown as Paint.NET shows a property: its header, then its control.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum SaveProp {
+    /// "Bit Depth", a drop-down of these depths in Paint.NET's order.
+    Depth(&'static [BitDepth]),
+    Quantization,
+    Dithering,
+    Threshold,
+    Interlaced,
+    ConvertToSrgb,
+    Rle,
+}
+const BMP_DEPTHS: &[BitDepth] = {
+    use BitDepth::*;
+    &[Auto, B32, B24, B8, B4, B1]
+};
+/// The built-in format's own options, in Paint.NET's order.
+pub(super) fn save_props(format: &str) -> &'static [SaveProp] {
+    use BitDepth::*;
+    use SaveProp::*;
+    match format {
+        "png" => &[
+            Depth(&[Auto, B32, B24, B8, B4, B2, B1]),
+            Quantization,
+            Dithering,
+            Threshold,
+            Interlaced,
+        ],
+        "bmp" => &[Depth(BMP_DEPTHS), Quantization, Dithering, ConvertToSrgb],
+        "tiff" => &[Depth(BMP_DEPTHS), Quantization, Dithering],
+        "gif" => &[Quantization, Dithering, Threshold, ConvertToSrgb],
+        "tga" => &[Depth(&[Auto, B32, B24]), ConvertToSrgb, Rle],
+        _ => &[],
+    }
+}
+const QUANTIZERS: [(Quantizer, &str); 2] = [
+    (Quantizer::MedianCut, "Median Cut"),
+    (Quantizer::Octree, "Octree"),
+];
+fn depth_label(d: BitDepth) -> &'static str {
+    match d {
+        BitDepth::Auto => "Auto-detect",
+        BitDepth::B32 => "32-bit",
+        BitDepth::B24 => "24-bit",
+        BitDepth::B8 => "8-bit",
+        BitDepth::B4 => "4-bit",
+        BitDepth::B2 => "2-bit",
+        BitDepth::B1 => "1-bit",
+    }
+}
+/// A depth as the remembered options keep it.
+fn depth_token(d: BitDepth) -> &'static str {
+    match d {
+        BitDepth::Auto => "auto",
+        BitDepth::B32 => "32",
+        BitDepth::B24 => "24",
+        BitDepth::B8 => "8",
+        BitDepth::B4 => "4",
+        BitDepth::B2 => "2",
+        BitDepth::B1 => "1",
+    }
+}
+impl SaveProp {
+    /// The remembered options' key.
+    fn key(self) -> &'static str {
+        match self {
+            SaveProp::Depth(_) => "bitDepth",
+            SaveProp::Quantization => "quantization",
+            SaveProp::Dithering => "ditherLevel",
+            SaveProp::Threshold => "transparencyThreshold",
+            SaveProp::Interlaced => "interlaced",
+            SaveProp::ConvertToSrgb => "convertToSrgb",
+            SaveProp::Rle => "rleCompress",
+        }
+    }
+    /// The header over the control; the check boxes without one have their text only.
+    fn header(self) -> &'static str {
+        match self {
+            SaveProp::Depth(_) => "Bit Depth",
+            SaveProp::Quantization => "Quantization algorithm",
+            SaveProp::Dithering => "Dithering level",
+            SaveProp::Threshold => "Transparency threshold",
+            SaveProp::Interlaced => "Other options",
+            SaveProp::ConvertToSrgb | SaveProp::Rle => "",
+        }
+    }
+    /// Paint.NET's read-only rules: quantization and dithering apply at an indexed depth only, and
+    /// PNG's threshold at 8-bit only. GIF is always indexed, so its rows are always editable.
+    fn enabled(self, format: &str, depth: BitDepth) -> bool {
+        use BitDepth::*;
+        match self {
+            _ if format == "gif" => true,
+            SaveProp::Quantization | SaveProp::Dithering => matches!(depth, B8 | B4 | B2 | B1),
+            SaveProp::Threshold => depth == B8,
+            _ => true,
+        }
+    }
+    /// The option as the remembered options keep it.
+    fn value(self, o: &SaveOptions) -> Value {
+        match self {
+            SaveProp::Depth(_) => depth_token(o.bit_depth).into(),
+            SaveProp::Quantization => match o.quantizer {
+                Quantizer::Octree => "octree".into(),
+                Quantizer::MedianCut => "medianCut".into(),
+            },
+            SaveProp::Dithering => o.dither.into(),
+            SaveProp::Threshold => o.alpha_threshold.into(),
+            SaveProp::Interlaced => o.interlaced.into(),
+            SaveProp::ConvertToSrgb => o.convert_to_srgb.into(),
+            SaveProp::Rle => o.rle.into(),
+        }
+    }
+    /// Takes a remembered value the property accepts; anything else keeps `o` as it is.
+    fn restore(self, v: &Value, o: &mut SaveOptions) {
+        let level = |max: f64| {
+            v.as_f64()
+                .filter(|n| n.is_finite())
+                .map(|n| n.round().clamp(0.0, max) as u8)
+        };
+        match self {
+            SaveProp::Depth(choices) => {
+                if let Some(&d) = choices
+                    .iter()
+                    .find(|&&d| v.as_str() == Some(depth_token(d)))
+                {
+                    o.bit_depth = d;
+                }
+            }
+            SaveProp::Quantization => match v.as_str() {
+                Some("octree") => o.quantizer = Quantizer::Octree,
+                Some("medianCut") => o.quantizer = Quantizer::MedianCut,
+                _ => {}
+            },
+            SaveProp::Dithering => o.dither = level(8.0).unwrap_or(o.dither),
+            SaveProp::Threshold => o.alpha_threshold = level(255.0).unwrap_or(o.alpha_threshold),
+            SaveProp::Interlaced => o.interlaced = v.as_bool().unwrap_or(o.interlaced),
+            SaveProp::ConvertToSrgb => o.convert_to_srgb = v.as_bool().unwrap_or(o.convert_to_srgb),
+            SaveProp::Rle => o.rle = v.as_bool().unwrap_or(o.rle),
+        }
+    }
+}
+/// `format`'s own options into the remembered options `value`.
+pub(super) fn save_prop_values(format: &str, options: &SaveOptions, value: &mut Value) {
+    for p in save_props(format) {
+        value[p.key()] = p.value(options);
+    }
+}
 pub fn find_format(id: &str) -> &'static FormatInfo {
     formats().find(|f| f.id == id).unwrap_or(&FORMATS[1])
 }
@@ -112,6 +263,8 @@ pub struct SaveImageDialog {
     on_close: Option<OnClose>,
     pub(super) due: f64,
     pub(super) preview: Option<TextureHandle>,
+    /// The browser decode of the last encoded file, while it runs (web AVIF and HEIC).
+    decoding: Option<crate::platform::Pending<Result<ImageData, String>>>,
     preview_size: Vec2,
     bytes: Option<usize>,
     /// The format's FileType asks for its options in a window of its own when the image is saved, so it has no
@@ -156,6 +309,9 @@ impl SaveImageDialog {
         {
             options.chroma = Some(c.into());
         }
+        for p in save_props(format) {
+            p.restore(&value[p.key()], &mut options);
+        }
         options
     }
     pub fn new(
@@ -180,6 +336,7 @@ impl SaveImageDialog {
             on_close: Some(Box::new(on_close)),
             due: 0.0,
             preview: None,
+            decoding: None,
             preview_size: Vec2::splat(1.0),
             bytes: None,
             asks_window: false,
@@ -205,48 +362,79 @@ impl SaveImageDialog {
         })
     }
     fn render_preview(&mut self, ui: &Ui, cx: &DialogCx) {
-        let f = self.formats[self.format].id;
-        let result =
-            super::flows::encode_document(cx.app, self.document, f, &self.options[self.format])
-                .and_then(|bytes| {
-                    let image = if f == "pdn" || f == "psd" {
-                        let doc = if f == "pdn" {
-                            pdn_core::io::pdn::decode(&bytes).map_err(|e| e.to_string())?
-                        } else {
-                            pdn_core::io::psd::decode(&bytes).map_err(|e| e.to_string())?
-                        }
-                        .to_document();
-                        doc.composite().get_image_data(0, 0, doc.width, doc.height)
-                    } else {
-                        pdn_core::io::codecs::decode(f, &bytes)
-                            .map_err(|e| e.to_string())?
-                            .image
-                    };
-                    Ok((bytes.len(), image))
-                });
-        match result {
-            Ok((len, img)) => {
-                self.bytes = Some(len);
-                self.asks_window = false;
-                self.status.clear();
-                self.preview_size = Vec2::new(img.width as f32, img.height as f32);
-                self.preview = Some(ui.ctx().load_texture(
-                    "saved-image-preview",
-                    egui::ColorImage::from_rgba_unmultiplied(
-                        [img.width as usize, img.height as usize],
-                        &img.data,
-                    ),
-                    TextureOptions::LINEAR,
-                ));
-            }
-            Err(e) => {
-                self.bytes = None;
-                self.preview = None;
-                self.asks_window = pdn_core::io::plugins::PluginWindow::from_error(&e).is_some();
-                self.status = super::flows::readable(e);
-            }
-        }
         self.due = f64::INFINITY;
+        self.decoding = None;
+        let f = self.formats[self.format].id;
+        let options = &self.options[self.format];
+        let bytes = match super::flows::encode_document(cx.app, self.document, f, options) {
+            Ok(bytes) => bytes,
+            Err(e) => return self.preview_failed(e),
+        };
+        self.bytes = Some(bytes.len());
+        self.asks_window = false;
+        self.status.clear();
+        // The web build decodes AVIF and HEIC in the browser: the picture follows when it lands.
+        #[cfg(target_arch = "wasm32")]
+        if matches!(f, "avif" | "heic") {
+            self.decoding = Some(crate::platform::Pending::future(async move {
+                crate::platform::web::decode_async(f, &bytes)
+                    .await
+                    .map_err(|e| e.to_string())
+            }));
+            return self.poll_decoding(ui);
+        }
+        let decoded = if f == "pdn" || f == "psd" {
+            let doc = if f == "pdn" {
+                pdn_core::io::pdn::decode(&bytes).map_err(|e| e.to_string())
+            } else {
+                pdn_core::io::psd::decode(&bytes).map_err(|e| e.to_string())
+            };
+            doc.map(|d| {
+                let doc = d.to_document();
+                doc.composite().get_image_data(0, 0, doc.width, doc.height)
+            })
+        } else {
+            pdn_core::io::codecs::decode(f, &bytes)
+                .map(|d| d.image)
+                .map_err(|e| e.to_string())
+        };
+        match decoded {
+            Ok(image) => self.show_picture(ui, image),
+            Err(e) => self.preview_failed(e),
+        }
+    }
+    /// The decoded file as the preview's picture.
+    fn show_picture(&mut self, ui: &Ui, img: ImageData) {
+        self.preview_size = Vec2::new(img.width as f32, img.height as f32);
+        self.preview = Some(ui.ctx().load_texture(
+            "saved-image-preview",
+            egui::ColorImage::from_rgba_unmultiplied(
+                [img.width as usize, img.height as usize],
+                &img.data,
+            ),
+            TextureOptions::LINEAR,
+        ));
+    }
+    fn preview_failed(&mut self, e: String) {
+        self.bytes = None;
+        self.preview = None;
+        self.asks_window = pdn_core::io::plugins::PluginWindow::from_error(&e).is_some();
+        self.status = super::flows::readable(e);
+    }
+    /// A browser decode of the encoded file (the web's AVIF and HEIC), once it lands.
+    fn poll_decoding(&mut self, ui: &Ui) {
+        let Some(op) = &mut self.decoding else {
+            return;
+        };
+        let Some(result) = op.poll() else {
+            ui.ctx().request_repaint();
+            return;
+        };
+        self.decoding = None;
+        match result {
+            Ok(image) => self.show_picture(ui, image),
+            Err(e) => self.preview_failed(e),
+        }
     }
     fn fit_zoom(&self, frame: Vec2) -> f32 {
         ((frame.x - 64.0) / self.preview_size.x)
@@ -426,6 +614,14 @@ impl SaveImageDialog {
     }
 }
 pub(super) fn heading(ui: &Ui, at: Pos2, width: f32, label: &str, pdn: bool) {
+    let theme = theme::current(ui.ctx());
+    heading_with(ui, at, width, label, pdn, theme.menu_item_text);
+}
+/// `heading` in `color` (a read-only option's header).
+fn heading_in(ui: &Ui, at: Pos2, width: f32, label: &str, color: Color32) {
+    heading_with(ui, at, width, label, false, color);
+}
+fn heading_with(ui: &Ui, at: Pos2, width: f32, label: &str, pdn: bool, color: Color32) {
     let painter = ui.painter();
     let font = FontSpec::new(DIALOG_FONT_SIZE).weight(700);
     let theme = theme::current(ui.ctx());
@@ -435,9 +631,9 @@ pub(super) fn heading(ui: &Ui, at: Pos2, width: f32, label: &str, pdn: bool) {
             (20.0 - font.resolved_line_height(ui.ctx().pixels_per_point())) / 2.0,
         );
     if pdn {
-        text::draw_pdn(painter, label_at, label, font, theme.menu_item_text);
+        text::draw_pdn(painter, label_at, label, font, color);
     } else {
-        text::draw(painter, label_at, label, font, theme.menu_item_text);
+        text::draw(painter, label_at, label, font, color);
     }
     let left = at.x + text::measure(painter, label, font) + 7.0;
     painter.rect_filled(
@@ -484,6 +680,7 @@ impl SaveImageDialog {
     /// The frame's clock; the preview renders once its debounce is due.
     pub(super) fn tick(&mut self, ui: &Ui, cx: &DialogCx) {
         self.slider.now = cx.app.now_ms;
+        self.poll_decoding(ui);
         if cx.app.now_ms >= self.due {
             self.render_preview(ui, cx);
         } else if self.due.is_finite() {
@@ -614,6 +811,11 @@ impl SaveImageDialog {
                 y += 40.0;
             }
         }
+        let props = save_props(info.id);
+        if !props.is_empty() && self.own_options(ui, at.x, side, &mut y) {
+            changed = true;
+        }
+        let info = &self.formats[self.format];
         // A FileType plug-in's save options: its properties, as an effect's are shown.
         if !info.controls.is_empty() {
             let mut values = self.options[self.format].plugin.clone();
@@ -715,7 +917,7 @@ impl SaveImageDialog {
             }
             self.options[self.format].plugin = values;
         }
-        if info.quality_default.is_some() || !info.controls.is_empty() {
+        if info.quality_default.is_some() || !info.controls.is_empty() || !props.is_empty() {
             let response = dialog_button(
                 ui,
                 "defaults",
@@ -753,6 +955,164 @@ impl SaveImageDialog {
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
         bottom
+    }
+}
+impl SaveImageDialog {
+    /// The format's own options (`save_props`) from `y` down, each as Paint.NET shows a property:
+    /// its header, then its control. A read-only row (`SaveProp::enabled`) takes no input and
+    /// keeps its value, greyed out as an effect dialog's disabled rows are.
+    fn own_options(&mut self, ui: &mut Ui, x: f32, side: f32, y: &mut f32) -> bool {
+        let format = self.formats[self.format].id;
+        let theme = theme::current(ui.ctx());
+        let font = FontSpec::new(DIALOG_FONT_SIZE);
+        let line = font.resolved_line_height(ui.ctx().pixels_per_point());
+        let mut changed = false;
+        for &prop in save_props(format) {
+            let enabled = prop.enabled(format, self.options[self.format].bit_depth);
+            let key = prop.key();
+            let mut row = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("save-option", key))
+                    .max_rect(ui.max_rect()),
+            );
+            let base = row.opacity();
+            if !enabled {
+                row.disable();
+            }
+            row.set_opacity(base);
+            let (color, fade) = if enabled {
+                (theme.menu_item_text, 1.0)
+            } else {
+                (MENU_ITEM_DISABLED_TEXT, NUMBER_DISABLED_OPACITY)
+            };
+            let header = prop.header();
+            if !header.is_empty() {
+                heading_in(&row, Pos2::new(x, *y), side, header, color);
+                *y += 28.0;
+            }
+            let o = &self.options[self.format];
+            match prop {
+                SaveProp::Depth(_) | SaveProp::Quantization => {
+                    let (labels, current): (Vec<&str>, usize) = match prop {
+                        SaveProp::Depth(choices) => (
+                            choices.iter().map(|&d| depth_label(d)).collect(),
+                            choices.iter().position(|&d| d == o.bit_depth).unwrap_or(0),
+                        ),
+                        _ => (
+                            QUANTIZERS.iter().map(|q| q.1).collect(),
+                            QUANTIZERS
+                                .iter()
+                                .position(|q| q.0 == o.quantizer)
+                                .unwrap_or(1),
+                        ),
+                    };
+                    row.set_opacity(base * fade);
+                    let id = row.scope_id().with("choice");
+                    let at = Rect::from_min_size(Pos2::new(x, *y), Vec2::new(side, 31.0));
+                    let look = SelectLook {
+                        native: true,
+                        pad_left: 0.0,
+                        font,
+                    };
+                    if let Some(pick) = select(
+                        &mut row,
+                        &mut self.open_select,
+                        id,
+                        at,
+                        header,
+                        &labels,
+                        current,
+                        look,
+                    ) && pick != current
+                    {
+                        let o = &mut self.options[self.format];
+                        match prop {
+                            SaveProp::Depth(choices) => o.bit_depth = choices[pick],
+                            _ => o.quantizer = QUANTIZERS[pick].0,
+                        }
+                        changed = true;
+                    }
+                    *y += 40.0;
+                }
+                SaveProp::Dithering | SaveProp::Threshold => {
+                    let (max, default) = match prop {
+                        SaveProp::Dithering => (8.0, 7.0),
+                        _ => (255.0, 128.0),
+                    };
+                    let mut values = pdn_core::effect::Values::new();
+                    values.insert(key.into(), prop.value(o));
+                    let track = Rect::from_min_size(
+                        Pos2::new(x + 2.0, *y + 0.5),
+                        Vec2::new(side - 78.0, 28.0),
+                    );
+                    let number =
+                        Rect::from_min_size(Pos2::new(x + side - 68.0, *y), Vec2::new(68.0, 29.0));
+                    let spec = RangeSpec {
+                        min: 0.0,
+                        max,
+                        default,
+                        step: 1.0,
+                        role: pdn_core::effect::slider::RangeRole::Slider,
+                        keyboard: pdn_core::effect::slider::SliderKeys::INTEGER,
+                    };
+                    row.set_opacity(base * fade);
+                    if range_line(
+                        &mut row,
+                        &mut self.slider,
+                        key,
+                        header,
+                        spec,
+                        &mut values,
+                        track,
+                        number,
+                        None,
+                        Track::Standard,
+                        NumberStyle::LAYER_OPACITY,
+                    )
+                    .is_some()
+                    {
+                        changed = true;
+                    }
+                    let level = pdn_core::effect::num(&values, key) as u8;
+                    let o = &mut self.options[self.format];
+                    match prop {
+                        SaveProp::Dithering => o.dither = level,
+                        _ => o.alpha_threshold = level,
+                    }
+                    *y += 39.0;
+                    if prop == SaveProp::Threshold {
+                        // The property's description, under its slider.
+                        let runs = [text::Run {
+                            text: "Pixels with an alpha value less than the threshold will be \
+                                   fully transparent.",
+                            spec: font,
+                            color,
+                            underline: false,
+                        }];
+                        let lines = text::wrap_runs(row.painter(), &runs, side);
+                        text::draw_lines(row.painter(), Pos2::new(x, *y), &runs, &lines, line);
+                        *y += lines.len() as f32 * line + 8.0;
+                    }
+                }
+                SaveProp::Interlaced | SaveProp::ConvertToSrgb | SaveProp::Rle => {
+                    let label = match prop {
+                        SaveProp::Interlaced => "Interlaced",
+                        SaveProp::ConvertToSrgb => "Convert to sRGB",
+                        _ => "Compress (RLE)",
+                    };
+                    let mut values = pdn_core::effect::Values::new();
+                    values.insert(key.into(), prop.value(o));
+                    if checkbox_line(&mut row, &mut values, key, label, x, *y, side, color, fade)
+                        .is_some()
+                    {
+                        prop.restore(&values[key], &mut self.options[self.format]);
+                        changed = true;
+                    }
+                    *y += 28.0;
+                }
+            }
+        }
+        changed
     }
 }
 /// The Settings column's width.
@@ -895,6 +1255,12 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            Self::with(
+                "jpeg",
+                serde_json::json!({"quality":17,"subsampling":"4:2:0"}),
+            )
+        }
+        fn with(format: &str, initial: Value) -> Self {
             let ctx = egui::Context::default();
             crate::install_fonts(&ctx, pdn_core::fonts::FontPolicy::Bundled, "Selawik");
             let app = pdn_core::testing::fresh_doc(64, 32, Some(4));
@@ -902,8 +1268,8 @@ mod tests {
             let out = result.clone();
             let dialog = SaveImageDialog::new(
                 app.active_ws().unwrap().id,
-                "jpeg",
-                serde_json::json!({"quality":17,"subsampling":"4:2:0"}),
+                format,
+                initial,
                 move |selection, _| *out.borrow_mut() = selection,
             );
             Self {
@@ -999,6 +1365,228 @@ mod tests {
             self.frame(vec![], egui::Modifiers::NONE, true);
             self.frame(vec![], egui::Modifiers::NONE, false);
         }
+    }
+    /// Paint.NET's own save options per format: the rows in order, the defaults, which rows the
+    /// bit depth makes read-only, and the drop-down labels.
+    #[test]
+    fn built_in_options_follow_paint_net() {
+        use BitDepth::*;
+        let rows = |f: &str| save_props(f).iter().map(|p| p.key()).collect::<Vec<_>>();
+        assert_eq!(
+            rows("png"),
+            [
+                "bitDepth",
+                "quantization",
+                "ditherLevel",
+                "transparencyThreshold",
+                "interlaced"
+            ]
+        );
+        assert_eq!(
+            rows("bmp"),
+            ["bitDepth", "quantization", "ditherLevel", "convertToSrgb"]
+        );
+        assert_eq!(rows("tiff"), ["bitDepth", "quantization", "ditherLevel"]);
+        assert_eq!(
+            rows("gif"),
+            [
+                "quantization",
+                "ditherLevel",
+                "transparencyThreshold",
+                "convertToSrgb"
+            ]
+        );
+        assert_eq!(rows("tga"), ["bitDepth", "convertToSrgb", "rleCompress"]);
+        assert!(save_props("jpeg").is_empty());
+        let depths = |f: &str| match save_props(f)[0] {
+            SaveProp::Depth(d) => d.iter().map(|&d| depth_label(d)).collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        assert_eq!(
+            depths("png"),
+            [
+                "Auto-detect",
+                "32-bit",
+                "24-bit",
+                "8-bit",
+                "4-bit",
+                "2-bit",
+                "1-bit"
+            ]
+        );
+        assert_eq!(
+            depths("bmp"),
+            ["Auto-detect", "32-bit", "24-bit", "8-bit", "4-bit", "1-bit"]
+        );
+        assert_eq!(depths("tiff"), depths("bmp"));
+        assert_eq!(depths("tga"), ["Auto-detect", "32-bit", "24-bit"]);
+        assert_eq!(QUANTIZERS.map(|q| q.1), ["Median Cut", "Octree"]);
+        for f in ["png", "bmp", "tiff", "gif", "tga"] {
+            let o = SaveImageDialog::default_options(f);
+            assert_eq!(
+                (o.bit_depth, o.quantizer, o.dither, o.alpha_threshold),
+                (Auto, Quantizer::Octree, 7, 128),
+                "{f}"
+            );
+            assert!(!o.interlaced && o.convert_to_srgb && o.rle, "{f}");
+        }
+        let on = |f: &str, p: SaveProp, d| p.enabled(f, d);
+        for (f, indexed) in [
+            ("png", &[B8, B4, B2, B1][..]),
+            ("bmp", &[B8, B4, B1]),
+            ("tiff", &[B8, B4, B1]),
+        ] {
+            let SaveProp::Depth(offered) = save_props(f)[0] else {
+                unreachable!()
+            };
+            for &d in offered {
+                let want = indexed.contains(&d);
+                assert_eq!(on(f, SaveProp::Quantization, d), want, "{f} {d:?}");
+                assert_eq!(on(f, SaveProp::Dithering, d), want, "{f} {d:?}");
+            }
+        }
+        assert!(on("png", SaveProp::Threshold, B8) && !on("png", SaveProp::Threshold, B4));
+        assert!(!on("png", SaveProp::Threshold, Auto) && on("png", SaveProp::Interlaced, Auto));
+        assert!(on("gif", SaveProp::Dithering, Auto) && on("gif", SaveProp::Threshold, Auto));
+    }
+    /// The options a save remembers come back as they were; a value the format does not take
+    /// keeps the default, and a level outside its range is clamped.
+    #[test]
+    fn built_in_options_are_remembered() {
+        for (f, depth) in [
+            ("png", BitDepth::B2),
+            ("bmp", BitDepth::B4),
+            ("tiff", BitDepth::B1),
+            ("gif", BitDepth::Auto),
+            ("tga", BitDepth::B24),
+        ] {
+            let o = SaveOptions {
+                bit_depth: depth,
+                quantizer: Quantizer::MedianCut,
+                dither: 3,
+                alpha_threshold: 40,
+                interlaced: true,
+                convert_to_srgb: false,
+                rle: false,
+                ..SaveImageDialog::default_options(f)
+            };
+            let back = SaveImageDialog::options_from(f, &super::super::flows::option_values(f, &o));
+            for p in save_props(f) {
+                assert_eq!(p.value(&back), p.value(&o), "{f} {}", p.key());
+            }
+        }
+        let bmp = SaveImageDialog::options_from(
+            "bmp",
+            &serde_json::json!({"bitDepth": "2", "ditherLevel": 99, "quantization": "best"}),
+        );
+        assert_eq!(bmp.bit_depth, BitDepth::Auto);
+        assert_eq!(bmp.dither, 8);
+        assert_eq!(bmp.quantizer, Quantizer::Octree);
+        let values = super::super::flows::option_values("bmp", &bmp);
+        assert_eq!(
+            values,
+            serde_json::json!({"bitDepth": "auto", "quantization": "octree", "ditherLevel": 8,
+                "convertToSrgb": true})
+        );
+    }
+    /// BMP's Save Configuration shows Paint.NET's rows, and the preview's file size follows the
+    /// bit depth.
+    #[test]
+    fn bmp_configuration_shows_its_options_and_sizes() {
+        let mut f = Fixture::with("bmp", serde_json::json!({}));
+        text::enable_text_recording(&f.ctx);
+        f.show();
+        let runs = text::take_text_runs(&f.ctx);
+        let drawn: Vec<String> = runs.into_iter().filter_map(|r| r.2).collect();
+        for label in [
+            "Bit Depth",
+            "Auto-detect",
+            "Quantization algorithm",
+            "Octree",
+            "Dithering level",
+            "Convert to sRGB",
+            "Defaults",
+        ] {
+            assert!(drawn.iter().any(|t| t == label), "{label} in {drawn:?}");
+        }
+        let bmp = f.dialog.format;
+        let size = |f: &mut Fixture, depth| {
+            f.dialog.options[bmp].bit_depth = depth;
+            f.dialog.due = 0.0;
+            f.frame(vec![], egui::Modifiers::NONE, false);
+            f.dialog.bytes.unwrap()
+        };
+        // 64×32: 24-bit rows are 192 bytes, 8-bit ones 64 plus the palette.
+        let (b24, b8, b1) = (
+            size(&mut f, BitDepth::B24),
+            size(&mut f, BitDepth::B8),
+            size(&mut f, BitDepth::B1),
+        );
+        assert_eq!(b24, 54 + 64 * 32 * 3);
+        assert!(b1 < b8 && b8 < b24, "{b1} {b8} {b24}");
+    }
+    /// JPEG XR previews as the other formats do, from the bytes it encodes at the current quality.
+    #[test]
+    fn jxr_previews_its_encoded_file() {
+        let mut f = Fixture::with("jxr", serde_json::json!({}));
+        text::enable_text_recording(&f.ctx);
+        f.show();
+        let drawn: Vec<String> = text::take_text_runs(&f.ctx)
+            .into_iter()
+            .filter_map(|r| r.2)
+            .collect();
+        let status = &f.dialog.status;
+        assert!(
+            drawn.iter().any(|t| t.starts_with("Preview, file size:")),
+            "{status} {drawn:?}"
+        );
+        assert!(f.dialog.preview.is_some());
+        let jxr = f.dialog.format;
+        let at_90 = f.dialog.bytes.unwrap();
+        f.dialog.options[jxr].quality = Some(20);
+        f.dialog.due = 0.0;
+        f.frame(vec![], egui::Modifiers::NONE, false);
+        assert!(f.dialog.bytes.unwrap() < at_90);
+    }
+    /// The web's AVIF (and HEIC) preview lands from a browser decode that resolves frames later:
+    /// the dialog polls it each frame, shows its picture when it resolves, and an error reads as a
+    /// failed preview.
+    #[test]
+    fn a_pending_decode_shows_its_picture_when_it_lands() {
+        let later = |result: Result<ImageData, String>| {
+            let mut result = Some(result);
+            let mut polled = false;
+            crate::platform::Pending::future(std::future::poll_fn(move |_| {
+                if std::mem::replace(&mut polled, true) {
+                    std::task::Poll::Ready(result.take().unwrap())
+                } else {
+                    std::task::Poll::Pending
+                }
+            }))
+        };
+        let mut f = Fixture::with("png", serde_json::json!({}));
+        f.show();
+        let picture = ImageData {
+            width: 2,
+            height: 3,
+            data: vec![255; 24],
+        };
+        f.dialog.decoding = Some(later(Ok(picture)));
+        f.frame(vec![], egui::Modifiers::NONE, false);
+        assert!(f.dialog.decoding.is_some(), "still decoding");
+        assert_eq!(f.dialog.preview_size, Vec2::new(64.0, 32.0));
+        f.frame(vec![], egui::Modifiers::NONE, false);
+        assert!(f.dialog.decoding.is_none());
+        assert_eq!(f.dialog.preview_size, Vec2::new(2.0, 3.0));
+        assert!(f.dialog.bytes.is_some());
+        f.dialog.decoding = Some(later(Err("no decoder".into())));
+        f.frame(vec![], egui::Modifiers::NONE, false);
+        f.frame(vec![], egui::Modifiers::NONE, false);
+        assert!(f.dialog.decoding.is_none());
+        assert_eq!(
+            (f.dialog.bytes, f.dialog.status.as_str()),
+            (None, "no decoder")
+        );
     }
     #[test]
     fn configuration_keyboard_modified_enter_does_not_activate_close() {

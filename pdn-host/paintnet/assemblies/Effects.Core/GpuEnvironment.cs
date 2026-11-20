@@ -13,7 +13,7 @@ using PaintDotNet.Rendering;
 namespace PaintDotNet.Effects.Gpu
 {
     internal sealed class GpuEnvironment : RefTrackedObject, IGpuEffectEnvironment2, IGpuEffectDocumentInfo2, IGpuEffectSelectionInfo2, IGpuEffectLayerInfo2,
-                                           IBitmapEffectEnvironment, IBitmapEffectDocumentInfo, IEffectEnvironment2
+                                           IBitmapEffectEnvironment, IBitmapEffectDocumentInfo, IBitmapEffectSelectionInfo, IEffectEnvironment2
     {
         private readonly InputImage source, mask;
         private readonly Lazy<IDeviceColorContext> colorContext;
@@ -42,6 +42,8 @@ namespace PaintDotNet.Effects.Gpu
         }
 
         internal IEffectInputBitmap<ColorBgra32> SourceBitmap { get; }
+        /// The source's straight BGRA8 bytes, rows of Size.Width.
+        internal byte[] SourcePixels => sourcePixels.Pixels;
 
         // Environment
         public IGpuEffectInputImage SourceImage => source;
@@ -53,6 +55,7 @@ namespace PaintDotNet.Effects.Gpu
         public IGpuEffectSelectionInfo2 Selection => this;
         IGpuEffectSelectionInfo IGpuEffectEnvironment.Selection => this;
         IEffectSelectionInfo IEffectEnvironment.Selection => this;
+        IBitmapEffectSelectionInfo IBitmapEffectEnvironment.Selection => this;
         public int SourceLayerIndex => 0;
         public ColorBgra32 PrimaryColor { get; }
         public ColorBgra32 SecondaryColor { get; }

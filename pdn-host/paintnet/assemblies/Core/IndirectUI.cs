@@ -76,6 +76,11 @@ namespace PaintDotNet.IndirectUI
             return true;
         }
 
+        /// The control-level properties (DisplayName, Description, …). ponytail: the host materialises none — it
+        /// routes control-property writes through SetPropertyControlValue — so this is an empty collection; give it a
+        /// real backing if a plug-in indexes it.
+        public PaintDotNet.PropertySystem.PropertyCollection ControlProperties => new PaintDotNet.PropertySystem.PropertyCollection();
+
         public abstract ControlInfo Clone();
         object ICloneable.Clone() => Clone();
     }

@@ -10,7 +10,6 @@ namespace System.Drawing
         public static global::System.Drawing.Bitmap FromHicon(global::System.IntPtr @hicon) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Bitmap.FromHicon");
         public static global::System.Drawing.Bitmap FromResource(global::System.IntPtr @hinstance, string @bitmapName) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Bitmap.FromResource");
         public global::System.IntPtr GetHbitmap(global::System.Drawing.Color @background) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Bitmap.GetHbitmap");
-        public void ApplyEffect(global::System.Drawing.Imaging.Effects.Effect @effect, global::System.Drawing.Rectangle @area = default) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Bitmap.ApplyEffect");
         public void ConvertFormat(global::System.Drawing.Imaging.PixelFormat @format, global::System.Drawing.Imaging.DitherType @ditherType, global::System.Drawing.Imaging.PaletteType @paletteType = (global::System.Drawing.Imaging.PaletteType)0, global::System.Drawing.Imaging.ColorPalette @palette = default, float @alphaThresholdPercent = 0f) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Bitmap.ConvertFormat");
         public void ConvertFormat(global::System.Drawing.Imaging.PixelFormat @format) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Bitmap.ConvertFormat");
     }
@@ -234,8 +233,6 @@ namespace System.Drawing
         public int[] PropertyIdList { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.PropertyIdList"); }
         public global::System.Drawing.Imaging.PropertyItem[] PropertyItems { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.PropertyItems"); }
         public global::System.Drawing.Imaging.ColorPalette Palette { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.Palette"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.Palette"); }
-        public void Save(string @filename, global::System.Drawing.Imaging.ImageCodecInfo @encoder, global::System.Drawing.Imaging.EncoderParameters @encoderParams) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.Save");
-        public void Save(global::System.IO.Stream @stream, global::System.Drawing.Imaging.ImageCodecInfo @encoder, global::System.Drawing.Imaging.EncoderParameters @encoderParams) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.Save");
         public void SaveAdd(global::System.Drawing.Imaging.EncoderParameters @encoderParams) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.SaveAdd");
         public void SaveAdd(global::System.Drawing.Image @image, global::System.Drawing.Imaging.EncoderParameters @encoderParams) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.SaveAdd");
         public global::System.Drawing.Image GetThumbnailImage(int @thumbWidth, int @thumbHeight, global::System.Drawing.Image.GetThumbnailImageAbort @callback, global::System.IntPtr @callbackData) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Image.GetThumbnailImage");
@@ -490,16 +487,6 @@ namespace System.Drawing.Design
 }
 namespace System.Drawing.Drawing2D
 {
-    public sealed unsafe partial class AdjustableArrowCap : global::System.Drawing.Drawing2D.CustomLineCap
-    {
-        public AdjustableArrowCap(float @width, float @height) : base() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap..ctor");
-        public AdjustableArrowCap(float @width, float @height, bool @isFilled) : base() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap..ctor");
-        private protected AdjustableArrowCap() : base() { }
-        public float Height { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.Height"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.Height"); }
-        public float Width { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.Width"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.Width"); }
-        public float MiddleInset { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.MiddleInset"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.MiddleInset"); }
-        public bool Filled { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.Filled"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.AdjustableArrowCap.Filled"); }
-    }
     public enum CombineMode : int
     {
         Replace = 0,
@@ -528,22 +515,6 @@ namespace System.Drawing.Drawing2D
         World = 0,
         Page = 1,
         Device = 2,
-    }
-    public unsafe partial class CustomLineCap : global::System.MarshalByRefObject, global::System.ICloneable, global::System.IDisposable
-    {
-        public CustomLineCap(global::System.Drawing.Drawing2D.GraphicsPath @fillPath, global::System.Drawing.Drawing2D.GraphicsPath @strokePath) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap..ctor");
-        public CustomLineCap(global::System.Drawing.Drawing2D.GraphicsPath @fillPath, global::System.Drawing.Drawing2D.GraphicsPath @strokePath, global::System.Drawing.Drawing2D.LineCap @baseCap) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap..ctor");
-        public CustomLineCap(global::System.Drawing.Drawing2D.GraphicsPath @fillPath, global::System.Drawing.Drawing2D.GraphicsPath @strokePath, global::System.Drawing.Drawing2D.LineCap @baseCap, float @baseInset) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap..ctor");
-        private protected CustomLineCap() { }
-        public global::System.Drawing.Drawing2D.LineJoin StrokeJoin { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.StrokeJoin"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.StrokeJoin"); }
-        public global::System.Drawing.Drawing2D.LineCap BaseCap { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.BaseCap"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.BaseCap"); }
-        public float BaseInset { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.BaseInset"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.BaseInset"); }
-        public float WidthScale { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.WidthScale"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.WidthScale"); }
-        public void Dispose() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.Dispose");
-        protected virtual void Dispose(bool @disposing) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.Dispose");
-        public object Clone() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.Clone");
-        public void SetStrokeCaps(global::System.Drawing.Drawing2D.LineCap @startCap, global::System.Drawing.Drawing2D.LineCap @endCap) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.SetStrokeCaps");
-        public void GetStrokeCaps(out global::System.Drawing.Drawing2D.LineCap @startCap, out global::System.Drawing.Drawing2D.LineCap @endCap) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Drawing2D.CustomLineCap.GetStrokeCaps");
     }
     public enum DashCap : int
     {
@@ -1124,57 +1095,11 @@ namespace System.Drawing.Imaging
         EmfPlusOnly = 4,
         EmfPlusDual = 5,
     }
-    public sealed unsafe partial class Encoder
-    {
-        public static readonly global::System.Drawing.Imaging.Encoder Compression;
-        public static readonly global::System.Drawing.Imaging.Encoder ColorDepth;
-        public static readonly global::System.Drawing.Imaging.Encoder ScanMethod;
-        public static readonly global::System.Drawing.Imaging.Encoder Version;
-        public static readonly global::System.Drawing.Imaging.Encoder RenderMethod;
-        public static readonly global::System.Drawing.Imaging.Encoder Quality;
-        public static readonly global::System.Drawing.Imaging.Encoder Transformation;
-        public static readonly global::System.Drawing.Imaging.Encoder LuminanceTable;
-        public static readonly global::System.Drawing.Imaging.Encoder ChrominanceTable;
-        public static readonly global::System.Drawing.Imaging.Encoder SaveFlag;
-        public static readonly global::System.Drawing.Imaging.Encoder ColorSpace;
-        public static readonly global::System.Drawing.Imaging.Encoder ImageItems;
-        public static readonly global::System.Drawing.Imaging.Encoder SaveAsCmyk;
-        public Encoder(global::System.Guid @guid) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.Encoder..ctor");
-        private protected Encoder() { }
-        public global::System.Guid Guid { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.Encoder.Guid"); }
-    }
     public sealed unsafe partial class EncoderParameter : global::System.IDisposable
     {
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, byte @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, byte @value, bool @undefined) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, short @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, long @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, int @numerator, int @denominator) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, long @rangebegin, long @rangeend) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, int @numerator1, int @demoninator1, int @numerator2, int @demoninator2) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, string @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, byte[] @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, byte[] @value, bool @undefined) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, short[] @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, long[] @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, int[] @numerator, int[] @denominator) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, long[] @rangebegin, long[] @rangeend) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
-        public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, int[] @numerator1, int[] @denominator1, int[] @numerator2, int[] @denominator2) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
         public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, int @NumberOfValues, int @Type, int @Value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
         public EncoderParameter(global::System.Drawing.Imaging.Encoder @encoder, int @numberValues, global::System.Drawing.Imaging.EncoderParameterValueType @type, global::System.IntPtr @value) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter..ctor");
         private protected EncoderParameter() { }
-        public global::System.Drawing.Imaging.Encoder Encoder { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter.Encoder"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter.Encoder"); }
-        public global::System.Drawing.Imaging.EncoderParameterValueType Type { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter.Type"); }
-        public global::System.Drawing.Imaging.EncoderParameterValueType ValueType { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter.ValueType"); }
-        public int NumberOfValues { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter.NumberOfValues"); }
-        public void Dispose() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameter.Dispose");
-    }
-    public sealed unsafe partial class EncoderParameters : global::System.IDisposable
-    {
-        public EncoderParameters(int @count) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameters..ctor");
-        public EncoderParameters() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameters..ctor");
-        public global::System.Drawing.Imaging.EncoderParameter[] Param { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameters.Param"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameters.Param"); }
-        public void Dispose() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.EncoderParameters.Dispose");
     }
     public enum EncoderParameterValueType : int
     {
@@ -1270,23 +1195,6 @@ namespace System.Drawing.Imaging
         Builtin = 65536,
         System = 131072,
         User = 262144,
-    }
-    public sealed unsafe partial class ImageCodecInfo
-    {
-        private protected ImageCodecInfo() { }
-        public global::System.Guid Clsid { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.Clsid"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.Clsid"); }
-        public global::System.Guid FormatID { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.FormatID"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.FormatID"); }
-        public string CodecName { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.CodecName"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.CodecName"); }
-        public string DllName { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.DllName"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.DllName"); }
-        public string FormatDescription { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.FormatDescription"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.FormatDescription"); }
-        public string FilenameExtension { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.FilenameExtension"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.FilenameExtension"); }
-        public string MimeType { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.MimeType"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.MimeType"); }
-        public global::System.Drawing.Imaging.ImageCodecFlags Flags { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.Flags"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.Flags"); }
-        public int Version { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.Version"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.Version"); }
-        public byte[][] SignaturePatterns { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.SignaturePatterns"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.SignaturePatterns"); }
-        public byte[][] SignatureMasks { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.SignatureMasks"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.SignatureMasks"); }
-        public static global::System.Drawing.Imaging.ImageCodecInfo[] GetImageDecoders() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.GetImageDecoders");
-        public static global::System.Drawing.Imaging.ImageCodecInfo[] GetImageEncoders() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders");
     }
     [global::System.Flags]
     public enum ImageFlags : int
@@ -1529,9 +1437,7 @@ namespace System.Drawing.Imaging.Effects
     }
     public unsafe partial class ColorMatrixEffect : global::System.Drawing.Imaging.Effects.Effect
     {
-        public ColorMatrixEffect(global::System.Drawing.Imaging.ColorMatrix @matrix) : base() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.Effects.ColorMatrixEffect..ctor");
         private protected ColorMatrixEffect() : base() { }
-        public global::System.Drawing.Imaging.ColorMatrix Matrix { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.Effects.ColorMatrixEffect.Matrix"); }
     }
     public unsafe partial class ContrastCurveEffect : global::System.Drawing.Imaging.Effects.ColorCurveEffect
     {
@@ -1555,8 +1461,6 @@ namespace System.Drawing.Imaging.Effects
     public abstract unsafe partial class Effect : global::System.IDisposable
     {
         private protected Effect() { }
-        public void Dispose() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.Effects.Effect.Dispose");
-        protected virtual void Dispose(bool @disposing) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Imaging.Effects.Effect.Dispose");
     }
     public unsafe partial class ExposureCurveEffect : global::System.Drawing.Imaging.Effects.ColorCurveEffect
     {
@@ -1900,21 +1804,17 @@ namespace System.Drawing.Printing
     }
     public unsafe partial class PrintDocument : global::System.ComponentModel.Component
     {
-        public PrintDocument() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument..ctor");
         public global::System.Drawing.Printing.PageSettings DefaultPageSettings { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.DefaultPageSettings"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.DefaultPageSettings"); }
         public string DocumentName { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.DocumentName"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.DocumentName"); }
         public bool OriginAtMargins { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.OriginAtMargins"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.OriginAtMargins"); }
         public global::System.Drawing.Printing.PrintController PrintController { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.PrintController"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.PrintController"); }
-        public global::System.Drawing.Printing.PrinterSettings PrinterSettings { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.PrinterSettings"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.PrinterSettings"); }
         public event global::System.Drawing.Printing.PrintEventHandler BeginPrint { add { } remove { } }
         public event global::System.Drawing.Printing.PrintEventHandler EndPrint { add { } remove { } }
-        public event global::System.Drawing.Printing.PrintPageEventHandler PrintPage { add { } remove { } }
         public event global::System.Drawing.Printing.QueryPageSettingsEventHandler QueryPageSettings { add { } remove { } }
         protected internal virtual void OnBeginPrint(global::System.Drawing.Printing.PrintEventArgs @e) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.OnBeginPrint");
         protected internal virtual void OnEndPrint(global::System.Drawing.Printing.PrintEventArgs @e) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.OnEndPrint");
         protected internal virtual void OnPrintPage(global::System.Drawing.Printing.PrintPageEventArgs @e) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.OnPrintPage");
         protected internal virtual void OnQueryPageSettings(global::System.Drawing.Printing.QueryPageSettingsEventArgs @e) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.OnQueryPageSettings");
-        public void Print() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.Print");
         public override string ToString() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintDocument.ToString");
     }
     public unsafe partial class PrinterResolution
@@ -1935,7 +1835,6 @@ namespace System.Drawing.Printing
     }
     public unsafe partial class PrinterSettings : global::System.ICloneable
     {
-        public PrinterSettings() => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrinterSettings..ctor");
         public bool CanDuplex { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrinterSettings.CanDuplex"); }
         public short Copies { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrinterSettings.Copies"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrinterSettings.Copies"); }
         public bool Collate { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrinterSettings.Collate"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrinterSettings.Collate"); }
@@ -2059,13 +1958,7 @@ namespace System.Drawing.Printing
     public delegate void PrintEventHandler(object @sender, global::System.Drawing.Printing.PrintEventArgs @e);
     public unsafe partial class PrintPageEventArgs : global::System.EventArgs
     {
-        public PrintPageEventArgs(global::System.Drawing.Graphics @graphics, global::System.Drawing.Rectangle @marginBounds, global::System.Drawing.Rectangle @pageBounds, global::System.Drawing.Printing.PageSettings @pageSettings) => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs..ctor");
         private protected PrintPageEventArgs() { }
-        public bool Cancel { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.Cancel"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.Cancel"); }
-        public global::System.Drawing.Graphics Graphics { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.Graphics"); }
-        public bool HasMorePages { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.HasMorePages"); set => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.HasMorePages"); }
-        public global::System.Drawing.Rectangle MarginBounds { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.MarginBounds"); }
-        public global::System.Drawing.Rectangle PageBounds { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.PageBounds"); }
         public global::System.Drawing.Printing.PageSettings PageSettings { get => throw global::System.Drawing.Unsupported.Member("System.Drawing.Printing.PrintPageEventArgs.PageSettings"); }
     }
     public delegate void PrintPageEventHandler(object @sender, global::System.Drawing.Printing.PrintPageEventArgs @e);

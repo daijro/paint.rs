@@ -587,7 +587,7 @@ impl ToolMenu {
                 }
                 OptionKind::Slider => {
                     let v = owner.number(app, def.key);
-                    if let Some(nv) = opt::slider_meter(ui, def.key, control, def, v, bg) {
+                    if let Some(nv) = opt::slider_meter(ui, def.key, control, def, v, wheel, bg) {
                         changes.push((def.key, json_number(nv)));
                     }
                 }

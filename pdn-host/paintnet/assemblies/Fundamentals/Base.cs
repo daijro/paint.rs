@@ -33,12 +33,30 @@ namespace PaintDotNet
     public static class FloatExtensions
     {
         public static bool IsFinite(this float value) => float.IsFinite(value);
+        public static float Clamp(this float value, float min, float max) => value < min ? min : value > max ? max : value;
     }
 
     public static class StringExtensions
     {
         public static bool IsNullOrEmpty(this string? value) => string.IsNullOrEmpty(value);
         public static bool IsNullOrWhiteSpace(this string? value) => string.IsNullOrWhiteSpace(value);
+        public static string Join(this System.Collections.Generic.IEnumerable<string> values, char separator) => string.Join(separator, values);
+        public static string Join(this System.Collections.Generic.IEnumerable<string> values, string separator) => string.Join(separator, values);
+    }
+
+    public static class TypeExtensions
+    {
+        /// Whether the type carries [Obsolete] (CodeLab 6.x checks this when it gathers effects).
+        public static bool IsObsolete(this System.Type type, bool inherit) => type.GetCustomAttributes(typeof(System.ObsoleteAttribute), inherit).Length != 0;
+
+        /// The interfaces `type` implements directly -- not those reachable only through another of its interfaces.
+        public static System.Type[] GetDirectBaseInterfaces(this System.Type type)
+        {
+            System.Type[] all = type.GetInterfaces();
+            var indirect = new System.Collections.Generic.HashSet<System.Type>();
+            foreach (System.Type i in all) foreach (System.Type b in i.GetInterfaces()) indirect.Add(b);
+            return System.Array.FindAll(all, i => !indirect.Contains(i));
+        }
     }
 
     public static class ComparableExtensions

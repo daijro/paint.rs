@@ -17,7 +17,8 @@ use super::{bmp, gif, png, tga, tiff};
 use crate::canvas::ImageData;
 use crate::pixel::Px;
 use crate::util::quantize::{
-    AlphaMixture, PaletteMap, analyze, flatten_alpha, map_indices, octree_palette, palette_table,
+    AlphaMixture, PaletteMap, analyze, flatten_alpha, map_indices, median_cut_palette,
+    octree_palette, palette_table,
 };
 
 /// Bit depth token (§2.1). `Auto` picks the smallest lossless depth (Task 47b).
@@ -33,7 +34,7 @@ pub enum BitDepth {
     B1,
 }
 
-/// Quantization token (§2.1). Median Cut falls back to Octree (B-E7).
+/// Quantization token (§2.1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Quantizer {
     #[default]
@@ -54,10 +55,13 @@ pub struct SaveOptions {
     pub dither: u8,
     /// Transparency threshold for 8-bit with transparency, 0–255.
     pub alpha_threshold: u8,
-    /// PNG Adam7. Not exposed (Task 47b): the PNG writer is always non-interlaced.
+    /// PNG Adam7 interlacing.
     pub interlaced: bool,
     /// TGA run-length encoding.
     pub rle: bool,
+    /// BMP, GIF and TGA "Convert to sRGB". Documents are sRGB, so it changes no pixel; the save
+    /// dialog shows and remembers it.
+    pub convert_to_srgb: bool,
     /// Resolution written to PNG pHYs, the BMP header and the TIFF tags.
     pub dpi: f64,
     /// A FileType plugin format's save options, by property name (its defaults where absent).
@@ -75,6 +79,7 @@ impl Default for SaveOptions {
             alpha_threshold: 128,
             interlaced: false,
             rle: true,
+            convert_to_srgb: true,
             dpi: 96.0,
             plugin: crate::effect::Values::new(),
         }
@@ -211,7 +216,7 @@ pub fn choose_bit_depth(
 /// §2.8 steps 6–8 for an indexed depth: the alpha flatten (threshold for 8A1, else 0), the lossless
 /// palette when it fits 2^bpp (transparent entry last), else the Octree with the last slot kept
 /// for transparent; then the Floyd–Steinberg index map at `opt.dither`. Returns (palette, one
-/// index per pixel). Median Cut falls back to the Octree (B-E7).
+/// index per pixel). Median Cut is WIC's, over the flattened pixels (`median_cut_palette`).
 pub fn indexed(img: &ImageData, depth: Depth, opt: &SaveOptions) -> (Vec<Px>, Vec<u8>) {
     // ruling R34: §2.8 step 6's t = 0 for every depth but 8A1, not step 3's t = 1.
     let t = if depth == Depth::B8A1 {
@@ -232,14 +237,18 @@ pub fn indexed(img: &ImageData, depth: Depth, opt: &SaveOptions) -> (Vec<Px>, Ve
         Some(table) if table.len() <= max => table,
         _ => {
             let clear = px.as_chunks::<4>().0.iter().any(|p| p[3] == 0);
-            let mut pal: Vec<Px> = octree_palette(&px, max - clear as usize)
-                .into_iter()
-                .map(|[r, g, b]| [r, g, b, 255])
-                .collect();
-            if clear {
-                pal.push([0; 4]);
+            if opt.quantizer == Quantizer::MedianCut {
+                median_cut_palette(&px, max, clear)
+            } else {
+                let mut pal: Vec<Px> = octree_palette(&px, max - clear as usize)
+                    .into_iter()
+                    .map(|[r, g, b]| [r, g, b, 255])
+                    .collect();
+                if clear {
+                    pal.push([0; 4]);
+                }
+                pal
             }
-            pal
         }
     };
     let mut map = PaletteMap::new(&palette);
@@ -291,14 +300,28 @@ impl Raster<'_> {
 
     /// Row `y`, with 1/2/4-bit indices packed MSB-first, as Paint.NET packs them.
     pub(crate) fn row(&self, y: u32) -> Vec<u8> {
+        self.columns(y, 0, 1)
+    }
+
+    /// Row `y`'s pixels `x0`, `x0 + dx`, … (one Adam7 pass's), packed as `row` packs them.
+    pub(crate) fn columns(&self, y: u32, x0: u32, dx: u32) -> Vec<u8> {
         let bits = self.depth.bits();
-        let width = self.w as usize * (bits as usize).div_ceil(8);
+        let size = (bits as usize).div_ceil(8);
+        let width = self.w as usize * size;
         let row = &self.samples[y as usize * width..][..width];
+        let picked: Vec<u8> = row
+            .chunks(size)
+            .skip(x0 as usize)
+            .step_by(dx as usize)
+            .flatten()
+            .copied()
+            .collect();
         if bits >= 8 {
-            return row.to_vec();
+            return picked;
         }
         let per = (8 / bits) as usize;
-        row.chunks(per)
+        picked
+            .chunks(per)
             .map(|c| {
                 c.iter()
                     .enumerate()
@@ -317,7 +340,7 @@ fn write(
 ) -> Result<Vec<u8>, CodecError> {
     let r = Raster::new(img, depth, opt);
     match format {
-        "png" => Ok(png::write(&r, opt.dpi)),
+        "png" => Ok(png::write(&r, opt.dpi, opt.interlaced)),
         "bmp" => bmp::write(&r, opt.dpi),
         "tiff" => tiff::write(&r, opt.dpi),
         _ => gif::write(&r),
@@ -349,9 +372,15 @@ fn encode_8bit(img: &ImageData, format: &str, opt: &SaveOptions) -> Result<Vec<u
     write(img, format, depth, if auto { &trial_opt } else { opt })
 }
 
+/// Whether paint.rs writes built-in format `format`: every one but HEIC, which paintdotjs has no
+/// encoder for.
+pub fn can_encode(format: &str) -> bool {
+    format != "heic"
+}
+
 /// Encodes straight RGBA8 `img` as `format` (a paintdotjs format id). PNG, BMP, TIFF, GIF and TGA
-/// go through Paint.NET's 8-bit pipeline (§2.8); HEIC and JPEG XR fail with paintdotjs's errors
-/// (Task 48 keeps them).
+/// go through Paint.NET's 8-bit pipeline (§2.8); HEIC fails with paintdotjs's error
+/// ([`can_encode`]).
 pub fn encode(img: &ImageData, format: &str, options: &SaveOptions) -> Result<Vec<u8>, CodecError> {
     let len = (img.width as u64 * img.height as u64).checked_mul(4);
     if img.width == 0 || img.height == 0 || len != Some(img.data.len() as u64) {
@@ -369,9 +398,9 @@ pub fn encode(img: &ImageData, format: &str, options: &SaveOptions) -> Result<Ve
             Err(invalid("TGA images are at most 65535 pixels per side"))
         }
         "tga" => Ok(tga::encode(img, options, tga::TgaClock::now())),
-        // paintdotjs has no browser encoder for HEIC and its bundled ImageMagick fails with this;
-        // JPEG XR gets the generic message below (both captured from `ImageEncoder.encode` in
-        // paintdotjs @ b4e6fc5).
+        "jxr" => encode_jxr(img, options),
+        // paintdotjs has no browser encoder for HEIC and its bundled ImageMagick fails with this
+        // (captured from `ImageEncoder.encode` in paintdotjs @ b4e6fc5).
         "heic" => Err(CodecError::Unsupported(
             "NoEncodeDelegateForThisImageFormat `HEIC' @ error/constitute.c/WriteImage/1435".into(),
         )),
@@ -461,6 +490,44 @@ fn encode_webp(img: &ImageData, quality: u8) -> Result<Vec<u8>, CodecError> {
         )
         .map_err(invalid)?;
     Ok(out)
+}
+
+/// JPEG XR as WIC writes it, which is how Paint.NET saves it: opend2d's encoder, byte for byte the
+/// WIC codec's, at `ImageQuality` q / 100 (q = 100 is lossless). Auto depth (§2.8 step 2) is
+/// 24bppBGR for an opaque image, else 32bppBGRA with WIC's planar, lossless alpha, both of which
+/// `codecs::decode` reads. It encodes in memory, so the web build has it too.
+fn encode_jxr(img: &ImageData, options: &SaveOptions) -> Result<Vec<u8>, CodecError> {
+    let alpha = choose_bit_depth("jxr", img, options, &mut |_| 0) == Depth::B32;
+    let px = img.data.as_chunks::<4>().0.iter();
+    let (bpp, pixels): (usize, Vec<u8>) = if alpha {
+        (4, px.flat_map(|&[r, g, b, a]| [b, g, r, a]).collect())
+    } else {
+        (3, px.flat_map(|&[r, g, b, _]| [b, g, r]).collect())
+    };
+    // GUID_WICPixelFormat24bppBGR as its little-endian bytes; 32bppBGRA differs in the last one.
+    let mut format = [
+        0x24, 0xC3, 0xDD, 0x6F, 0x03, 0x4E, 0xFE, 0x4B, 0xB1, 0x85, 0x3D, 0x77, 0x76, 0x8D, 0xC9,
+        0x0C,
+    ];
+    if alpha {
+        format[15] = 0x0F;
+    }
+    let opts = d2d::wic::JxrEncodeOptions {
+        image_quality: f32::from(options.quality.unwrap_or(100).min(100)) / 100.0,
+        ..Default::default()
+    };
+    let dpi = options.dpi as f32;
+    let stride = img.width as usize * bpp;
+    d2d::wic::encode_jxr(
+        &format,
+        img.width,
+        img.height,
+        &pixels,
+        stride,
+        &opts,
+        (dpi, dpi),
+    )
+    .map_err(|e| invalid(format!("JPEG XR encoding failed (0x{:08X})", e.hresult())))
 }
 
 /// AVIF through `ravif` (formats-matrix.md §3.5) at colour and alpha quality q.
@@ -946,7 +1013,6 @@ mod tests {
         };
         let o = SaveOptions::default();
         let msg = |f: &str| encode(&img, f, &o).unwrap_err().to_string();
-        assert_eq!(msg("jxr"), "Unsupported image format: jxr");
         assert!(msg("heic").starts_with("NoEncodeDelegateForThisImageFormat `HEIC'"));
         assert_eq!(msg("ico"), "Unsupported image format: ico");
         let bad_len = ImageData {
@@ -966,6 +1032,58 @@ mod tests {
             data: vec![0; 280_000],
         };
         assert!(encode(&wide, "jpeg", &o).is_err());
+    }
+
+    /// JPEG XR: 24bppBGR when opaque, else 32bppBGRA with its alpha plane, both read back by
+    /// `codecs::decode` with the DPI; q = 100 is exact, a lossy q stays close and keeps the alpha.
+    #[test]
+    fn jxr_round_trips() {
+        let (w, h) = (24u32, 16u32);
+        let opaque: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let (x, y) = (i % w, i / w);
+                [(x * 10) as u8, (y * 15) as u8, ((x + y) * 5) as u8, 255]
+            })
+            .collect();
+        let mut clear = opaque.clone();
+        for (i, p) in clear.chunks_mut(4).enumerate() {
+            p[3] = (i * 3) as u8;
+        }
+        for (data, last) in [(opaque, 0x0C), (clear, 0x0F)] {
+            let img = ImageData {
+                width: w,
+                height: h,
+                data,
+            };
+            for q in [100, 90] {
+                let o = SaveOptions {
+                    quality: Some(q),
+                    dpi: 150.0,
+                    ..SaveOptions::default_for("jxr")
+                };
+                let bytes = encode(&img, "jxr", &o).unwrap();
+                let guid = [
+                    0x24, 0xC3, 0xDD, 0x6F, 0x03, 0x4E, 0xFE, 0x4B, 0xB1, 0x85, 0x3D,
+                ];
+                let at = bytes.windows(11).position(|g| g == guid).unwrap();
+                assert_eq!(bytes[at + 15], last, "q {q}");
+                let back = super::super::codecs::decode("jxr", &bytes).unwrap();
+                assert_eq!(back.dpi, Some(150.0));
+                let back = back.image;
+                assert_eq!((back.width, back.height), (w, h));
+                let pairs = || img.data.chunks(4).zip(back.data.chunks(4));
+                assert!(pairs().all(|(a, b)| a[3] == b[3]), "alpha at q {q}");
+                if q == 100 {
+                    assert_eq!(back.data, img.data);
+                } else {
+                    let diff: u32 = pairs()
+                        .flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]) as u32))
+                        .sum();
+                    let mean = diff as f64 / (w * h * 3) as f64;
+                    assert!(mean < 3.0, "mean error {mean} at q {q}");
+                }
+            }
+        }
     }
 
     /// Lossy WebP and JPEG XL keep the size and stay close; q = 100 is exact; 1-px JXL works.

@@ -1030,6 +1030,7 @@ dependencies = [
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-linebreak",
+ "unicode-properties",
  "unicode-script",
  "windows-core",
 ]
@@ -2457,9 +2458,6 @@ dependencies = [
 [[package]]
 name = "jpegxr-pure-rs"
 version = "0.1.0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "js-sys"
@@ -3525,6 +3523,7 @@ dependencies = [
 name = "pdn-core"
 version = "0.8.0"
 dependencies = [
+ "base64",
  "bcdec_rs",
  "candle-core",
  "candle-nn",

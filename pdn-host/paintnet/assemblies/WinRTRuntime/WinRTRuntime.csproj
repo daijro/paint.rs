@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- CodeLab 6.x binds [WinRT.Runtime]; this stand-in matches that assembly name so its editor-UI types load in
+         the browser host (there is no Windows Runtime there). Unsigned: the host binds plug-in references by simple
+         name, as with the other Paint.NET stand-ins. -->
+    <AssemblyName>WinRT.Runtime</AssemblyName>
+    <RootNamespace>WinRT</RootNamespace>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

@@ -8,7 +8,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{Host, Plugin};
+pub use native::{CanvasSession, Host, Plugin};
 
 /// A host/plugin error, with the message the managed side reported where there is one.
 #[derive(Debug, Clone)]

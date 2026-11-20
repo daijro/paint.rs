@@ -350,10 +350,13 @@ impl GradientRecord {
             let angle =
                 (12.0 * y.atan2(x) / std::f64::consts::PI).round() * std::f64::consts::PI / 12.0;
             let length = x.hypot(y);
-            *point = [
-                anchor[0] + length * angle.cos(),
-                anchor[1] + length * angle.sin(),
-            ];
+            // A point already on a 15° step (one a release committed) stays exactly where it is.
+            if (angle - y.atan2(x)).abs() > 1e-12 {
+                *point = [
+                    anchor[0] + length * angle.cos(),
+                    anchor[1] + length * angle.sin(),
+                ];
+            }
         }
         (start, end)
     }
@@ -711,6 +714,12 @@ impl Tool for GradientTool {
         }
         self.on_mouse_move(app, x, y, i);
         self.drag = None;
+        // As in Paint.NET, the release commits the constrained points: a Shift released after it
+        // changes nothing. The effective points are the same, so nothing renders again.
+        if let Some(r) = self.tx.record_mut().filter(|r| r.constrain) {
+            (r.start, r.end) = r.points();
+            r.constrain = false;
+        }
         transacted::end(self, app);
         self.cursor = "gradient_tool_cursor";
         true

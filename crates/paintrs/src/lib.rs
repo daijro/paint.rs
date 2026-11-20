@@ -184,6 +184,8 @@ impl PaintApp {
             o.zoom_with_keyboard = false;
         });
         let migrated = prefs.get(CHECKERBOARD_MIGRATION_KEY) == Some("1");
+        // What the user always allows plug-ins to do outside paint.rs (the host gets it once it is up).
+        platform::plugins::load_permissions(&prefs);
         let (settings, migrated_raw) = AppSettings::load_with(prefs.get(STORAGE_KEY), migrated);
         if let Some(raw) = migrated_raw {
             prefs.set(STORAGE_KEY, &raw);
@@ -907,6 +909,8 @@ impl eframe::App for PaintApp {
                 eprintln!("Could not reload the page: {error:?}");
             }
         }
+        // A wheel gesture no value control took this frame is a scroll to its end.
+        kit::inputs::end_wheel_frame(&ctx);
         // The tool cursor goes to the OS (CSS on the web) once nothing else can change the cursor.
         let tool_cursor = shell::canvas_view::finish_cursor(&ctx);
         #[cfg(target_arch = "wasm32")]

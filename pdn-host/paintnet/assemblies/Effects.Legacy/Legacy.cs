@@ -31,7 +31,20 @@ public abstract class LegacyEffect : PropertyBasedEffect
             Render(DstArgs.Surface, SrcArgs.Surface, Rectangle.Intersect(rois[i], SrcArgs.Surface.Bounds));
     }
 
-    private protected static int Int(PropertyBasedEffectConfigToken? t, object name) => (int)t!.GetProperty(name)!.Value!;
+    // A plug-in that drives a built-in (Burninate's CloudsEffect, Petscop's MotionBlurEffect) may box a token
+    // value as a different numeric type than genuine does, so read it tolerantly (Convert, as Num already does)
+    // rather than with a hard (int)/(enum) cast that throws Arg_InvalidCastException.
+    private protected static int Int(PropertyBasedEffectConfigToken? t, object name) => Convert.ToInt32(t!.GetProperty(name)!.Value!, System.Globalization.CultureInfo.InvariantCulture);
+
+    private protected static TEnum EnumValue<TEnum>(PropertyBasedEffectConfigToken? t, object name) where TEnum : struct, Enum
+    {
+        object? v = t?.GetProperty(name)?.Value;
+        if (v is TEnum e) return e;
+        if (v is string s && Enum.TryParse(s, out TEnum p)) return p;
+        try { if (v is IConvertible) return (TEnum)Enum.ToObject(typeof(TEnum), Convert.ToInt32(v, System.Globalization.CultureInfo.InvariantCulture)); }
+        catch (Exception) { }
+        return default;   // a plug-in that set the choice to a value we cannot read falls back to the default (index 0)
+    }
 
     /// Genuine LocalHistogramEffectLegacy.GetPercentile over the classic disc (dx² + dy² ≤ r² + r):
     /// per channel the first non-empty bin whose cumulative count reaches ⌊area·p⌋ (no +1); alpha is
@@ -106,6 +119,34 @@ public abstract class LegacyEffect : PropertyBasedEffect
     }
 
     private protected static double Num(PropertyBasedEffectConfigToken? t, object name) => Convert.ToDouble(t!.GetProperty(name)!.Value!, System.Globalization.CultureInfo.InvariantCulture);
+
+    private static int Reflect(int v, int n) { if (n <= 1) return 0; int p = 2 * n - 2; v = ((v % p) + p) % p; return v < n ? v : p - v; }
+
+    /// A warp effect's bilinear sample of `src` at (sx, sy), mapping out-of-image coordinates per `edge`
+    /// (`original` is the untransformed pixel, for the Original edge).
+    private protected static ColorBgra SampleBilinear(Surface src, double sx, double sy, WarpEdgeBehavior edge, ColorBgra original)
+    {
+        int w = src.Width, h = src.Height;
+        int fx = (int)Math.Floor(sx), fy = (int)Math.Floor(sy);
+        double tx = sx - fx, ty = sy - fy;
+        ColorBgra At(int x, int y)
+        {
+            switch (edge)
+            {
+                case WarpEdgeBehavior.Original: if (x < 0 || y < 0 || x >= w || y >= h) return original; break;
+                case WarpEdgeBehavior.Transparent: if (x < 0 || y < 0 || x >= w || y >= h) return default; break;
+                case WarpEdgeBehavior.Wrap: x = ((x % w) + w) % w; y = ((y % h) + h) % h; break;
+                case WarpEdgeBehavior.Reflect: x = Reflect(x, w); y = Reflect(y, h); break;
+                default: x = Math.Clamp(x, 0, w - 1); y = Math.Clamp(y, 0, h - 1); break;
+            }
+            return src[Math.Clamp(x, 0, w - 1), Math.Clamp(y, 0, h - 1)];
+        }
+        ColorBgra c00 = At(fx, fy), c10 = At(fx + 1, fy), c01 = At(fx, fy + 1), c11 = At(fx + 1, fy + 1);
+        static byte L(byte a, byte b, double t) => (byte)Math.Clamp(a + (b - a) * t, 0, 255);
+        ColorBgra Row(ColorBgra a, ColorBgra b) => ColorBgra.FromBgra(L(a.B, b.B, tx), L(a.G, b.G, tx), L(a.R, b.R, tx), L(a.A, b.A, tx));
+        ColorBgra top = Row(c00, c10), bottom = Row(c01, c11);
+        return ColorBgra.FromBgra(L(top.B, bottom.B, ty), L(top.G, bottom.G, ty), L(top.R, bottom.R, ty), L(top.A, bottom.A, ty));
+    }
 
     /// Genuine legacy GaussianBlurEffect: 16·(min(i, 2r−i)+1) tent weights in x and y, taps outside
     /// the image skipped (renormalised), colour weighted by A + (A >> 7). The first column of each ROI
@@ -186,6 +227,104 @@ public sealed class MedianEffect : LegacyEffect
         => Percentile(dst, src, rect, radius, percentile / 100f, (_, m) => m);
 }
 
+/// Rotate / Zoom distortion. ScriptLab type-checks for it (`val is RotateZoomEffect`) while listing the installed
+/// effects, so the type must resolve or the list-building method's interp transform aborts the runtime. It is not
+/// one of the host's enumerated built-ins (ScriptLab enumerates PaintDotNet.Effects.Core only), so this shape-only
+/// stand-in just needs to resolve and construct; a pass-through render keeps it safe if ever invoked directly.
+public sealed class RotateZoomEffect : LegacyEffect
+{
+    public RotateZoomEffect() : base("Rotate / Zoom", SubmenuNames.Distort) { }
+    protected override PropertyCollection OnCreatePropertyCollection() => new([]);
+    private protected override void Render(Surface dst, Surface src, Rectangle rect) => dst.CopySurface(src, rect);
+}
+
+/// Genuine Reduce Noise (LocalHistogramEffect): each channel is replaced by its own value's percentile within
+/// the disc window (the cumulative share of pixels below it, 0..255), then the source is blended toward that
+/// by Strength, less where the pixel is bright. PhotoAdjustments' Combined Adjustments drives it; a plug-in's
+/// built-in need not match genuine pixel for pixel.
+public sealed class ReduceNoiseEffect : LegacyEffect
+{
+    public enum PropertyNames { Radius, Strength }
+    private int radius;
+    private double strength;
+    public ReduceNoiseEffect() : base("Reduce Noise", SubmenuNames.Noise) { }
+    protected override PropertyCollection OnCreatePropertyCollection()
+        => new([new Int32Property(PropertyNames.Radius, 6, 1, 200), new DoubleProperty(PropertyNames.Strength, 0.4, 0.0, 1.0)]);
+    protected override void OnSetRenderInfo(PropertyBasedEffectConfigToken? t, RenderArgs dst, RenderArgs src)
+    {
+        radius = Int(t, PropertyNames.Radius);
+        strength = Num(t, PropertyNames.Strength);
+    }
+    private protected override void Render(Surface dst, Surface src, Rectangle rect)
+        => LocalHistogram(dst, src, rect, radius, (hist, n, c) =>
+        {
+            if (n == 0) return c;
+            byte Pct(int ch, int v) { int acc = 0; for (int i = 0; i < v; i++) acc += hist[ch, i]; return (byte)(acc * 255 / n); }
+            ColorBgra normalized = ColorBgra.FromBgra(Pct(0, c.B), Pct(1, c.G), Pct(2, c.R), c.A);
+            float lerp = (float)(strength * (1.0 - 0.75 * (c.GetIntensityByte() / 255.0)));
+            return ColorBgra.Lerp(c, normalized, lerp);
+        });
+}
+
+/// How a warp effect samples a source position outside the image.
+public enum WarpEdgeBehavior { Clamp, Wrap, Reflect, Original, Transparent }
+
+/// Classic Polar Inversion (a WarpEffect): each output pixel samples the source at the position inverted about a
+/// disc (the radius becomes R*R/r), its disc scaled by Amount, with the chosen edge behaviour. Simon Brown's Fire
+/// drives it. Plug-in-driven, so it need not match genuine pixel for pixel.
+public sealed class PolarInversionEffect : LegacyEffect
+{
+    public enum PropertyNames { Amount, EdgeBehavior, Quality }
+    private double amount;
+    private WarpEdgeBehavior edge;
+    public PolarInversionEffect() : base("Polar Inversion", SubmenuNames.Distort) { }
+    protected override PropertyCollection OnCreatePropertyCollection()
+        => new([new DoubleProperty(PropertyNames.Amount, 2.0, -4.0, 4.0),
+                StaticListChoiceProperty.CreateForEnum(PropertyNames.EdgeBehavior, WarpEdgeBehavior.Wrap),
+                new Int32Property(PropertyNames.Quality, 2, 1, 5)]);
+    protected override void OnSetRenderInfo(PropertyBasedEffectConfigToken? t, RenderArgs dst, RenderArgs src)
+    {
+        amount = Num(t, PropertyNames.Amount);
+        edge = EnumValue<WarpEdgeBehavior>(t, PropertyNames.EdgeBehavior);
+    }
+    private protected override void Render(Surface dst, Surface src, Rectangle rect)
+    {
+        int w = src.Width, h = src.Height;
+        double cx = w / 2.0, cy = h / 2.0;
+        double rr = Math.Max(1.0, Math.Min(w, h) / 2.0 * Math.Max(0.1, Math.Abs(amount) / 2.0));
+        for (int y = rect.Top; y < rect.Bottom; y++)
+            for (int x = rect.Left; x < rect.Right; x++)
+            {
+                double dx = (x - cx) / rr, dy = (y - cy) / rr, d2 = dx * dx + dy * dy;
+                if (d2 < 1e-9) { dst[x, y] = src[x, y]; continue; }
+                double k = 1.0 / d2;
+                dst[x, y] = SampleBilinear(src, cx + dx * k * rr, cy + dy * k * rr, edge, src[x, y]);
+            }
+    }
+}
+
+/// Classic Sepia: desaturate each pixel to its intensity, then a warm tone (a Level brightening red and darkening
+/// blue), as genuine. Plug-ins such as Simon Brown's Film Noir drive it; no properties.
+public sealed class SepiaEffect : LegacyEffect
+{
+    public SepiaEffect() : base("Sepia", SubmenuNames.Photo) { }
+    protected override PropertyCollection OnCreatePropertyCollection() => PropertyCollection.CreateEmpty();
+    protected override void OnSetRenderInfo(PropertyBasedEffectConfigToken? t, RenderArgs dst, RenderArgs src) { }
+    private protected override void Render(Surface dst, Surface src, Rectangle rect)
+    {
+        for (int y = rect.Top; y < rect.Bottom; y++)
+            for (int x = rect.Left; x < rect.Right; x++)
+            {
+                ColorBgra c = src[x, y];
+                byte gray = c.GetIntensityByte();
+                double g = gray / 255.0;
+                byte r = (byte)Math.Clamp(255.0 * Math.Pow(g, 1.0 / 1.2), 0, 255);
+                byte b = (byte)Math.Clamp(255.0 * Math.Pow(g, 1.0 / 0.8), 0, 255);
+                dst[x, y] = ColorBgra.FromBgra(b, gray, r, c.A);
+            }
+    }
+}
+
 public sealed class SharpenEffect : LegacyEffect
 {
     public enum PropertyNames { Amount }
@@ -209,7 +348,7 @@ public sealed class EdgeDetectEffect : LegacyEffect
 
     protected override void OnSetRenderInfo(PropertyBasedEffectConfigToken? t, RenderArgs dst, RenderArgs src)
     {
-        double d = ((double)t!.GetProperty(PropertyNames.Angle)!.Value! + 180.0) % 360.0;
+        double d = (Num(t, PropertyNames.Angle) + 180.0) % 360.0;
         if (d < 0) d += 360.0;
         double[] dirs = [135, 90, 45, 180, 0, 0, 225, 270, 315];
         for (int i = 0; i < 9; i++) weights[i / 3, i % 3] = i == 4 ? 0.0 : Math.Cos((dirs[i] - d) * (Math.PI / 180.0));
@@ -345,7 +484,7 @@ public sealed class AddNoiseEffect : LegacyEffect
     {
         intensity = Int(t, PropertyNames.Intensity);
         saturation = Int(t, PropertyNames.Saturation);
-        coverage = (int)Math.Round((double)t!.GetProperty(PropertyNames.Coverage)!.Value! / 100.0 * int.MaxValue);
+        coverage = (int)Math.Round(Num(t, PropertyNames.Coverage) / 100.0 * int.MaxValue);
     }
 
     /// pdn-core's noise_lut: λ bisected on [5, 10] until Σ λ·exp(−x²/2) over 16384 steps of x ∈ [−8, 8) is
@@ -407,7 +546,7 @@ public sealed class MotionBlurEffect : LegacyEffect
     // runs `distance` px at angle + 180° (y down), or straddles the pixel when centered.
     protected override void OnSetRenderInfo(PropertyBasedEffectConfigToken? t, RenderArgs dst, RenderArgs src)
     {
-        double angle = ((double)t!.GetProperty(PropertyNames.Angle)!.Value! + 180.0) * Math.PI / 180.0;
+        double angle = (Num(t, PropertyNames.Angle) + 180.0) * Math.PI / 180.0;
         int distance = Int(t, PropertyNames.Distance);
         var end = new PointF((float)(distance * Math.Cos(angle)), (float)-(distance * Math.Sin(angle)));
         var start = new PointF(0, 0);
@@ -501,9 +640,9 @@ public sealed class CloudsEffect : LegacyEffect
     protected override void OnSetRenderInfo(PropertyBasedEffectConfigToken? t, RenderArgs dst, RenderArgs src)
     {
         scale = Int(t, PropertyNames.Scale);
-        power = (double)t!.GetProperty(PropertyNames.Power)!.Value!;
+        power = Num(t, PropertyNames.Power);
         seed = (byte)(Int(t, PropertyNames.Seed) ^ instanceSeed);
-        var mode = (LayerBlendMode)t.GetProperty(PropertyNames.BlendMode)!.Value!;
+        var mode = EnumValue<LayerBlendMode>(t, PropertyNames.BlendMode);
         (from, to) = (EnvironmentParameters.PrimaryColor, EnvironmentParameters.SecondaryColor);
         // Opaque colours under Normal replace the image outright; otherwise the clouds compose over it.
         blend = mode == LayerBlendMode.Normal && from.A == 255 && to.A == 255 ? null : LayerBlendModeUtil.CreateCompositionOp(mode);

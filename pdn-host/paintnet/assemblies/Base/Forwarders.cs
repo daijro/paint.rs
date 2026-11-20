@@ -76,3 +76,10 @@ using PaintDotNet.PropertySystem;
 [assembly: TypeForwardedTo(typeof(PaintDotNet.FloatUtil))]
 [assembly: TypeForwardedTo(typeof(PaintDotNet.Int32Extensions))]
 [assembly: TypeForwardedTo(typeof(PaintDotNet.DoubleExtensions))]
+// Diagnostics + hashing helpers CurtisBlack.Common binds in PaintDotNet.Base; they now live in Fundamentals.
+[assembly: TypeForwardedTo(typeof(PaintDotNet.HashCodeUtil))]
+[assembly: TypeForwardedTo(typeof(PaintDotNet.Diagnostics.Validate))]
+[assembly: TypeForwardedTo(typeof(PaintDotNet.Diagnostics.Validation))]
+[assembly: TypeForwardedTo(typeof(PaintDotNet.Diagnostics.ValidationExtensions))]
+// CloneableExtensions moved to Fundamentals; ScriptLab binds it in Base.
+[assembly: TypeForwardedTo(typeof(PaintDotNet.CloneableExtensions))]

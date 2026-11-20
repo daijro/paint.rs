@@ -30,11 +30,24 @@ export EMSDK_PATH="$em" DOTNET_EMSCRIPTEN_LLVM_ROOT="$em/bin" DOTNET_EMSCRIPTEN_
        FROZEN_CACHE=True PATH="$em/emscripten:$em/bin:$(dirname "$node"):$PATH"
 
 out="$here/.build/native-wasm"
-# target-cpu=mvp keeps the archive to the feature set the .NET wasm pack's tooling accepts.
-RUSTFLAGS="-Ctarget-cpu=mvp" CARGO_TARGET_DIR="$out" \
-    cargo rustc --manifest-path "$opend2d/Cargo.toml" -p d2d-ffi --lib --crate-type staticlib \
+mkdir -p "$out/emtmp"
+# One combining staticlib (wasm-native/) links d2d-ffi (d2d1 + dwrite) and wic-ffi (windowscodecs)
+# into a single archive with one std -- a second Rust archive would duplicate std. Point its path
+# dependencies at the chosen opend2d. target-cpu=mvp keeps the archive to the feature set the .NET
+# wasm pack accepts; TMPDIR stays on disk (emcc scratch must not land on /tmp = tmpfs).
+ln -sfn "$opend2d" "$here/wasm-native/opend2d"
+# Seed this crate's lock from the chosen opend2d's committed lock, so the registry dependencies resolve
+# to the versions opend2d pins rather than whatever is newest -- reproducible, no drift from the pin,
+# and buildable offline. Cargo keeps every locked version and only adds this crate's own entry. The lock
+# stays git-ignored because it follows the pin, not this repository.
+cp "$opend2d/Cargo.lock" "$here/wasm-native/Cargo.lock"
+TMPDIR="$out/emtmp" RUSTFLAGS="-Ctarget-cpu=mvp" CARGO_TARGET_DIR="$out" \
+    cargo rustc --manifest-path "$here/wasm-native/Cargo.toml" --lib --crate-type staticlib \
         --release --target wasm32-unknown-emscripten
 rel="$out/wasm32-unknown-emscripten/release"
-cp "$rel/libd2d1.a" "$rel/d2d1.a"
+cp "$rel/libpdn_wasm_native.a" "$rel/d2d1.a"
+# dwrite.a and windowscodecs.a are empty, name-only archives: d2d1.a carries their symbols, but
+# Mono-wasm keys the P/Invoke table by archive file name, so each DllImport name needs an archive.
 rm -f "$rel/dwrite.a" && emar rcs "$rel/dwrite.a"
-echo "built -> $rel/d2d1.a ($(wc -c < "$rel/d2d1.a") bytes), $rel/dwrite.a (module name only)"
+rm -f "$rel/windowscodecs.a" && emar rcs "$rel/windowscodecs.a"
+echo "built -> $rel/d2d1.a ($(wc -c < "$rel/d2d1.a") bytes; d2d1+dwrite+windowscodecs), dwrite.a + windowscodecs.a (name stubs)"

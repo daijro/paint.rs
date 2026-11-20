@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A plug-in library the desktop's files and network gate rewrites as it loads, holding a constant of a WinForms
+       2.0 enum type, so writing the rewritten module back has to find WinForms (compat:
+       a_rewritten_plugin_with_a_winforms_2_constant_loads). Build: dn.sh build tests/resolvetest/resolvetest.csproj
+       -c Release -o .build/resolvetest -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>PdnResolveTest</AssemblyName>
+    <RootNamespace>PdnResolveTest</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- WebRequest is obsolete; the plug-ins that use it are what this stands for. -->
+    <NoWarn>$(NoWarn);SYSLIB0014</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="winforms20/**" />
+    <ProjectReference Include="winforms20/winforms20.csproj" Private="false" />
+  </ItemGroup>
+</Project>

@@ -30,7 +30,7 @@ paint.rs runs two kinds of plug-ins:
 | Kind | What it is | Status |
 |---|---|---|
 | **Classic effects and adjustments** | CPU `Effect`s, including the Paint.NET 3.x and 4.x plug-ins most forum packs are | Run. Their property dialogs (IndirectUI) are built from the plug-in's properties, with a live preview. |
-| **Plug-ins with their own settings window** | A Windows Forms `EffectConfigDialog` or Paint.NET 5 `EffectConfigForm`, including those built on OptionBasedLibrary | Run. paint.rs reads the window and shows its settings in its own dialog, with a live preview: sliders, check boxes, choices, lists, text, colours and the window's buttons. A button's result is kept as Paint.NET keeps it, in history, Repeat and saved images too. |
+| **Plug-ins with their own settings window** | A Windows Forms `EffectConfigDialog` or Paint.NET 5 `EffectConfigForm`, including those built on OptionBasedLibrary | Run. paint.rs reads the window and shows its settings in its own dialog, with a live preview: sliders, check boxes, choices, lists, text, colours and the window's buttons. A control the plug-in draws itself (pyrochild's Curves+ curve and Grid Warp grid, Liquify's canvas) shows as the plug-in draws it and is edited there with the mouse, as in Paint.NET; a button that asks for a file opens paint.rs's file chooser. A button's result is kept as Paint.NET keeps it, in history, Repeat and saved images too. |
 | **GPU effects** | Paint.NET 5's `GpuImageEffect`, `GpuDrawingEffect` and the CPU `BitmapEffect`, with ComputeSharp pixel shaders | Run through OpenD2D, paint.rs's implementation of Direct2D and DirectWrite, on the desktop and in the browser. |
 | **FileType plug-ins** | Paint.NET 5.2's file types and the classic ones (`FileType`, `PropertyBasedFileType`) | Their formats are listed in Open and Save. A format's save options come from the plug-in's properties and show in the Save dialog. A window a file type shows of its own while it opens or saves (TechnoRobbo's Icons and Animated Cursors, Midora's metafile import) shows in paint.rs's, as an effect's does. |
 
@@ -52,17 +52,14 @@ listed below.
 
 ## Known limitations
 
-- **Drawn controls in settings windows.** A curve in a plug-in's window (pyrochild's Curves+) is
-  edited in paint.rs's own curve editor, and a displacement grid (pyrochild's Grid Warp) in its own grid
-  editor over the image. Liquify's and Smudge's brush canvas is not adjustable yet; those effects run
-  with the rest of their settings. A window's buttons that open a file (Load, Save, Browse) are not
-  offered.
 - **Shapes and palettes.** Paint.NET's shape files (`.xaml`) and palette files are not plug-ins here
   and are not supported yet.
 - **Plug-in formats save flattened.** A FileType plug-in gets the flattened image, and a layered file
   opens flattened.
 - A format a plug-in adds never replaces a built-in one: paint.rs keeps its own WebP, AVIF, JPEG XL,
-  DDS, PSD and the rest, and lists the plug-in only for extensions it does not handle.
+  DDS, PSD and the rest, and uses the plug-in only for extensions it does not handle. paint.rs opens
+  HEIC but cannot save it, so a plug-in that saves HEIC does. The Plugins page in Settings says
+  which extensions each plug-in handles and which keep paint.rs's own.
 - Some plug-ins call Paint.NET's built-in effects from their own code. paint.rs provides the ones the
   tested packs call (Add Noise, Motion Blur, Zoom Blur, Clouds, Pixelate and others); one it does not
   provide yet stops the plug-in that calls it.
@@ -71,15 +68,32 @@ listed below.
 - **Gaps for the next release.** Midora's EMF and WMF types show their import window, but on Linux and
   macOS the image they open is empty: `libgdiplus` plays back few metafile records, and the plug-in's
   EMF+ conversion reaches into Windows' System.Drawing. Saving EMF is not supported there either.
+- **Render pieces.** Paint.NET hands a classic effect the image in tiles of 128 by 128 pixels, and
+  paint.rs hands it strips 64 pixels high. Most effects draw the same either way. One that treats each
+  piece on its own, such as one that seeds its randomness per piece or marks each piece (madjik's
+  ThreadsMarker), shows strips where Paint.NET shows tiles. The next release uses Paint.NET's tiles.
 - **Not yet: browsing the ArtCraft Store from inside paint.rs** (it returns in the next release).
   Download items from the [store site](https://akkk09.github.io/artcraft-store/) and install them.
 - **Plug-ins that need a Windows program or library**, which paint.rs cannot provide: G'MIC-Qt,
-  HEIC FileType Plus, Camera Raw, PSFilterPdn (Photoshop `.8bf` filters), Koh's ML Effects (ONNX
-  Runtime and its models), Median Sketch (Windows' shader compiler), null54's Optimized JPEG
-  (`jpegtran.exe`), JPEG 2000, RIOT and Twain, and Midora's WebP and XCF.
+  Camera Raw, PSFilterPdn (Photoshop `.8bf` filters), Koh's ML Effects (ONNX Runtime and its models),
+  Median Sketch (Windows' shader compiler), null54's Optimized JPEG (`jpegtran.exe`), JPEG 2000, RIOT
+  and Twain, and Midora's WebP and XCF. HEIC FileType Plus needs its own Windows HEIC library (built on
+  libheif, for x64 and ARM64 only), so it cannot run in paint.rs; paint.rs opens HEIC files itself.
 - **Plug-ins whose point is a Windows feature** paint.rs has no counterpart for: Simon B's Drag From
   (drag and drop onto its window) and Printer+ (printing), TechnoRobbo's FilmStrip and Media plug-in
   (Windows Media Player), and Midora's WhatIsIt and LookAtIt (windows that show information).
+- **Open — HTML markup (undecided).** MarkupRenderer draws its output through an embedded web
+  browser. The desktop build has no HTML engine, so its output is blank there; the browser build has
+  one, so rendering it there is possible. Whether paint.rs should is an open question, not yet decided.
+- **`IRenderer<T>` — stand-in shape gap.** The host provides the Paint.NET 3.5.x-era `IRenderer<T>`
+  (`Render(ISurface<T>, Int32Point)`) with its `RendererExtensions` and `Document.CreateRenderer()`,
+  which serves the 3.x plug-ins that render through it — CurtisBlack.Common, Liquify and ScriptLab all
+  work. The Paint.NET 5.x renderer surface — `IRenderer<TPixel>` in `PaintDotNet.Primitives`
+  (`Render(RegionPtr<TPixel>, Point2Int32)`) with its 5.x `RendererExtensions`/`CreateRenderer` — is not
+  provided; its only consumer is HEIC FileType Plus, which cannot run here regardless (above). The two
+  renderer eras coexist in Paint.NET; a future 5.x plug-in other than HEIC that needs the 5.x surface
+  would be served by adding it alongside the 3.5.x one, not by replacing it — replacing it would stop
+  the three 3.x plug-ins above.
 
 ## Platforms
 
@@ -93,9 +107,14 @@ listed below.
 
 A plug-in that cannot load is skipped; paint.rs starts and works without it.
 
-- **Settings ▸ Plugins** lists every installed plug-in that did not load, or loaded only in part,
-  with the reason (a Paint.NET feature paint.rs lacks, a settings window it cannot show, a missing
-  helper library).
+- **Settings ▸ Plugins** lists every installed plug-in with where its effects are in the menus and
+  the formats it adds, or, for one that did not load or loaded only in part, the reason (a Paint.NET
+  feature paint.rs lacks, a settings window it cannot show, a missing helper library).
+- A Paint.NET plug-in that wants to reach outside paint.rs (the network, your files, another program, a
+  system setting such as the desktop wallpaper, or native code) asks first: "Upload.dll wants to connect to
+  imgur.com", with Allow once, Always allow and Deny. Deny is the default; a denied plug-in gets the error
+  it would get offline and carries on. Always allow answers are listed under the plug-in on the Plugins page,
+  each with Revoke.
 - When paint.rs starts, one notice says which plug-ins did not load.
 - An effect that stops with an error while it runs leaves the image unchanged and says so.
 
@@ -278,7 +297,33 @@ working, but starting at `__heap_base` (or using a real allocator) is correct in
 
 Drop the `.wasm` on paint.rs to install it, and choose **Effects ▸ Plugins ▸ Warm Tint**.
 
-## Trust
+## Permissions
 
-Paint.NET plug-ins are programs and run with the app's permissions, as they do in Paint.NET. Install
-them only from authors you trust. WebAssembly plug-ins run in the sandbox described above.
+A Paint.NET plug-in's job is to change the image. When one instead tries to reach **outside** the
+image, paint.rs asks you first and does nothing until you allow it. The things it asks about:
+
+- **Network** — connecting to the internet (uploading the image, fetching something).
+- **Files** — reading or writing files of its own on your computer.
+- **Running a program** — starting another process.
+- **System settings** — changing something outside paint.rs (the registry, environment).
+- **Native code** — loading a native library that runs outside the managed runtime.
+
+Each request names the plug-in and what it wants (for the network, the address). You can **Allow once**,
+**Always allow** that plug-in that thing, or **Deny** — and a denied plug-in sees the same failure it
+would with no internet or no file, so one written to cope keeps working. Change your mind any time in
+**Settings ▸ Plugins**, where each plug-in's granted permissions are listed and can be revoked; revoking
+takes effect on the plug-in's next run. Reading and writing the **clipboard** is not asked about —
+plug-ins use it freely, as they do in Paint.NET.
+
+**In the browser this is a hard wall.** A plug-in reaches the network only through this gate (its one
+network path, `fetch`, is held by paint.rs; a request you allow, paint.rs makes for it and hands back
+the reply). Files, running a program and system settings do not exist in a browser, so a plug-in cannot
+touch them at all, and a plug-in that tries to call the browser's own code directly (JavaScript interop)
+is refused when it loads. Nothing a plug-in does on the page escapes what you have allowed.
+
+**On the desktop the prompt covers the same five**, but it is not yet a hard boundary: a plug-in runs
+with the app's permissions, as it does in Paint.NET, and one using native code can step around the gate.
+A real sandbox that closes this comes in the next release (0.8.1). Until then, treat the desktop gate as
+a guard against mistakes and ordinary plug-ins, not against a hostile one — **install plug-ins only from
+authors you trust.** WebAssembly plug-ins are not affected: they run in the sandbox described above, with
+no host access at all.

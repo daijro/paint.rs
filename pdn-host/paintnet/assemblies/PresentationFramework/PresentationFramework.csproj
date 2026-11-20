@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The part of WPF's PresentationFramework CodeLab 6.x's ShapeBuilder uses (XamlReader.Parse of pasted geometry),
+       for hosts without WPF. Built into plugin-shims/ beside PresentationCore (publish.sh / the PdnWpfStandIns target),
+       not referenced by the host. -->
+  <PropertyGroup>
+    <AssemblyName>PresentationFramework</AssemblyName>
+    <RootNamespace>System.Windows.Markup</RootNamespace>
+    <Version>4.0.0.0</Version>
+    <AssemblyVersion>4.0.0.0</AssemblyVersion>
+    <FileVersion>4.0.0.0</FileVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- XamlReader.Parse returns a Geometry (ShapeBuilder casts to it). -->
+    <ProjectReference Include="../PresentationCore/PresentationCore.csproj" />
+    <ProjectReference Include="../SystemXaml/SystemXaml.csproj" />
+  </ItemGroup>
+</Project>

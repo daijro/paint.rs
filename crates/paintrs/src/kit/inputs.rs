@@ -333,8 +333,9 @@ struct NumberEdit {
     /// The text was typed or stepped since the focus came: blurring applies it (`change` fires
     /// only for a value the user changed).
     edited: bool,
-    /// Wheel notches not yet stepped (a touchpad's pixel deltas come in fractions).
-    wheel: f32,
+    /// While the pointer is down on the field: the char index the press (or Shift's extension)
+    /// anchors the selection at.
+    anchor: Option<usize>,
 }
 
 /// `HTMLInputElement.stepUp()`/`stepDown()` by one step from `value`: an off-grid value snaps to
@@ -417,9 +418,66 @@ fn arrow_steps(ui: &Ui, unmodified: bool) -> Vec<f64> {
     })
 }
 
-/// Unmodified wheel notches this frame, consumed: +1 a notch up, a pixel delta 100 px a notch
-/// (Chromium's notch), the remainder kept in `acc`. A scroll area under the field stays put.
-fn wheel_steps(ui: &Ui, acc: &mut f32) -> Vec<f64> {
+/// How long a wheel gesture lasts past its last event (s): a train of notches, or a touchpad's
+/// swipe with its momentum, keeps under it.
+const WHEEL_GESTURE_GAP: f64 = 0.3;
+
+/// The current wheel gesture: the value control it began on (none: the gesture scrolls what is
+/// under the pointer), when its last event came, and the pass a control last took it in.
+#[derive(Clone, Copy)]
+struct WheelGesture {
+    owner: Option<egui::Id>,
+    last: f64,
+    taken: u64,
+}
+
+/// No gesture yet.
+impl Default for WheelGesture {
+    fn default() -> Self {
+        Self {
+            owner: None,
+            last: f64::NEG_INFINITY,
+            taken: u64::MAX,
+        }
+    }
+}
+
+fn wheel_gesture_id() -> egui::Id {
+    egui::Id::unique("paintrs-wheel-gesture")
+}
+
+/// A wheel event's notches: +1 a notch up, a wheel line or 100 px of a pixel delta (Chromium's
+/// notch, as Ctrl+wheel zoom counts them).
+fn notches(unit: egui::MouseWheelUnit, dy: f32) -> f64 {
+    match unit {
+        egui::MouseWheelUnit::Point => f64::from(dy) / 100.0,
+        _ => f64::from(dy),
+    }
+}
+
+/// The wheel over the value control `id` (its `rect`) this frame: whole steps, +1 a notch up, as
+/// its −/+ or arrow buttons step; a touchpad's fractions add up until they make a notch. Only while the
+/// pointer rests on the control, and only for a gesture that began there: a dialog that scrolls
+/// under a resting pointer does not hand its gesture to a slider sliding under it. `ctrl`: the
+/// factor Ctrl gives the steps, for a control whose buttons step so; without one, a Ctrl wheel is
+/// left to what is under it. The wheel the control takes does not scroll anything under it.
+pub fn value_wheel(ui: &Ui, id: egui::Id, rect: Rect, ctrl: Option<f64>) -> f64 {
+    if !ui.is_enabled() || !ui.rect_contains_pointer(rect) {
+        return 0.0;
+    }
+    let ctx = ui.ctx().clone();
+    let now = ui.input(|i| i.time);
+    let gesture: WheelGesture = ctx
+        .data(|d| d.get_temp(wheel_gesture_id()))
+        .unwrap_or_default();
+    let fresh = now - gesture.last > WHEEL_GESTURE_GAP;
+    if !fresh && gesture.owner != Some(id) {
+        return 0.0;
+    }
+    // A partial notch waits for the rest, across gestures too.
+    let acc_id = id.with("wheel");
+    let mut acc = ctx.data(|d| d.get_temp::<f64>(acc_id)).unwrap_or(0.0);
+    let mut took = false;
     ui.input_mut(|i| {
         i.events.retain(|e| match e {
             egui::Event::MouseWheel {
@@ -427,20 +485,69 @@ fn wheel_steps(ui: &Ui, acc: &mut f32) -> Vec<f64> {
                 delta,
                 modifiers,
                 ..
-            } if modifiers.is_none() => {
-                *acc += match unit {
-                    egui::MouseWheelUnit::Point => delta.y / 100.0,
-                    _ => delta.y,
+            } => {
+                let factor = if modifiers.is_none() {
+                    Some(1.0)
+                } else if modifiers.ctrl && !modifiers.alt && !modifiers.shift {
+                    ctrl
+                } else {
+                    None
                 };
-                false
+                match factor {
+                    Some(k) => {
+                        acc += notches(*unit, delta.y) * k;
+                        took = true;
+                        false
+                    }
+                    None => true,
+                }
             }
             _ => true,
         });
-        i.smooth_scroll_delta = Vec2::ZERO;
-        let n = acc.trunc();
-        *acc -= n;
-        vec![n.signum() as f64; n.abs() as usize]
-    })
+        // A gesture the control owns does not scroll what is under it, its smoothed tail too.
+        if took || !fresh {
+            i.smooth_scroll_delta = Vec2::ZERO;
+        }
+    });
+    if took {
+        let gesture = WheelGesture {
+            owner: Some(id),
+            last: now,
+            taken: ctx.cumulative_pass_nr(),
+        };
+        ctx.data_mut(|d| d.insert_temp(wheel_gesture_id(), gesture));
+    }
+    let whole = acc.trunc();
+    ctx.data_mut(|d| d.insert_temp(acc_id, acc - whole));
+    whole
+}
+
+/// After the frame's controls: a wheel gesture no value control took this frame is a scroll, to
+/// its end, so a value control that slides under the pointer meanwhile does not take it over.
+pub fn end_wheel_frame(ctx: &egui::Context) {
+    let (wheel, now) = ctx.input(|i| {
+        (
+            i.raw
+                .events
+                .iter()
+                .any(|e| matches!(e, egui::Event::MouseWheel { .. })),
+            i.time,
+        )
+    });
+    if !wheel {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let gesture = d.get_temp_mut_or_default::<WheelGesture>(wheel_gesture_id());
+        if gesture.taken != pass {
+            *gesture = WheelGesture {
+                owner: None,
+                last: now,
+                taken: gesture.taken,
+            };
+        }
+    });
 }
 
 /// CSS `opacity: k` over the flat `backdrop` for an opaque group: every colour painted inside it
@@ -696,11 +803,9 @@ pub fn number_input(
         }
         ctx.memory_mut(|m| m.request_focus(edit_id));
     };
-    // A field created by this click would surrender its focus to the same click.
-    let started = field.clicked() && enabled && edit.text.is_none();
-    if field.clicked() && enabled {
-        focus(&mut edit, *value);
-    } else if field.has_focus() && enabled && !back {
+    // The keyboard focus arriving at the Tab stop selects the text (a press goes to the pointer
+    // surface over the field instead, below).
+    if field.has_focus() && enabled && !back {
         let text = edit.text.get_or_insert_with(|| style.format(*value));
         select_all(&ctx, edit_id, text);
     }
@@ -743,12 +848,11 @@ pub fn number_input(
         }
     }
     // The wheel over the field steps it like the arrow keys.
-    if enabled && ui.rect_contains_pointer(px::snap_rect(inner, ppp)) {
-        let mut acc = edit.wheel;
-        for dir in wheel_steps(ui, &mut acc) {
-            step_input(&mut edit, value, dir);
+    if enabled {
+        let steps = value_wheel(ui, id, px::snap_rect(inner, ppp), None);
+        for _ in 0..steps.abs() as usize {
+            step_input(&mut edit, value, steps.signum());
         }
-        edit.wheel = acc;
     }
     // The spin buttons' `pointerdown` is default-prevented: pressing them keeps the input's
     // focus (egui would surrender it to a press elsewhere).
@@ -761,10 +865,16 @@ pub fn number_input(
     ui.set_clip_rect(px::snap_rect(inner, ppp).intersect(outer_clip));
     let painter = painter.with_clip_rect(ui.clip_rect());
     // Where the press (else the click's release) went, not the pointer at the frame's end.
-    let spin_press = ui.input(|i| i.pointer.any_pressed() || i.pointer.any_click())
-        && press_pos(ui.ctx(), None)
-            .or_else(|| last_button_event(ui.ctx(), false, None))
-            .is_some_and(|p| col.contains(p));
+    let pressed_in = |r: Rect| {
+        ui.input(|i| i.pointer.any_pressed() || i.pointer.any_click())
+            && press_pos(ui.ctx(), None)
+                .or_else(|| last_button_event(ui.ctx(), false, None))
+                .is_some_and(|p| r.contains(p))
+    };
+    let spin_press = pressed_in(col);
+    // A press or drag on the field itself (the pointer surface below) keeps the editor focused.
+    let field_press =
+        (pressed_in(input_px) && ui.rect_contains_pointer(input_px)) || edit.anchor.is_some();
     let text_top = content.min.y + (content.height() - font.resolved_line_height(ppp)) / 2.0;
     // Where a value of css width `w` starts: an overflowing one at the left, cut at the text area
     // (Blink's inner editor), whatever the alignment.
@@ -822,7 +932,7 @@ pub fn number_input(
                     *value = v.clamp(min, max);
                 }
             }
-            let keep_focus = (spin_press && enabled) || started;
+            let keep_focus = (spin_press || field_press) && enabled;
             if keep_focus {
                 ui.memory_mut(|m| m.request_focus(edit_id));
             }
@@ -847,6 +957,64 @@ pub fn number_input(
                 color,
             );
         }
+    }
+    // The field's pointer surface, as an `<input>` is: over the editor (registered after it, so
+    // presses and drags reach it and not egui's own text layout, which is laid out apart from the
+    // painted text). A press focuses the editor with the caret at the character boundary under
+    // it (Shift: extending the selection), a drag selects from there, a double-click selects all.
+    // Not a Tab stop (the field is).
+    let surface = ui.interact(
+        input_px,
+        id.with("pointer"),
+        if enabled {
+            Sense::CLICK | Sense::DRAG
+        } else {
+            Sense::hover()
+        },
+    );
+    if enabled && surface.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    }
+    if enabled && surface.is_pointer_button_down_on() {
+        let text = edit
+            .text
+            .get_or_insert_with(|| style.format(*value))
+            .clone();
+        let x0 = start_x(text::css_width(&text, font.size));
+        let index_at = |x: f32| {
+            let n = text.chars().count();
+            let at = |i: usize| {
+                x0 + text::css_width(&text.chars().take(i).collect::<String>(), font.size)
+            };
+            (0..n).find(|&i| x < (at(i) + at(i + 1)) / 2.0).unwrap_or(n)
+        };
+        let mut state = egui::text_edit::TextEditState::load(&ctx, edit_id).unwrap_or_default();
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            let at = press_pos(&ctx, None).map_or(text.chars().count(), |p| index_at(p.x));
+            let extend = focused && ui.input(|i| i.modifiers.shift);
+            edit.anchor = Some(
+                state
+                    .cursor
+                    .char_range()
+                    .filter(|_| extend)
+                    .map_or(at, |r| usize::from(r.secondary.index)),
+            );
+        }
+        if let (Some(anchor), Some(p)) = (edit.anchor, ui.input(|i| i.pointer.interact_pos())) {
+            use egui::text::{CCursor, CCursorRange};
+            state.cursor.set_char_range(Some(CCursorRange::two(
+                CCursor::new(anchor),
+                CCursor::new(index_at(p.x)),
+            )));
+            state.store(&ctx, edit_id);
+        }
+        ctx.memory_mut(|m| m.request_focus(edit_id));
+    } else {
+        edit.anchor = None;
+    }
+    if enabled && surface.double_clicked() {
+        let text = edit.text.get_or_insert_with(|| style.format(*value));
+        select_all(&ctx, edit_id, text);
     }
     note_focus(&ctx, edit_id);
     if !wrapped {
@@ -1670,6 +1838,87 @@ pub fn slider(
 mod tests {
     use super::html_step;
 
+    /// A press and drag over a number field's digits selects them, as in an `<input>`: from an
+    /// unfocused field (the press focuses it) and from one that already has the caret, over all
+    /// of the digits or over the last two. The dialog field is right-aligned, so the drags run
+    /// from the last digit leftwards.
+    #[test]
+    fn dragging_over_a_number_field_selects_its_text() {
+        use egui::{Event, PointerButton, Pos2, Rect, Vec2};
+        // Content box: x 24..79 (1-px border, 17-px spin column, 3-px padding); "1234" ends at 79.
+        let size = super::NumberStyle::DIALOG.font;
+        let x_of = |i: usize| {
+            79.0 - super::text::css_width("1234", size) + super::text::css_width(&"1234"[..i], size)
+        };
+        for click_first in [false, true] {
+            for (to_x, want) in [(25.0, (0, 4)), (x_of(2) + 1.0, (2, 4))] {
+                let ctx = egui::Context::default();
+                crate::install_fonts(&ctx, pdn_core::fonts::FontPolicy::Bundled, "Selawik");
+                let rect = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(80.0, 23.0));
+                let mut value = 1234.0;
+                let mut run = |events: Vec<Event>| {
+                    let raw = egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                        events,
+                        ..Default::default()
+                    };
+                    let mut out = ctx.run_ui(raw, |ui| {
+                        super::number_input(
+                            ui,
+                            "n",
+                            "N",
+                            rect,
+                            &mut value,
+                            0.0,
+                            10000.0,
+                            1.0,
+                            true,
+                            super::NumberStyle::DIALOG,
+                        );
+                    });
+                    out.textures_delta.clear();
+                };
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                if click_first {
+                    let at = Pos2::new(40.0, 31.0);
+                    run(vec![Event::PointerMoved(at)]);
+                    run(vec![button(at, true)]);
+                    run(vec![button(at, false)]);
+                    run(vec![]);
+                }
+                let (from, to) = (Pos2::new(78.5, 31.0), Pos2::new(to_x, 31.0));
+                run(vec![Event::PointerMoved(from)]);
+                run(vec![button(from, true)]);
+                for i in 1..=5 {
+                    run(vec![Event::PointerMoved(
+                        from + (to - from) * (i as f32 / 5.0),
+                    )]);
+                }
+                run(vec![button(to, false)]);
+                run(vec![]);
+                let case = format!("click first: {click_first}, drag to x {to_x}");
+                let focused = ctx.memory(|m| m.focused());
+                assert!(focused.is_some(), "the drag focuses the field ({case})");
+                let range = egui::text_edit::TextEditState::load(&ctx, focused.unwrap())
+                    .and_then(|s| s.cursor.char_range())
+                    .map(|r| {
+                        let (a, b) = (usize::from(r.primary.index), usize::from(r.secondary.index));
+                        (a.min(b), a.max(b))
+                    });
+                assert_eq!(
+                    range,
+                    Some(want),
+                    "the drag selects the digits under it ({case})"
+                );
+            }
+        }
+    }
+
     /// Known bugs (click positions): a click on a wrapped number input's spin column keeps the
     /// field's focus by where it went up, though its frame also brings a move away.
     #[test]
@@ -1779,6 +2028,81 @@ mod tests {
         );
         run(vec![Event::PointerMoved(Pos2::new(300.0, 300.0))]);
         assert_eq!(run(vec![line(-1.0)]), 10.0);
+    }
+
+    /// A wheel gesture belongs to what the pointer was on as it began: one that began over no
+    /// value control scrolls to its end, though a control slides under the resting pointer; one
+    /// that begins on a control steps it (×5 with Ctrl where its buttons step so), only while the
+    /// pointer rests on it, a touchpad's fractions adding up, and scrolls nothing under it.
+    #[test]
+    fn a_wheel_gesture_stays_with_what_it_began_on() {
+        use egui::{Event, Id, Modifiers, MouseWheelUnit, Pos2, Rect, Vec2};
+        let ctx = egui::Context::default();
+        let id = Id::unique("value");
+        let here = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(80.0, 23.0));
+        let away = here.translate(Vec2::new(0.0, 200.0));
+        // A frame at `time` with the control at `rect`, ended as the app ends one: the steps the
+        // control took, and the scroll left for what is under it.
+        let run = |time: f64, rect: Rect, events: Vec<Event>| -> (f64, f32) {
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let mut out = (0.0, 0.0);
+            let mut full = ctx.run_ui(raw, |ui| {
+                out.0 = super::value_wheel(ui, id, rect, Some(5.0));
+                out.1 = ui.input(|i| i.smooth_scroll_delta.y);
+                super::end_wheel_frame(ui.ctx());
+            });
+            full.textures_delta.clear();
+            out
+        };
+        let wheel = |unit, y, modifiers| Event::MouseWheel {
+            unit,
+            delta: Vec2::new(0.0, y),
+            modifiers,
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+        };
+        let line = |y| wheel(MouseWheelUnit::Line, y, Modifiers::NONE);
+        let on = Event::PointerMoved(here.center());
+        run(0.0, here, vec![on.clone()]);
+        // The dialog scrolls under the resting pointer: the control slides under it mid-gesture.
+        assert_eq!(run(1.0, away, vec![line(1.0)]).0, 0.0);
+        assert_eq!(run(1.1, here, vec![line(1.0)]).0, 0.0);
+        assert_eq!(run(1.3, here, vec![line(1.0)]).0, 0.0);
+        // A new gesture begins on it: a step a notch, nothing scrolls, ×5 with Ctrl.
+        let (steps, scroll) = run(2.0, here, vec![line(1.0)]);
+        assert_eq!((steps, scroll), (1.0, 0.0));
+        assert_eq!(run(2.1, here, vec![line(-1.0)]).0, -1.0);
+        assert_eq!(
+            run(
+                2.2,
+                here,
+                vec![wheel(MouseWheelUnit::Line, 1.0, Modifiers::CTRL)]
+            )
+            .0,
+            5.0
+        );
+        // Off the control, it takes none.
+        assert_eq!(
+            run(
+                2.3,
+                here,
+                vec![Event::PointerMoved(Pos2::new(300.0, 300.0)), line(1.0)]
+            )
+            .0,
+            0.0
+        );
+        // A touchpad's pixel deltas add up to whole notches (100 px each).
+        let px = |y| wheel(MouseWheelUnit::Point, y, Modifiers::NONE);
+        run(3.0, here, vec![on.clone()]);
+        assert_eq!(run(4.0, here, vec![px(40.0)]).0, 0.0);
+        assert_eq!(run(4.05, here, vec![px(40.0)]).0, 0.0);
+        assert_eq!(run(4.1, here, vec![px(40.0)]).0, 1.0);
+        assert_eq!(run(4.15, here, vec![px(80.0)]).0, 1.0);
     }
 
     /// BB common.md §3 "Slider": a range that wraps continues from the other end; one that

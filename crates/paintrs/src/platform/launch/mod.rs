@@ -38,7 +38,6 @@ struct Pending {
     reviewing_exit: bool,
     seen: VecDeque<[u8; 16]>,
     ctx: Option<egui::Context>,
-    idle_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     native_attention: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 #[derive(Clone, Default)]
@@ -52,8 +51,6 @@ impl Bridge {
         }
         if let Some(ctx) = &p.ctx {
             ctx.request_repaint();
-        } else if let Some(wake) = &p.idle_wake {
-            wake();
         }
     }
     fn enqueue(&self, batch: wire::Batch) -> io::Result<()> {
@@ -114,9 +111,11 @@ impl Bridge {
         let bridge = self.clone();
         window_close::set_request_notifier(
             ctx,
-            window_close::RequestNotifier(Arc::new(move |intent| {
+            // Closing the window quits, on macOS too, as Paint.NET does (#8), so every close
+            // review is an exit review and accepts no new launch.
+            window_close::RequestNotifier(Arc::new(move |_| {
                 if let Ok(mut p) = bridge.0.lock() {
-                    p.reviewing_exit = intent == Intent::ExitProcess || !cfg!(target_os = "macos");
+                    p.reviewing_exit = true;
                 }
             })),
         );
@@ -133,9 +132,7 @@ impl Bridge {
                         return false;
                     }
                     p.outcome = Some(outcome);
-                    if matches!(outcome, Ok(Intent::ExitProcess))
-                        || (!cfg!(target_os = "macos") && outcome.is_ok())
-                    {
+                    if outcome.is_ok() {
                         p.exiting = true;
                     }
                     if outcome.is_err() {
@@ -186,18 +183,10 @@ impl Bridge {
             p.native_attention = None;
         }
     }
-    pub fn set_idle_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
-        if let Ok(mut p) = self.0.lock() {
-            p.idle_wake = Some(wake);
-        }
-    }
     pub fn needs_editor(&self) -> bool {
         self.0
             .lock()
             .is_ok_and(|p| p.activate || !p.paths.is_empty())
-    }
-    pub fn quitting(&self) -> bool {
-        self.0.lock().is_ok_and(|p| p.quit || p.exiting)
     }
     pub fn outcome(&self) -> Option<Result<Intent, ()>> {
         self.0.lock().ok().and_then(|p| p.outcome)
@@ -207,7 +196,8 @@ impl Bridge {
             p.outcome = None;
         }
     }
-    /// Commit windowless quit only while the same lock excludes launch acceptance.
+    /// Commit a quit from before the window opened (macOS), only while the same lock excludes
+    /// launch acceptance.
     /// An already acknowledged path instead requires another editor delivery cycle.
     pub fn try_finish_idle_quit(&self) -> bool {
         let Ok(mut p) = self.0.lock() else {
@@ -256,7 +246,7 @@ impl Bridge {
     }
 }
 
-/// Holds the lock throughout editor and macOS windowless lifetimes. ACK means queued only.
+/// Holds the lock throughout the editor's lifetime. ACK means queued only.
 pub struct Instance {
     _lock: File,
     stop: Arc<AtomicBool>,

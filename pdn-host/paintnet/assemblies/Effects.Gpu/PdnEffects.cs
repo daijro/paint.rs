@@ -464,16 +464,21 @@ namespace PaintDotNet.Effects.Gpu
         }
     }
 
-    /// ponytail: Paint.NET's zoom blur as the average of up to 16 copies of the input scaled about Center from 1 to
-    /// Scale; AlphaExponent, BorderMode and AlphaMode are taken and not modelled. Port Paint.NET's shader through the
-    /// d2d engine if the look must match.
+    /// Paint.NET's zoom blur. The input (premultiplied first when AlphaMode says it is straight) is clamped past its
+    /// edges for a hard border, left transparent for a soft one; ZoomBlurShader sums 2^(Quality+5) weighted taps along
+    /// the ray to Center from scale 1 to Scale, over the image and over a white fill of its rect (the weights that
+    /// landed on the image), and UnaccumulateShader divides the one by the other. When the taps from a corner of the
+    /// image spread over more than 1024 pixels the samples are split in halves, recursively, into passes that are added.
     public sealed class PdnZoomBlurEffect : DynamicImage
     {
         private readonly System.Collections.Generic.List<IDeviceEffect> nodes = new();
+        private readonly System.Collections.Generic.List<ZoomBlurTransformMapper> mappers = new();
         private readonly IDeviceEffect output;
         private IDeviceImage? input;
         private Point2Float center;
-        private float scale = 1, quality = 1;
+        private float scale = 1.25f, alphaExponent = 2, quality = 2;
+        private BorderMode borderMode = BorderMode.Hard;
+        private PdnZoomBlurAlphaMode alphaMode = PdnZoomBlurAlphaMode.Premultiplied;
 
         public PdnZoomBlurEffect(IDeviceContext deviceContext) : base(deviceContext)
         {
@@ -497,30 +502,123 @@ namespace PaintDotNet.Effects.Gpu
         {
             foreach (IDeviceEffect node in nodes) node.Dispose();
             nodes.Clear();
-            int count = Math.Clamp((int)MathF.Round(quality * 4), 2, 16);
-            if (input is null || scale == 1) { output.SetInput(0, input); return; }
-            IDeviceEffect sum = Node(Clsid.D2D1Composite);
-            ((NativeEffect)sum).SetInputCount(count);
-            ((IPropertySink)sum).SetProperty(0, DeviceEffectPropertyType.Enum, (int)CompositeMode.Plus);
-            float w = 1f / count;
-            for (int i = 0; i < count; i++)
+            mappers.Clear();
+            DeviceContextImpl dc = (DeviceContextImpl)DeviceContext;
+            RectFloat bounds = input is null ? default : dc.GetImageLocalBounds(input);
+            float s = Math.Clamp(scale, 0.25f, 4f);
+            if (input is null || bounds.IsEmpty || s == 1) { output.SetInput(0, input); return; }
+            bool straight = alphaMode != PdnZoomBlurAlphaMode.Premultiplied;
+            IDeviceImage source = straight ? Node(Clsid.D2D1Premultiply, input) : input;
+            // Hard: Direct2D's Border (clamp both ways, its default); soft: transparent outside, as it is.
+            IDeviceImage bordered = borderMode != BorderMode.Soft ? Node(Clsid.D2D1Border, source) : source;
+            IDeviceEffect flood = Node(Clsid.D2D1Flood);
+            ((IPropertySink)flood).SetProperty(0, DeviceEffectPropertyType.Vector4Float, new Vector4Float(1, 1, 1, 1));
+            IDeviceImage fill = flood;
+            if (borderMode == BorderMode.Soft)
             {
-                float f = 1 + (scale - 1) * i / (count - 1);
-                IDeviceEffect scaled = Node(Clsid.D2D12DAffineTransform);
-                scaled.SetInput(0, input);
-                ((IPropertySink)scaled).SetProperty(2, DeviceEffectPropertyType.Matrix3x2Float, Matrix3x2Float.ScalingAt(f, f, center));
-                IDeviceEffect weighted = Node(Clsid.D2D1ColorMatrix);
-                weighted.SetInput(0, scaled);
-                ((IPropertySink)weighted).SetProperty(0, DeviceEffectPropertyType.Matrix5x4Float, new Matrix5x4Float(w, 0, 0, 0, 0, w, 0, 0, 0, 0, w, 0, 0, 0, 0, w, 0, 0, 0, 0));
-                ((IPropertySink)weighted).SetProperty(1, DeviceEffectPropertyType.Enum, (int)ColorMatrixAlphaMode.Straight);
-                sum.SetInput(i, weighted);
+                RectInt32 r = dc.GetImageLocalBounds(source).Int32Bound;
+                IDeviceEffect crop = Node(Clsid.D2D1Crop, flood);
+                ((IPropertySink)crop).SetProperty(0, DeviceEffectPropertyType.Vector4Float, new Vector4Float(r.Left, r.Top, r.Right, r.Bottom));
+                fill = crop;
             }
-            output.SetInput(0, sum);
+            double lo = Math.Min(1, s), hi = Math.Max(1, s);
+            int sampleCount = (int)MathF.Pow(2, Math.Clamp(quality, 1f, 8f) + 5);
+            ZoomBlurShader[] passes = System.Linq.Enumerable.ToArray(
+                CreateShaders(bounds, center, Math.Clamp(alphaExponent, 1f, 4f), lo, hi, lo, hi, sampleCount));
+            IDeviceEffect unaccumulate = Node(PdnShaders.Register<UnaccumulateShader>(DeviceContext));
+            unaccumulate.SetInput(0, Sum(passes, bordered));
+            unaccumulate.SetInput(1, Sum(passes, fill));
+            output.SetInput(0, straight ? Node(Clsid.D2D1UnPremultiply, unaccumulate) : unaccumulate);
         }
 
-        private IDeviceEffect Node(Guid classID)
+        /// The passes over `image`, added. ponytail: Paint.NET draws two or more passes into a command list with
+        /// additive blending; Direct2D's Composite in Plus mode adds them alike, in Float32 intermediates.
+        private IDeviceImage Sum(ZoomBlurShader[] passes, IDeviceImage image)
+        {
+            if (passes.Length == 1)
+                return Pass(passes[0], image);
+            IDeviceEffect sum = Node(Clsid.D2D1Composite);
+            ((NativeEffect)sum).SetInputCount(passes.Length);
+            ((IPropertySink)sum).SetProperty(0, DeviceEffectPropertyType.Enum, (int)CompositeMode.Plus);
+            for (int i = 0; i < passes.Length; i++)
+                sum.SetInput(i, Pass(passes[i], image));
+            return sum;
+        }
+
+        private unsafe IDeviceEffect Pass(in ZoomBlurShader shader, IDeviceImage image)
+        {
+            IDeviceEffect node = Node(PdnShaders.Register<ZoomBlurShader>(DeviceContext), image);
+            ((IPropertySink)node).SetPropertyBytes((int)ComputeSharp.D2D1.Interop.D2D1PixelShaderEffectProperty.ConstantBuffer,
+                DeviceEffectPropertyType.Blob, System.Runtime.InteropServices.MemoryMarshal.AsBytes(new ReadOnlySpan<ZoomBlurShader>(in shader)));
+            ZoomBlurTransformMapper mapper = new(shader);
+            mappers.Add(mapper);
+            ComputeSharp.D2D1.Interop.D2D1PixelShaderEffect.SetTransformMapperForD2D1Effect(((INativeObject)node).NativePtr, mapper);
+            return node;
+        }
+
+        /// Paint.NET's pass plan: one pass of all the samples, unless the input rect of a corner pixel is wider or taller
+        /// than 1024, when the samples are halved over the scale range and each half planned again. An endless or
+        /// enormous input gets one pass per sample.
+        private static System.Collections.Generic.IEnumerable<ZoomBlurShader> CreateShaders(RectFloat inputRect, Point2Float center, float alphaExponent,
+            double scaleMin, double scaleMax, double scaleLo, double scaleHi, int sampleCount)
+        {
+            double range = scaleMax - scaleMin;
+            if (range == 0)
+                range = 1;
+            float alphaSubtrahend;
+            if (scaleMin >= 1)
+            {
+                alphaSubtrahend = (float)scaleMax;
+                range = -range;
+            }
+            else
+                alphaSubtrahend = (float)scaleMin;
+            float alphaDenominatorInv = (float)(1 / range);
+            float alphaMultiplier = (float)(Math.Pow(alphaExponent, alphaExponent + 1.0) * (alphaExponent + 1.0));
+            ComputeSharp.Float2 c = new(center.X, center.Y);
+            ZoomBlurShader Shader(double lo, double hi, int count) => new(c, (float)scaleMin, (float)scaleMax, alphaSubtrahend, alphaDenominatorInv,
+                alphaExponent, alphaMultiplier, (float)lo, (float)hi, (uint)count, count != 1 ? 1f / (count - 1) : 1f);
+            ZoomBlurShader all = Shader(scaleLo, scaleHi, sampleCount);
+            if (sampleCount == 1)
+            {
+                yield return all;
+                yield break;
+            }
+            bool finite = float.IsFinite(inputRect.X) && float.IsFinite(inputRect.Y) && float.IsFinite(inputRect.Width) && float.IsFinite(inputRect.Height);
+            bool zero = inputRect.X == 0 && inputRect.Y == 0 && inputRect.Width == 0 && inputRect.Height == 0;
+            if (zero || !finite || inputRect.Width >= 16777216 || inputRect.Height >= 16777216)
+            {
+                for (int i = 0; i < sampleCount; i++)
+                    yield return Shader(double.Lerp(scaleLo, scaleHi, i / (double)sampleCount), double.Lerp(scaleLo, scaleHi, (i + 1) / (double)sampleCount), 1);
+                yield break;
+            }
+            RectInt32 r = inputRect.Int32Bound;
+            int w = 0, h = 0;
+            foreach ((int x, int y) in (ReadOnlySpan<(int, int)>)[(r.Left, r.Top), (r.Right - 1, r.Top), (r.Left, r.Bottom - 1), (r.Right - 1, r.Bottom - 1)])
+            {
+                System.Drawing.Rectangle needed = ZoomBlurTransformMapper.Map(new System.Drawing.Rectangle(x, y, 1, 1), all, inverse: true);
+                w = Math.Max(w, needed.Width);
+                h = Math.Max(h, needed.Height);
+            }
+            if (w <= 1024 && h <= 1024)
+            {
+                yield return all;
+                yield break;
+            }
+            int half = sampleCount / 2;
+            foreach (ZoomBlurShader pass in CreateShaders(inputRect, center, alphaExponent, scaleMin, scaleMax,
+                scaleLo, double.Lerp(scaleLo, scaleHi, (half - 1) / (sampleCount - 1.0)), half))
+                yield return pass;
+            foreach (ZoomBlurShader pass in CreateShaders(inputRect, center, alphaExponent, scaleMin, scaleMax,
+                double.Lerp(scaleLo, scaleHi, half / (sampleCount - 1.0)), scaleHi, sampleCount - half))
+                yield return pass;
+        }
+
+        private IDeviceEffect Node(Guid classID, IDeviceImage? source = null)
         {
             IDeviceEffect node = DeviceContext.CreateEffect(classID);
+            if (source is not null)
+                node.SetInput(0, source);
             nodes.Add(node);
             return node;
         }
@@ -545,10 +643,10 @@ namespace PaintDotNet.Effects.Gpu
             public InputAccessor Input => new(owner, 0);
             public ValuePropertyAccessor<Point2Float> Center => new(v => { owner.center = v; owner.Update(); });
             public ValuePropertyAccessor<float> Scale => new(v => { owner.scale = v; owner.Update(); });
-            public ValuePropertyAccessor<float> AlphaExponent => new(_ => { });
+            public ValuePropertyAccessor<float> AlphaExponent => new(v => { owner.alphaExponent = v; owner.Update(); });
             public ValuePropertyAccessor<float> Quality => new(v => { owner.quality = v; owner.Update(); });
-            public ValuePropertyAccessor<BorderMode> BorderMode => new(_ => { });
-            public ValuePropertyAccessor<PdnZoomBlurAlphaMode> AlphaMode => new(_ => { });
+            public ValuePropertyAccessor<BorderMode> BorderMode => new(v => { owner.borderMode = v; owner.Update(); });
+            public ValuePropertyAccessor<PdnZoomBlurAlphaMode> AlphaMode => new(v => { owner.alphaMode = v; owner.Update(); });
         }
     }
 }

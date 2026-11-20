@@ -384,4 +384,51 @@ namespace System.Drawing.Drawing2D
             startNew = true;
         }
     }
+
+    // A line cap plug-ins build from a path and hang on a pen's ends (ParallelLines' arrowheads, midora's
+    // OptionBasedLibrary, TR's TreeMaker). The browser host flattens a pen's stroke to plain caps, so this holds the
+    // cap's settings — enough for the plug-ins that only build one and configure a pen with it — without drawing the
+    // custom shape itself. ponytail: the custom outline is not rendered; a stroke shows a plain cap here, the arrow
+    // where GDI+ draws one. Add a cap-outline pass to Pen.Outline if a plug-in's result needs the shape.
+    public class CustomLineCap : MarshalByRefObject, ICloneable, IDisposable
+    {
+        private LineCap startCap, endCap;
+
+        public CustomLineCap(GraphicsPath fillPath, GraphicsPath strokePath) : this(fillPath, strokePath, LineCap.Flat) { }
+        public CustomLineCap(GraphicsPath fillPath, GraphicsPath strokePath, LineCap baseCap) : this(fillPath, strokePath, baseCap, 0) { }
+        public CustomLineCap(GraphicsPath fillPath, GraphicsPath strokePath, LineCap baseCap, float baseInset)
+        {
+            BaseCap = baseCap;
+            BaseInset = baseInset;
+        }
+        protected CustomLineCap() { }
+
+        public LineJoin StrokeJoin { get; set; }
+        public LineCap BaseCap { get; set; }
+        public float BaseInset { get; set; }
+        public float WidthScale { get; set; } = 1;
+
+        public void SetStrokeCaps(LineCap startCap, LineCap endCap) => (this.startCap, this.endCap) = (startCap, endCap);
+        public void GetStrokeCaps(out LineCap startCap, out LineCap endCap) => (startCap, endCap) = (this.startCap, this.endCap);
+
+        public object Clone() => MemberwiseClone();
+        public void Dispose() { Dispose(true); GC.SuppressFinalize(this); }
+        protected virtual void Dispose(bool disposing) { }
+    }
+
+    public sealed class AdjustableArrowCap : CustomLineCap
+    {
+        public AdjustableArrowCap(float width, float height) : this(width, height, true) { }
+        public AdjustableArrowCap(float width, float height, bool isFilled) : base()
+        {
+            Width = width;
+            Height = height;
+            Filled = isFilled;
+        }
+
+        public float Height { get; set; }
+        public float Width { get; set; }
+        public float MiddleInset { get; set; }
+        public bool Filled { get; set; }
+    }
 }

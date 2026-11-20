@@ -2,4 +2,11 @@
   <PropertyGroup>
     <AssemblyName>PaintDotNet.SystemLayer</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- GdiPaintControl/ScrollPanel are WinForms controls a plug-in's document view is built on (GdiPaint.cs). -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+    <ProjectReference Include="../WindowsForms/WindowsForms.csproj" />
+    <!-- ControlDispatcher implements Base's PaintDotNet.Threading.IDispatcher; Tracing returns Functional.Result. -->
+    <ProjectReference Include="../Base/Base.csproj" />
+  </ItemGroup>
 </Project>

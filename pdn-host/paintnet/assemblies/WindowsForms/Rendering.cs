@@ -64,6 +64,11 @@ namespace System.Windows.Forms
             };
             g.DrawString(text, font ?? Control.DefaultFont, brush, bounds, format);
         }
+        public static void DrawText(IDeviceContext dc, string? text, Font? font, Rectangle bounds, Color foreColor, Color backColor, TextFormatFlags flags)
+        {
+            if (dc is Graphics g && backColor.A != 0) { using var back = new SolidBrush(backColor); g.FillRectangle(back, bounds); }
+            DrawText(dc, text, font, bounds, foreColor, flags);
+        }
     }
 
     public static partial class ControlPaint
@@ -75,12 +80,27 @@ namespace System.Windows.Forms
         public static void DrawCaptionButton(Graphics graphics, Rectangle rectangle, CaptionButton button, ButtonState state) { }
         public static void DrawScrollButton(Graphics graphics, Rectangle rectangle, ScrollButton button, ButtonState state) { }
         public static void DrawStringDisabled(IDeviceContext dc, string? s, Font? font, Color color, Rectangle layoutRectangle, TextFormatFlags format) { }
+        /// Greyed text, as the GDI+ overload draws it (the colour is lightened toward the control background).
+        public static void DrawStringDisabled(Graphics graphics, string? s, Font? font, Color color, RectangleF layoutRectangle, StringFormat? format)
+        {
+            if (string.IsNullOrEmpty(s)) return;
+            using var brush = new SolidBrush(Color.FromArgb(color.A / 2, color));
+            graphics.DrawString(s, font ?? Control.DefaultFont, brush, layoutRectangle, format);
+        }
+        // ponytail: reversible (XOR) drawing has no meaning on the headless host, so these are no-ops.
+        public static void DrawReversibleFrame(Rectangle rectangle, Color backColor, FrameStyle style) { }
+        public static void DrawReversibleLine(Point start, Point end, Color backColor) { }
     }
+
+    public enum FrameStyle { Dashed, Thick }
 
     public static class ButtonRenderer
     {
         public static bool RenderMatchingApplicationState { get; set; } = true;
         public static void DrawButton(Graphics g, Rectangle bounds, PushButtonState state) { }
+        // ponytail: themed button chrome isn't painted in the headless host.
+        public static void DrawButton(Graphics g, Rectangle bounds, bool focused, PushButtonState state) { }
+        public static void DrawParentBackground(Graphics g, Rectangle bounds, Control childControl) { }
     }
 
     public static class GroupBoxRenderer

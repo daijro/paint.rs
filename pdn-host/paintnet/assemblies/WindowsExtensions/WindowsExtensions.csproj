@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- System.Windows.Extensions (System.Media's sounds): .NET has it only in the Windows desktop framework, which the
+       host does not run on, and .NET Framework's System facade forwards SoundPlayer and SystemSounds to it. A plug-in
+       method that plays a sound cannot even compile without it (eer's StickMan beeps from its settings window's
+       handlers). The bridge and the browser host reference it, as their other framework stand-ins; on the desktop the
+       default context, where the facade is, gets it from the bridge (Exports.ShareFrameworkStandIns). -->
+  <PropertyGroup>
+    <AssemblyName>System.Windows.Extensions</AssemblyName>
+    <RootNamespace>System.Media</RootNamespace>
+    <Version>10.0.0.0</Version>
+    <AssemblyVersion>10.0.0.0</AssemblyVersion>
+    <FileVersion>10.0.0.0</FileVersion>
+    <!-- The real assembly's identity, so a forward to it binds here: public-signed with its public key, as the
+         System.Drawing.Common stand-in is (the same key). -->
+    <AssemblyOriginatorKeyFile>../../../paintnet-web/drawing/PublicKey.snk</AssemblyOriginatorKeyFile>
+    <SignAssembly>true</SignAssembly>
+    <PublicSign>true</PublicSign>
+  </PropertyGroup>
+</Project>

@@ -147,8 +147,9 @@ pub(super) fn readable(error: String) -> String {
         None => error,
     }
 }
-pub(super) fn option_values(options: &SaveOptions) -> Value {
+pub(super) fn option_values(format: &str, options: &SaveOptions) -> Value {
     let mut value = json!({});
+    super::save_image::save_prop_values(format, options, &mut value);
     if let Some(q) = options.quality {
         value["quality"] = json!(q);
     }
@@ -260,7 +261,7 @@ fn finish_write(
             if !remembered.is_object() {
                 remembered = json!({});
             }
-            remembered[selection.format] = option_values(&selection.options);
+            remembered[selection.format] = option_values(selection.format, &selection.options);
             settings.set("fileTypes.saveOptions", remembered);
             *changed = true;
             encode_and_write(plan, selection, vec![], app, settings, changed, done);
@@ -445,7 +446,7 @@ fn selected(
         name: Some(plan.destination.name.clone()),
         path: plan.destination.path.clone(),
         format: Some(selection.format.into()),
-        options: option_values(&selection.options),
+        options: option_values(selection.format, &selection.options),
     };
     info.install(app, plan.id);
     if app.active_ws().expect("open image").document.layers.size() > 1
@@ -525,8 +526,7 @@ fn begin_save(
                 .to_ascii_lowercase();
             super::save_image::formats().find(|f| f.extensions.iter().any(|e| name.ends_with(e)))
         });
-    let usable =
-        known.filter(|f| !matches!(f.id, "heic" | "jxr") && (!layered || f.supports_layers));
+    let usable = known.filter(|f| encode::can_encode(f.id) && (!layered || f.supports_layers));
     let existing = target.borrow().existing(id);
     let save_as = save_as || (old.path.is_none() && existing.is_none()) || usable.is_none();
     let format = usable.map_or(if layered { "pdn" } else { "png" }, |f| f.id);
@@ -2037,7 +2037,7 @@ mod tests {
         let mut settings = pdn_core::settings::AppSettings::load(None);
         settings.values["fileTypes"]["saveOptions"] = json!({
             "jpeg":{"quality":70,"subsampling":"4:2:0"},
-            "jxr":{"quality":70}, "png":{"keep":true}
+            "heic":{"quality":70}, "png":{"keep":true}
         });
         settings
     }
@@ -2135,7 +2135,7 @@ mod tests {
         for (format, fail_at, success) in [
             ("jpeg", None, true),
             ("jpeg", Some(1), false),
-            ("jxr", None, false),
+            ("heic", None, false),
         ] {
             let mut driver = DialogDriver::new();
             driver.settings = preference_settings();
@@ -2173,7 +2173,7 @@ mod tests {
             assert_eq!(ws.document.layers.size(), 1);
             assert_eq!(ws.dirty, !success);
             assert_eq!(ws.save_options["quality"], if success { 90 } else { 80 });
-            if format == "jxr" {
+            if format == "heic" {
                 assert!(
                     target.borrow().writes.is_empty(),
                     "encoder refusal after remember"

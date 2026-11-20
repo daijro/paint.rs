@@ -20,7 +20,9 @@ What is implemented:
 
 - **Images** (`Images.cs`, `Icons.cs`, `Codecs.cs`, `Formats.cs`): Bitmap and Icon in straight BGRA, LockBits,
   Get/SetPixel, the serialization resources use, and PNG, BMP, GIF and ICO reading. PNG and BMP writing are here too.
-  JPEG, TIFF and WebP are read with paint.rs's own codecs (below).
+  JPEG, TIFF and WebP are read with paint.rs's own codecs (below), and JPEG is written with its encoder.
+- **Codecs** (`Encoders.cs`): GDI+'s built-in codec list (`ImageCodecInfo`), `Encoder` and the encoder parameters,
+  and `Save` with a codec. Of the parameters, only the JPEG quality is read, as libgdiplus does.
 - **Graphics** (`Graphics.cs`, `Raster.cs`, `Geometry.cs`, `Regions.cs`, `Paint.cs`, `Named.cs`): every shape is
   flattened to polygons in device space. That covers the world transform, page unit and scale, GDI+'s pixel offset,
   the clip, antialiasing and source-copy compositing. Solid, linear-gradient, path-gradient, hatch and texture
@@ -31,15 +33,18 @@ What is implemented:
   its bundled faces. Windows families paint.rs does not bundle map to the nearest bundled one.
 - **Image attributes** (`Attributes.cs`): ColorMatrix, and DrawImage with an ImageAttributes' colour matrix.
 
-paint.rs gives its text and image codecs as two app-context entries. `System.Drawing.TextOutline` is
+paint.rs gives its text and image codecs as app-context entries. `System.Drawing.TextOutline` is
 `Func<string, string, float, int, float[]>` (pdn-core `effect::dotnet::text_outline`), and
-`System.Drawing.DecodeImage` is `Func<byte[], byte[]>` (`effect::dotnet::decode_image`). In the browser,
+`System.Drawing.DecodeImage` is `Func<byte[], byte[]>` (`effect::dotnet::decode_image`). The browser also gives
+`System.Drawing.EncodeImage`, `Func<byte[], string, int, byte[]>` (`effect::dotnet::encode_image`: the image, the
+format's name and the quality). In the browser,
 `pdnBoot` passes them to the host as its `pdn` JS imports (`app/Host.cs`). On the desktop, the bridge's
 `PdnSetDrawingHost` sets them, so the desktop stand-in below draws text as the browser does. Without the
 entries, MeasureString estimates and DrawString throws.
 
 Still stubs, because no plug-in in the packs reaches them: metafiles, HDCs and window handles, printing,
-ImageAttributes' other adjustments, MeasureCharacterRanges, compressed BMPs, and writing anything but PNG and BMP.
+ImageAttributes' other adjustments, MeasureCharacterRanges, compressed BMPs, writing anything but PNG, BMP and JPEG,
+and an encoder parameter built from a native pointer.
 
 ## Rebuilding
 

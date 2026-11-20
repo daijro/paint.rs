@@ -16,7 +16,14 @@
          members they call. A per-plugin trimmed build could shrink the download later. -->
     <PublishTrimmed>false</PublishTrimmed>
     <EnableUnsafeBinaryFormatterSerialization>true</EnableUnsafeBinaryFormatterSerialization>
+    <!-- English only: Roslyn ships per-locale error-message satellites (~1.3 MB brotli across a dozen locales); the
+         plug-in host surfaces compiler errors in English. Drops them from the lazy Roslyn download. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The render worker (a second host in a Web Worker; pdn_web.js and the census start it), beside main.js. -->
+    <WasmExtraFilesToDeploy Include="wwwroot/pdn_worker.js" />
+  </ItemGroup>
   <ItemGroup>
     <!-- The one unified replacement set (phase 5A-4) — the SAME assemblies the desktop bridge
          references (pdn-host/bridge/PdnBridge.csproj), so the browser host drives real effects
@@ -24,6 +31,7 @@
     <ProjectReference Include="../../paintnet/assemblies/Primitives/Primitives.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/Fundamentals/Fundamentals.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/SystemLayer/SystemLayer.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/PaintDotNetApp/PaintDotNetApp.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/ComponentModel/ComponentModel.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/PropertySystem/PropertySystem.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/Core/Core.csproj" />
@@ -39,12 +47,18 @@
     <ProjectReference Include="../../paintnet/assemblies/Data/Data.csproj" Aliases="pdndata" />
     <ProjectReference Include="../../paintnet/assemblies/WindowsForms/WindowsForms.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/WindowsFormsPrimitives/WindowsFormsPrimitives.csproj" />
+    <ProjectReference Include="../../paintnet/assemblies/WindowsFormsDesign/WindowsFormsDesign.csproj" />
     <!-- Microsoft's MIT chart control, for plug-ins that draw a Chart, as the desktop bridge has it. -->
     <ProjectReference Include="../../paintnet/assemblies/WindowsFormsDataVisualization/WindowsFormsDataVisualization.csproj" />
     <!-- Compatibility shims, as the desktop bridge has them: pre-5.2 plugins resolve types from the
          assemblies that used to own them (PaintDotNet.Effects / PaintDotNet.Base). -->
     <ProjectReference Include="../../paintnet/assemblies/Effects/Effects.csproj" />
     <ProjectReference Include="../../paintnet/assemblies/Base/Base.csproj" />
+    <!-- Inert WinRT.Runtime / Windows SDK projection stand-ins so CodeLab 6.x's editor UI type-loads in the browser
+         host, which has no Windows Runtime. -->
+    <ProjectReference Include="../../paintnet/assemblies/WinRTRuntime/WinRTRuntime.csproj" />
+    <!-- System.Media's sounds, which .NET has only on the Windows desktop: played as silence (eer's StickMan). -->
+    <ProjectReference Include="../../paintnet/assemblies/WindowsExtensions/WindowsExtensions.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- The SAME managed host the desktop bridge drives, plus the FileType host plumbing and the
@@ -53,10 +67,15 @@
     <Compile Include="../../bridge/FileTypeDriver.cs" />
     <Compile Include="../../bridge/GpuDriver.cs" />
     <Compile Include="../../bridge/DialogSettings.cs" />
+    <Compile Include="../../bridge/Gate.cs" />
+    <Compile Include="../../bridge/GateHttp.cs" />
+    <Compile Include="../../bridge/DialogCanvas.cs" />
     <Compile Include="../../bridge/FileTypeWindows.cs" />
     <Compile Include="../../bridge/Selection.cs" />
     <Compile Include="../../bridge/WindowsOnlyCalls.cs" />
     <Compile Include="../../bridge/TokenJson.cs" />
+    <Compile Include="../../bridge/HostScintilla.cs" />
+    <Compile Include="../../bridge/PluginResolve.cs" />
     <Compile Include="../../paintnet-filetypes/host/HostDocument.cs" />
     <Compile Include="../../paintnet-filetypes/host/LoadSupport.cs" />
   </ItemGroup>
@@ -77,6 +96,21 @@
     <!-- Mono.Cecil (MIT) rewrites plug-ins' own threads and Windows calls (Rewrite.cs). It is not in the boot bundle:
          the page fetches Mono.Cecil.bin beside it only when an installed plug-in needs it (PdnDeployCecil). -->
     <PackageReference Include="Mono.Cecil" Version="0.11.6" ExcludeAssets="runtime" GeneratePathProperty="true" />
+    <!-- Roslyn (MIT) compiles plug-in C#/VB at run time (Equations, BoltBait CodeLab), through the CodeDom shim
+         (PluginCompiler). Like Mono.Cecil it is kept out of the boot bundle (ExcludeAssets="runtime"): the page
+         fetches the two Roslyn assemblies, beside the bundle as .bin, only the first time a plug-in compiles code
+         (PdnDeployRoslyn + NeedsRoslyn/AddRoslyn). Common is listed too, to keep its Microsoft.CodeAnalysis.dll out. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" ExcludeAssets="runtime" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Common" Version="4.14.0" ExcludeAssets="runtime" GeneratePathProperty="true" />
+    <!-- System.CodeDom brings the CodeDom types (CompilerParameters/Results/Error, CSharpCodeProvider) a plug-in
+         compiling at run time references; the real CompileAssemblyFromSource throws off Windows, so the rewriter
+         routes it to PluginCompiler (Roslyn). The System facade forwards System.CodeDom.Compiler.* here. -->
+    <PackageReference Include="System.CodeDom" Version="10.0.0" />
+    <!-- System.Configuration.ConfigurationManager (MIT), where the System.Configuration facade's types live: a VB
+         plug-in's settings (jchunn's) need it, and it is a package, not part of the runtime. Kept out of the boot
+         bundle like Roslyn: the page fetches it, beside the bundle as .bin, when an installed plug-in references
+         System.Configuration (PdnDeployConfiguration + NeedsConfiguration/AddConfiguration). -->
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="10.0.15" ExcludeAssets="runtime" GeneratePathProperty="true" />
   </ItemGroup>
   <!-- The registry plug-ins keep their settings in (Ed Harvey's), in place of the runtime's, which throws in the
        browser. The desktop hands plug-ins the same stand-in from plugin-shims/, but the browser runtime loads an
@@ -93,17 +127,27 @@
   <!-- WPF's WindowsBase and PresentationCore types plug-ins use (toe_head2001's Radius Corners: Point, EllipseGeometry),
        the same way: our WindowsBase keeps the framework facade's forwards, so it takes the facade's place. -->
   <Target Name="PdnWpfStandIns" AfterTargets="PrepareInputsForWasmBuild">
-    <MSBuild Projects="../../paintnet/assemblies/WindowsBase/WindowsBase.csproj;../../paintnet/assemblies/PresentationCore/PresentationCore.csproj"
+    <MSBuild Projects="../../paintnet/assemblies/WindowsBase/WindowsBase.csproj;../../paintnet/assemblies/PresentationCore/PresentationCore.csproj;../../paintnet/assemblies/PresentationFramework/PresentationFramework.csproj"
              Targets="Build" Properties="Configuration=$(Configuration)">
       <Output TaskParameter="TargetOutputs" ItemName="_PdnWpf" />
     </MSBuild>
     <ItemGroup>
-      <_WasmAssembliesInternal Remove="@(_WasmAssembliesInternal)" Condition="'%(Filename)' == 'WindowsBase' or '%(Filename)' == 'PresentationCore'" />
+      <_WasmAssembliesInternal Remove="@(_WasmAssembliesInternal)" Condition="'%(Filename)' == 'WindowsBase' or '%(Filename)' == 'PresentationCore' or '%(Filename)' == 'PresentationFramework'" />
       <_WasmAssembliesInternal Include="@(_PdnWpf)" />
     </ItemGroup>
   </Target>
   <Target Name="PdnDeployCecil" AfterTargets="_WasmGenerateAppBundle">
     <Copy SourceFiles="$(PkgMono_Cecil)/lib/netstandard2.0/Mono.Cecil.dll" DestinationFiles="$(WasmAppDir)/Mono.Cecil.bin" />
+  </Target>
+  <!-- Roslyn beside the bundle as .bin (not .wasm, so the boot manifest does not load it); the page fetches these the
+       first time a plug-in compiles code (main.js NeedsRoslyn -> AddRoslyn). net9.0 is the lib the net10 runtime picks. -->
+  <Target Name="PdnDeployRoslyn" AfterTargets="_WasmGenerateAppBundle">
+    <Copy SourceFiles="$(PkgMicrosoft_CodeAnalysis_Common)/lib/net9.0/Microsoft.CodeAnalysis.dll" DestinationFiles="$(WasmAppDir)/Microsoft.CodeAnalysis.bin" />
+    <Copy SourceFiles="$(PkgMicrosoft_CodeAnalysis_CSharp)/lib/net9.0/Microsoft.CodeAnalysis.CSharp.dll" DestinationFiles="$(WasmAppDir)/Microsoft.CodeAnalysis.CSharp.bin" />
+  </Target>
+  <Target Name="PdnDeployConfiguration" AfterTargets="_WasmGenerateAppBundle">
+    <Copy SourceFiles="$(PkgSystem_Configuration_ConfigurationManager)/lib/net10.0/System.Configuration.ConfigurationManager.dll"
+          DestinationFiles="$(WasmAppDir)/System.Configuration.ConfigurationManager.bin" />
   </Target>
   <!-- GPU plugins: the replacement Direct2D/DirectWrite wrappers P/Invoke D2D1CreateFactory ("d2d1")
        and DWriteCreateFactory ("dwrite") from opend2d's drop-ins, as on the desktop. Statically link
@@ -115,6 +159,9 @@
   <ItemGroup Condition="Exists('$(PdnD2dWasmDir)/d2d1.a')">
     <NativeFileReference Include="$(PdnD2dWasmDir)/d2d1.a" />
     <NativeFileReference Include="$(PdnD2dWasmDir)/dwrite.a" />
+    <!-- windowscodecs: the WPF-Media BitmapEncoder.Save path P/Invokes it; d2d1.a carries the symbols,
+         this is the name stub so the DllImport("windowscodecs") binds (as dwrite.a is for "dwrite"). -->
+    <NativeFileReference Include="$(PdnD2dWasmDir)/windowscodecs.a" />
   </ItemGroup>
 
   <!-- What the wasm relink cannot know about plug-ins that arrive after publish.

@@ -1,8 +1,8 @@
 //! macOS process lifecycle, R130. Keep winit's mandatory delegate intact. Public Apple-event
-//! handlers own delivery/quit; sequential run_app_on_demand runs dispose and recreate editors.
+//! handlers own delivery/quit. A windowless bootstrap run, then the editor's: closing its window
+//! quits, as Cmd-Q does and as Paint.NET does (#8).
 //! Sources: desktop/main.js lifecycle; Apple NSAppleEventManager/NSAppleEventDescriptor contracts.
 use super::Bridge;
-use crate::shell::window_close::Intent;
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -20,11 +20,10 @@ use std::{
     io,
     os::unix::ffi::OsStringExt,
     path::PathBuf,
-    sync::Arc,
 };
 use winit::{
     application::ApplicationHandler,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, EventLoop},
     platform::run_on_demand::EventLoopExtRunOnDemand,
 };
 // Public Apple Events four-character-code ABI (AERegistry.h/AppleEvents.h), big-endian u32.
@@ -262,20 +261,16 @@ impl Drop for Host {
         ACTIVE.with(|slot| *slot.borrow_mut() = None);
     }
 }
-struct Idle<'a> {
+/// The windowless first run: AppKit finishes launching (installing the Apple-event handlers) and
+/// winit makes its menu, whose Quit item is then retargeted.
+struct Bootstrap<'a> {
     target: &'a Target,
-    bootstrap: bool,
     error: Option<io::Error>,
 }
-impl ApplicationHandler<eframe::UserEvent> for Idle<'_> {
+impl ApplicationHandler<eframe::UserEvent> for Bootstrap<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        event_loop.set_control_flow(ControlFlow::Wait);
-        if self.bootstrap {
-            self.error = self.target.retarget_quit().err();
-            event_loop.exit();
-        } else {
-            self.check(event_loop);
-        }
+        self.error = self.target.retarget_quit().err();
+        event_loop.exit();
     }
     fn window_event(
         &mut self,
@@ -283,20 +278,6 @@ impl ApplicationHandler<eframe::UserEvent> for Idle<'_> {
         _: winit::window::WindowId,
         _: winit::event::WindowEvent,
     ) {
-    }
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _: eframe::UserEvent) {
-        self.check(event_loop);
-    }
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.check(event_loop);
-    }
-}
-impl Idle<'_> {
-    fn check(&mut self, event_loop: &ActiveEventLoop) {
-        let bridge = &self.target.ivars().bridge;
-        if bridge.quitting() || bridge.needs_editor() {
-            event_loop.exit();
-        }
     }
 }
 fn app_error(e: impl std::error::Error + Send + Sync + 'static) -> eframe::Error {
@@ -308,14 +289,6 @@ pub fn run(bridge: Bridge, options: fn() -> eframe::NativeOptions) -> eframe::Re
     let mut event_loop = EventLoop::<eframe::UserEvent>::with_user_event()
         .build()
         .map_err(app_error)?;
-    let proxy = event_loop.create_proxy();
-    bridge.set_idle_wake(Arc::new(move || {
-        let _ = proxy.send_event(eframe::UserEvent::RequestRepaint {
-            viewport_id: egui::ViewportId::ROOT,
-            when: std::time::Instant::now(),
-            cumulative_pass_nr: 0,
-        });
-    }));
     let host = Host {
         target: Target::new(mtm, bridge.clone()),
     };
@@ -329,9 +302,8 @@ pub fn run(bridge: Bridge, options: fn() -> eframe::NativeOptions) -> eframe::Re
         );
     }
     ACTIVE.with(|slot| *slot.borrow_mut() = Some(host.target.clone()));
-    let mut bootstrap = Idle {
+    let mut bootstrap = Bootstrap {
         target: &host.target,
-        bootstrap: true,
         error: None,
     };
     event_loop
@@ -345,50 +317,40 @@ pub fn run(bridge: Bridge, options: fn() -> eframe::NativeOptions) -> eframe::Re
             "launch Apple-event handlers were not installed",
         )));
     }
-    loop {
-        if bridge.try_finish_idle_quit() {
+    // A quit that came before the window opened.
+    if bridge.try_finish_idle_quit() {
+        host.target.settle(true);
+        return Ok(());
+    }
+    if let Some(error) = host.target.ivars().failure.borrow_mut().take() {
+        return Err(app_error(io::Error::other(error)));
+    }
+    let delivery = bridge.clone();
+    let mut editor = eframe::create_native(
+        "paint.rs",
+        options(),
+        Box::new(move |cc| {
+            let mut app = crate::PaintApp::new(cc);
+            app.tablet_monitor =
+                super::super::tablet::install_macos(&app.shell.canvas_view.pen.stylus);
+            delivery.attach(&cc.egui_ctx);
+            app.native_launch = Some(delivery);
+            Ok(Box::new(app))
+        }),
+        &event_loop,
+    );
+    let result = event_loop.run_app_on_demand(&mut editor);
+    drop(editor);
+    bridge.detach();
+    result.map_err(app_error)?;
+    // The window's close button and Quit both end the process once their review approves.
+    match bridge.outcome() {
+        Some(Ok(_)) => {
             host.target.settle(true);
-            return Ok(());
+            Ok(())
         }
-        if let Some(error) = host.target.ivars().failure.borrow_mut().take() {
-            return Err(app_error(io::Error::other(error)));
-        }
-        bridge.clear_outcome();
-        let delivery = bridge.clone();
-        let mut editor = eframe::create_native(
-            "paint.rs",
-            options(),
-            Box::new(move |cc| {
-                let mut app = crate::PaintApp::new(cc);
-                app.tablet_monitor =
-                    super::super::tablet::install_macos(&app.shell.canvas_view.pen.stylus);
-                delivery.attach(&cc.egui_ctx);
-                app.native_launch = Some(delivery);
-                Ok(Box::new(app))
-            }),
-            &event_loop,
-        );
-        let result = event_loop.run_app_on_demand(&mut editor);
-        drop(editor);
-        bridge.detach();
-        result.map_err(app_error)?;
-        match bridge.outcome() {
-            Some(Ok(Intent::ExitProcess)) => {
-                host.target.settle(true);
-                return Ok(());
-            }
-            Some(Ok(Intent::CloseRoot)) => {}
-            _ => {
-                return Err(app_error(io::Error::other(
-                    "editor ended without approved close",
-                )));
-            }
-        }
-        let mut idle = Idle {
-            target: &host.target,
-            bootstrap: false,
-            error: None,
-        };
-        event_loop.run_app_on_demand(&mut idle).map_err(app_error)?;
+        _ => Err(app_error(io::Error::other(
+            "editor ended without approved close",
+        ))),
     }
 }

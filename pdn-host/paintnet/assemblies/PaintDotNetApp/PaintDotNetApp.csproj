@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The "PaintDotNet.Resources" assembly identity. Pre-5.2 plug-ins reference a few app services from it
+       (CurtisBlack.Common's PDNIO binds PdnResources and PdnInfo to PaintDotNet.Resources, v3.5-era); the plug-in
+       load context resolves the name here. The types stay in the PaintDotNet namespace. -->
+  <PropertyGroup>
+    <AssemblyName>PaintDotNet.Resources</AssemblyName>
+    <RootNamespace>PaintDotNet</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Genuine PaintDotNet.Resources references WinForms for PdnInfo.OpenUrl's IWin32Window owner argument. -->
+    <ProjectReference Include="../WindowsForms/WindowsForms.csproj" />
+  </ItemGroup>
+</Project>

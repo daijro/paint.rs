@@ -175,7 +175,10 @@ fn nan_and_out_of_range_output_is_sanitised() {
 
 #[test]
 fn hostile_modules_fail_quickly() {
-    let quick = Duration::from_secs(5);
+    // Each case is ended by a work bound (fuel, the memory cap, the call depth) or refused at load, so this only
+    // has to tell those from the 300 s wall-clock budget: generous, since the memory bomb zeroes 1 GiB, which is
+    // slow under load.
+    let quick = Duration::from_secs(60);
     let cases: Vec<(&str, Vec<u8>)> = vec![
         (
             "infinite loop",

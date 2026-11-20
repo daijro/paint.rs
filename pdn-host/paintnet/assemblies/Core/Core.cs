@@ -91,7 +91,8 @@ namespace PaintDotNet
     /// The pixels live in native memory, as genuine Paint.NET's do (a MemoryBlock), with untouched
     /// slack around them: classic plugins walk rows through raw pointers, and one that steps a row or a
     /// pixel past an edge must land in that slack, not in the managed heap (where it broke the GC).
-    public sealed unsafe partial class Surface : PaintDotNet.ComponentModel.RefTrackedObject, IDisposable, PaintDotNet.Rendering.ISurface<ColorBgra>
+    public sealed unsafe partial class Surface : PaintDotNet.ComponentModel.RefTrackedObject, IDisposable, PaintDotNet.Rendering.ISurface<ColorBgra>,
+                                                PaintDotNet.Rendering.IRenderer<ColorBgra>
     {
         private byte* block;
         private ColorBgra* scan0;
@@ -119,6 +120,36 @@ namespace PaintDotNet
         internal IntPtr RawScan0 => scan0 != null ? (IntPtr)scan0 : throw new ObjectDisposedException(nameof(Surface));
         /// Its pixels are gone: it was disposed, or it is a window on a surface that was.
         internal bool Freed => scan0 == null || parent?.Freed == true;
+        /// The root surface a window shares its pixels with (itself when not a window). CurtisBlack's live document
+        /// view takes the root block's bitmap and the window's offset into it (GetDrawBitmapInfo).
+        internal Surface Root => parent?.Root ?? this;
+
+        /// A straight-BGRA System.Drawing.Bitmap snapshot of this surface's current pixels, as a GCHandle that the
+        /// live canvas's PdnGraphics.DrawBitmap resolves and then frees (its one caller owns it). The shim Bitmap has
+        /// no over-a-pointer constructor, so copy the rows in.
+        /// ponytail: per-paint copy + the consumer frees it; cache and invalidate if it ever shows on a profile.
+        internal unsafe IntPtr NewBitmapHandle()
+        {
+            SyncGdi();
+            var bmp = new System.Drawing.Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            System.Drawing.Imaging.BitmapData data = bmp.LockBits(new Rectangle(0, 0, Width, Height),
+                System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            try
+            {
+                long row = Math.Min(Stride, data.Stride);
+                for (int y = 0; y < Height; y++)
+                    Buffer.MemoryCopy((byte*)RawScan0 + (long)y * Stride, (byte*)data.Scan0 + (long)y * data.Stride, data.Stride, row);
+            }
+            finally { bmp.UnlockBits(data); }
+            return System.Runtime.InteropServices.GCHandle.ToIntPtr(System.Runtime.InteropServices.GCHandle.Alloc(bmp));
+        }
+
+        /// A surface renders its own pixels, as Paint.NET's does (PaintDotNet.Rendering.SurfaceRendering).
+        void PaintDotNet.Rendering.IRenderer<ColorBgra>.Render(PaintDotNet.Rendering.ISurface<ColorBgra> dst, PaintDotNet.Rendering.Int32Point renderDstOffset)
+        {
+            SyncGdi();
+            PaintDotNet.Rendering.SurfaceRendering.Copy(this, dst, renderDstOffset);
+        }
 
         private Span<ColorBgra> Row(int y) => new(scan0 + (long)y * pitch, Width);
 
@@ -140,8 +171,24 @@ namespace PaintDotNet
             gdiTouched = false;
             foreach (RenderArgs view in gdiViews!) view.PullDrawing();
         }
+
+        /// Copy this surface's current pixels into its GDI views (RenderArgs bitmaps), so an alias of a view shows
+        /// what the surface now holds. If a view's bitmap was drawn since (gdiTouched), its pixels are the newer
+        /// ones, so pull them in instead. dj8's live canvas calls it before painting a plug-in's PictureBox that
+        /// aliases a view (Liquify's), since libgdiplus copies the surface rather than aliasing it.
+        public void PushToGdi()
+        {
+            if (gdiViews is null) return;
+            if (gdiTouched) { SyncGdi(); return; }
+            foreach (RenderArgs view in gdiViews) view.PushDrawing();
+        }
         public Size Size => new Size(Width, Height);
         public Rectangle Bounds => new Rectangle(0, 0, Width, Height);
+
+        /// Paint.NET's flagged ctor (CurtisBlack's GdiBufferedPaintControl.GetDoubleBuffer builds its double buffer
+        /// with it); the flags (zero-init, etc.) are a backing hint the stand-in does not need, so it allocates as
+        /// the plain ctor does.
+        public Surface(int width, int height, PaintDotNet.SurfaceCreationFlags flags) : this(width, height) { }
 
         public Surface(int width, int height)
         {
@@ -176,18 +223,20 @@ namespace PaintDotNet
 
         public Surface(Size size) : this(size.Width, size.Height) { }
 
+        // The pixel accessors classic effects call per pixel or per row: the checks inline, the rare work (pulling in
+        // a GDI+ drawing, the errors) out of line, so the interpreter's traces run through them without leaving.
         public ColorBgra this[int x, int y]
         {
             get
             {
-                SyncGdi();
-                CheckPoint(x, y);
+                if (gdiTouched) SyncGdi();
+                if ((uint)x >= (uint)Width || (uint)y >= (uint)Height || scan0 == null) Outside(x, y);
                 return scan0[(long)y * pitch + x];
             }
             set
             {
-                SyncGdi();
-                CheckPoint(x, y);
+                if (gdiTouched) SyncGdi();
+                if ((uint)x >= (uint)Width || (uint)y >= (uint)Height || scan0 == null) Outside(x, y);
                 scan0[(long)y * pitch + x] = value;
             }
         }
@@ -201,10 +250,16 @@ namespace PaintDotNet
         /// Raw pointer to the pixel at (x,y) in the pinned buffer; classic effects walk rows with it.
         public unsafe ColorBgra* GetPointPointerUnchecked(int x, int y)
         {
-            SyncGdi();
-            return (ColorBgra*)RawScan0 + ((long)y * pitch + x);
+            if (gdiTouched) SyncGdi();
+            if (scan0 == null) Outside(x, y);
+            return scan0 + ((long)y * pitch + x);
         }
-        public unsafe ColorBgra* GetPointAddressUnchecked(int x, int y) => GetPointPointerUnchecked(x, y);
+        public unsafe ColorBgra* GetPointAddressUnchecked(int x, int y)
+        {
+            if (gdiTouched) SyncGdi();
+            if (scan0 == null) Outside(x, y);
+            return scan0 + ((long)y * pitch + x);
+        }
 
         /// Copy a GDI+ bitmap's pixels (its top-left Width × Height) into this surface.
         public unsafe void CopyFromGdipBitmap(Bitmap source, bool highQuality)
@@ -301,10 +356,12 @@ namespace PaintDotNet
             return alpha == 0 ? ColorBgra.FromBgra(0, 0, 0, 0) : ColorBgra.FromBgra((byte)(b / a), (byte)(g / a), (byte)(r / a), (byte)alpha);
         }
 
-        private void CheckPoint(int x, int y)
+        /// The error for a pixel outside the surface, or for any pixel of a freed one.
+        [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+        private void Outside(int x, int y)
         {
-            if ((uint)x >= (uint)Width || (uint)y >= (uint)Height)
-                throw new ArgumentOutOfRangeException(nameof(x), $"({x}, {y}) is outside the {Width}x{Height} surface");
+            if (scan0 == null) throw new ObjectDisposedException(nameof(Surface));
+            throw new ArgumentOutOfRangeException(nameof(x), $"({x}, {y}) is outside the {Width}x{Height} surface");
         }
 
         private void Free()
@@ -744,6 +801,9 @@ namespace PaintDotNet
             (pending ??= new()).Add(this);
         }
 
+        public RenderArgs(PaintDotNet.Rendering.ISurface<ColorBgra> surface)
+            : this((Surface)(surface ?? throw new ArgumentNullException(nameof(surface)))) { }
+
         private unsafe System.Drawing.Bitmap SurfaceToBitmap()
         {
             var bmp = new System.Drawing.Bitmap(Surface.Width, Surface.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
@@ -791,6 +851,29 @@ namespace PaintDotNet
                     for (int x = 0, i = y * Surface.Width; x < Surface.Width; x++, i++)
                         if (b[x] != seed![i])
                             srow[x] = seed[i] = b[x];
+                }
+            }
+            finally { bitmap.UnlockBits(data); }
+        }
+
+        /// Refresh this view's bitmap from the surface's current pixels (the reverse of PullDrawing), so an alias
+        /// of the bitmap shows what the surface now holds. dj8's live canvas calls it (through Surface.PushToGdi)
+        /// before painting a plug-in's PictureBox that aliases this view, since libgdiplus copied, not aliased.
+        internal unsafe void PushDrawing()
+        {
+            if (bitmap is null || seed is null || Surface.Freed) return;
+            var rect = new Rectangle(0, 0, Surface.Width, Surface.Height);
+            System.Drawing.Imaging.BitmapData data;
+            try { data = bitmap.LockBits(rect, System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb); }
+            catch (ArgumentException) { bitmap = null; return; }
+            try
+            {
+                uint* surf = (uint*)Surface.RawScan0;
+                for (int y = 0; y < Surface.Height; y++)
+                {
+                    var row = new Span<uint>(surf + (long)y * Surface.Pitch, Surface.Width);
+                    row.CopyTo(new Span<uint>((byte*)data.Scan0 + (long)y * data.Stride, Surface.Width));
+                    row.CopyTo(seed.AsSpan(y * Surface.Width, Surface.Width));
                 }
             }
             finally { bitmap.UnlockBits(data); }
@@ -882,6 +965,8 @@ namespace PaintDotNet.Imaging
         public static ManagedColor Create(ColorBgra32 color) => new(color);
         /// The colour in `colorContext`'s space, straight alpha.
         public ColorRgba128Float Get(IColorContext colorContext) => color;
+        /// The colour's own context; the host builds managed colours straight from sRGB bytes, so there is none.
+        public IColorContext? ColorContext => null;
     }
 
     public enum ExifSection : ushort { Image = 0, Photo = 1, GpsInfo = 2, Interop = 3 }
@@ -919,10 +1004,53 @@ namespace PaintDotNet.Imaging
             public static ExifPropertyKey YResolution => new("YResolution", ExifSection.Image, 283);
             public static ExifPropertyKey ResolutionUnit => new("ResolutionUnit", ExifSection.Image, 296);
             public static ExifPropertyKey InterColorProfile => new("InterColorProfile", ExifSection.Image, 34675);
+            public static ExifPropertyKey ImageWidth => new("ImageWidth", ExifSection.Image, 256);
+            public static ExifPropertyKey ImageLength => new("ImageLength", ExifSection.Image, 257);
+            public static ExifPropertyKey ExifTag => new("ExifTag", ExifSection.Image, 34665);
+            public static ExifPropertyKey GPSTag => new("GPSTag", ExifSection.Image, 34853);
         }
         public static class Photo
         {
             public static ExifPropertyKey ColorSpace => new("ColorSpace", ExifSection.Photo, 40961);
+            public static ExifPropertyKey ExifVersion => new("ExifVersion", ExifSection.Photo, 36864);
+            public static ExifPropertyKey PixelXDimension => new("PixelXDimension", ExifSection.Photo, 40962);
+            public static ExifPropertyKey PixelYDimension => new("PixelYDimension", ExifSection.Photo, 40963);
+            public static ExifPropertyKey InteroperabilityTag => new("InteroperabilityTag", ExifSection.Photo, 40965);
+        }
+        /// The GPS IFD's tags (0-30), as Paint.NET's.
+        public static class GpsInfo
+        {
+            public static ExifPropertyKey GPSVersionID => new("GPSVersionID", ExifSection.GpsInfo, 0);
+            public static ExifPropertyKey GPSLatitudeRef => new("GPSLatitudeRef", ExifSection.GpsInfo, 1);
+            public static ExifPropertyKey GPSLatitude => new("GPSLatitude", ExifSection.GpsInfo, 2);
+            public static ExifPropertyKey GPSLongitudeRef => new("GPSLongitudeRef", ExifSection.GpsInfo, 3);
+            public static ExifPropertyKey GPSLongitude => new("GPSLongitude", ExifSection.GpsInfo, 4);
+            public static ExifPropertyKey GPSAltitudeRef => new("GPSAltitudeRef", ExifSection.GpsInfo, 5);
+            public static ExifPropertyKey GPSAltitude => new("GPSAltitude", ExifSection.GpsInfo, 6);
+            public static ExifPropertyKey GPSTimeStamp => new("GPSTimeStamp", ExifSection.GpsInfo, 7);
+            public static ExifPropertyKey GPSSatellites => new("GPSSatellites", ExifSection.GpsInfo, 8);
+            public static ExifPropertyKey GPSStatus => new("GPSStatus", ExifSection.GpsInfo, 9);
+            public static ExifPropertyKey GPSMeasureMode => new("GPSMeasureMode", ExifSection.GpsInfo, 10);
+            public static ExifPropertyKey GPSDOP => new("GPSDOP", ExifSection.GpsInfo, 11);
+            public static ExifPropertyKey GPSSpeedRef => new("GPSSpeedRef", ExifSection.GpsInfo, 12);
+            public static ExifPropertyKey GPSSpeed => new("GPSSpeed", ExifSection.GpsInfo, 13);
+            public static ExifPropertyKey GPSTrackRef => new("GPSTrackRef", ExifSection.GpsInfo, 14);
+            public static ExifPropertyKey GPSTrack => new("GPSTrack", ExifSection.GpsInfo, 15);
+            public static ExifPropertyKey GPSImgDirectionRef => new("GPSImgDirectionRef", ExifSection.GpsInfo, 16);
+            public static ExifPropertyKey GPSImgDirection => new("GPSImgDirection", ExifSection.GpsInfo, 17);
+            public static ExifPropertyKey GPSMapDatum => new("GPSMapDatum", ExifSection.GpsInfo, 18);
+            public static ExifPropertyKey GPSDestLatitudeRef => new("GPSDestLatitudeRef", ExifSection.GpsInfo, 19);
+            public static ExifPropertyKey GPSDestLatitude => new("GPSDestLatitude", ExifSection.GpsInfo, 20);
+            public static ExifPropertyKey GPSDestLongitudeRef => new("GPSDestLongitudeRef", ExifSection.GpsInfo, 21);
+            public static ExifPropertyKey GPSDestLongitude => new("GPSDestLongitude", ExifSection.GpsInfo, 22);
+            public static ExifPropertyKey GPSDestBearingRef => new("GPSDestBearingRef", ExifSection.GpsInfo, 23);
+            public static ExifPropertyKey GPSDestBearing => new("GPSDestBearing", ExifSection.GpsInfo, 24);
+            public static ExifPropertyKey GPSDestDistanceRef => new("GPSDestDistanceRef", ExifSection.GpsInfo, 25);
+            public static ExifPropertyKey GPSDestDistance => new("GPSDestDistance", ExifSection.GpsInfo, 26);
+            public static ExifPropertyKey GPSProcessingMethod => new("GPSProcessingMethod", ExifSection.GpsInfo, 27);
+            public static ExifPropertyKey GPSAreaInformation => new("GPSAreaInformation", ExifSection.GpsInfo, 28);
+            public static ExifPropertyKey GPSDateStamp => new("GPSDateStamp", ExifSection.GpsInfo, 29);
+            public static ExifPropertyKey GPSDifferential => new("GPSDifferential", ExifSection.GpsInfo, 30);
         }
         public static class Interop
         {
@@ -951,6 +1079,11 @@ namespace PaintDotNet.Imaging
         public ExifPropertyItem(ExifSection section, ushort tagID, ExifValue value) : this(new ExifPropertyPath(section, tagID), value) { }
         public ExifPropertyPath Path { get; }
         public ExifValue Value { get; }
+        public bool Equals(ExifPropertyItem? other) => other is not null && Path == other.Path && Value == other.Value;
+        public override bool Equals(object? obj) => Equals(obj as ExifPropertyItem);
+        public override int GetHashCode() => HashCode.Combine(Path, Value);
+        public static bool operator ==(ExifPropertyItem? a, ExifPropertyItem? b) => Equals(a, b);
+        public static bool operator !=(ExifPropertyItem? a, ExifPropertyItem? b) => !Equals(a, b);
     }
 
     public enum XmpPacketWrapperType { None, ReadOnly, Writable }
@@ -981,6 +1114,43 @@ namespace PaintDotNet.Dxgi
 
 namespace PaintDotNet.Rendering
 {
+    /// A renderer of T pixels (PaintDotNet.Rendering). The headless default-render path does not drive it, but a
+    /// plug-in can implement it (CurtisBlack's CanvasRenderer : IRenderer&lt;ColorBgra&gt; explicitly implements
+    /// Width/Height), so the interface must carry that surface or the plug-in type fails to load.
+    public interface IRenderer<T> where T : unmanaged
+    {
+        int Width { get; }
+        int Height { get; }
+        // CurtisBlack's DocumentBox calls this through the interface (Parallelize(renderer).Render(dst, offset)); its
+        // CanvasRenderer supplies the body. Without it on the interface, that call aborts the interp at JIT-transform
+        // (uncatchable) the moment the document view has a document to paint.
+        void Render(ISurface<T> dst, Int32Point renderDstOffset);
+    }
+
+    /// Extension points over IRenderer that plug-ins reference by name.
+    public static class RendererExtensions
+    {
+        /// The renderer's whole image, at (0, 0).
+        public static System.Windows.Int32Rect Bounds<T>(this IRenderer<T> renderer) where T : unmanaged => new(0, 0, renderer.Width, renderer.Height);
+        public static bool CheckColumnValue<T>(this IRenderer<T> renderer, int x) where T : unmanaged => x >= 0 && x < renderer.Width;
+        public static bool CheckRowValue<T>(this IRenderer<T> renderer, int y) where T : unmanaged => y >= 0 && y < renderer.Height;
+
+        /// Render the whole image at (0, 0) into dst.
+        public static void Render<T>(this IRenderer<T> renderer, ISurface<T> dst) where T : unmanaged
+            => renderer.Render(dst, default);
+
+        /// The tile's pixels. ponytail: the headless host has no tile pool, so this renders the region into a fresh
+        /// ColorBgra surface; other pixel types have no host surface to allocate.
+        public static ISurface<T> UseTileOrToSurface<T>(this IRenderer<T> renderer, RectInt32 bounds) where T : unmanaged
+        {
+            if (typeof(T) != typeof(ColorBgra))
+                throw new NotSupportedException("the headless host allocates tiles only for ColorBgra surfaces");
+            var s = new Surface(bounds.Width, bounds.Height);
+            ((IRenderer<ColorBgra>)renderer).Render((ISurface<ColorBgra>)(object)s, new Int32Point(-bounds.X, -bounds.Y));
+            return (ISurface<T>)(object)s;
+        }
+    }
+
     public static class SurfaceExtensions2
     {
         public static unsafe TPixel* GetPointPointer<TPixel>(this ISurface<TPixel> surface, int x, int y) where TPixel : unmanaged
@@ -990,6 +1160,26 @@ namespace PaintDotNet.Rendering
     public static class SurfaceBgraExtensions
     {
         public static ColorBgra GetBilinearSample(this ISurface<ColorBgra> surface, float x, float y) => ((Surface)surface).GetBilinearSample(x, y);
+
+        public static unsafe void SetPointUnchecked(this ISurface<ColorBgra> surface, int x, int y, ColorBgra color)
+            => *(ColorBgra*)((byte*)surface.Scan0Pointer + (long)y * surface.Stride + (long)x * sizeof(ColorBgra)) = color;
+
+        /// Divide each pixel's colour back out by its alpha (the reverse of premultiplication).
+        public static unsafe void ConvertFromPremultipliedAlpha(this ISurface<ColorBgra> surface)
+        {
+            for (int y = 0; y < surface.Height; y++)
+            {
+                ColorBgra* row = (ColorBgra*)((byte*)surface.Scan0Pointer + (long)y * surface.Stride);
+                for (int x = 0; x < surface.Width; x++)
+                {
+                    byte a = row[x].A;
+                    if (a == 0 || a == 255) continue;
+                    row[x].B = (byte)Math.Min(255, row[x].B * 255 / a);
+                    row[x].G = (byte)Math.Min(255, row[x].G * 255 / a);
+                    row[x].R = (byte)Math.Min(255, row[x].R * 255 / a);
+                }
+            }
+        }
     }
 
     /// A layer blend mode at an opacity; LayerBlendModeUtil (PaintDotNet.Data) makes them.
@@ -1058,6 +1248,31 @@ namespace PaintDotNet.Rendering
 
 namespace PaintDotNet.AppModel
 {
+    /// Paint.NET 5's plug-in descriptor. Only the members a plug-in reads are declared; the real type's internal-only
+    /// getters are omitted. IEffectInfo2 extends this.
+    public interface IPluginInfo : PaintDotNet.ComponentModel.IObjectRef, System.IDisposable, PaintDotNet.IIsDisposed, System.IEquatable<IPluginInfo>, PaintDotNet.ComponentModel.IInternalImpl
+    {
+        string AssemblyLocation { get; }
+        string Name { get; }
+        IPluginSupportInfo? SupportInfo { get; }
+        bool IsBuiltIn { get; }
+    }
+
+    /// Base of IEffectOptions. Its real members are all internal, so this stand-in is an empty marker.
+    public interface IPluginOptions : PaintDotNet.ComponentModel.IInternalImpl
+    {
+    }
+
+    /// Reads whether the running build is a stable release; CodeLab shows or hides pre-release features by it.
+    public static class AppInfoServiceExtensions
+    {
+        // CodeLab reads this as a property (get_IsStableVersion), so it is a C# extension property, not a method.
+        extension(IAppInfoService appInfoService)
+        {
+            public bool IsStableVersion => true;
+        }
+    }
+
     /// Where plugins keep their own files (presets, palettes): Paint.NET's "paint.net User Files" folder.
     public interface IUserFilesService
     {
@@ -1074,13 +1289,23 @@ namespace PaintDotNet.AppModel
         {
             try
             {
-                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "paint.rs", "User Files");
+                string dir = System.IO.Path.Combine(PluginArea, "User Files");
                 System.IO.Directory.CreateDirectory(dir);
                 return dir;
             }
             catch (Exception) { return null; }
         }
+
+        // The plug-in settings area, exempt in the desktop files gate: PDN_PLUGIN_FILES, else <LocalAppData>/paint.rs/
+        // "Plug-in Files". A plug-in's user files and data dir live under here so they never prompt; the grants file and
+        // the installed plug-ins sit in the parent data dir and stay gated. Must match GateIo.PluginArea (bridge).
+        internal static string PluginArea =>
+            Environment.GetEnvironmentVariable("PDN_PLUGIN_FILES") is { Length: > 0 } p ? p
+            : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "paint.rs", "Plug-in Files");
     }
+
+    /// How the app was installed, as a plug-in may ask (CodeLab checks it). paint.rs is the classic (non-Store) shape.
+    public enum AppInstallType { Unknown, Classic, MicrosoftStore }
 
     /// What the app tells a plug-in about itself: where it keeps its settings.
     public interface IAppInfoService
@@ -1088,6 +1313,8 @@ namespace PaintDotNet.AppModel
         string UserDataDirectory { get; }
         /// The Paint.NET version a plug-in sees: the one these assemblies carry.
         Version AppVersion { get; }
+        /// How the app was installed (default: classic); a plug-in that does not care never reads it.
+        AppInstallType InstallType => AppInstallType.Classic;
     }
 
     /// Opening a web page or folder for a plug-in (its About box's links).
@@ -1095,6 +1322,8 @@ namespace PaintDotNet.AppModel
     {
         bool LaunchUrl(System.Windows.Forms.IWin32Window? owner, string url);
         bool LaunchFolder(System.Windows.Forms.IWin32Window? owner, string folderPath);
+        // A plug-in cannot open other programs here; the default launches nothing (HostShell inherits it).
+        bool LaunchFolderAndSelectFile(System.Windows.Forms.IWin32Window? owner, string filePath) => false;
     }
 
     /// paint.rs's: a plug-in cannot open other programs, so nothing is launched.
@@ -1141,7 +1370,7 @@ namespace PaintDotNet.AppModel
         {
             get
             {
-                string dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "paint.rs");
+                string dir = UserFiles.PluginArea;   // the exempt plug-in area, so a plug-in's settings here never prompt
                 System.IO.Directory.CreateDirectory(dir);
                 return dir;
             }
@@ -1267,6 +1496,8 @@ namespace PaintDotNet.Clipboard
 
         public static string? TryGetText(this IClipboard clipboard) => (clipboard as PaintDotNet.AppModel.HostClipboard)?.Text;
 
+        public static bool ContainsText(this IClipboard clipboard) => !string.IsNullOrEmpty(TryGetText(clipboard));
+
         /// The clipboard's image as straight BGRA, or null when it holds none.
         public static IClipboardImage<PaintDotNet.Imaging.ColorBgra32>? TryGetImageBgra32(this IClipboard clipboard)
             => clipboard.TryGetSurface() is { } s ? new ClipboardImage(s) : null;
@@ -1376,5 +1607,20 @@ namespace PaintDotNet.Imaging
     {
         /// The colour as the device context draws it. ponytail: its sRGB values (the host renders effects in sRGB).
         public static ColorRgba128Float Get(this ManagedColor color, PaintDotNet.Direct2D1.IDeviceContext deviceContext) => color.Get(null!);
+
+        /// The colour's sRGB form. ponytail: the working colour already carries sRGB numbers (no transfer curve here).
+        public static SrgbColorA GetSrgb(this ManagedColor color)
+        {
+            ColorRgba128Float c = color.Get(null!);
+            return new SrgbColorA(c.R, c.G, c.B, c.A);
+        }
+
+        /// The colour as 8-bit BGRA in `colorContext`'s space (sRGB on this path).
+        public static ColorBgra32 GetBgra32(this ManagedColor color, IColorContext colorContext)
+        {
+            ColorRgba128Float c = color.Get(colorContext!);
+            static byte B(float v) => (byte)(v <= 0 ? 0 : v >= 1 ? 255 : v * 255f + 0.5f);
+            return ColorBgra32.FromBgra(B(c.B), B(c.G), B(c.R), B(c.A));
+        }
     }
 }

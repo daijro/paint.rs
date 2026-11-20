@@ -61,7 +61,9 @@ https://github.com/tbraun96/heic-rs), vendored in `crates/vendor/heic-rs` with i
 NOTICE and modified by paint.rs (its `PAINTRS-PATCH.md`: the colour of files without an `nclx` box,
 and the direction of `imir`). JPEG XR is decoded by openreadout-jpegxr, a port of Microsoft's jxrlib
 decoder (Copyright (c) 2009, Microsoft; Copyright (c) 2026, The OpenReadout Authors; BSD-2-Clause,
-the full text in that crate's LICENSE). The BSD licences above require their notices in the
+the full text in that crate's LICENSE), in every build. JPEG XR is encoded with OpenD2D's WIC
+encoder, which runs jpegxr-pure-rs, a Rust translation of jxrlib (Copyright (c) 2009, Microsoft;
+BSD-3-Clause), vendored in OpenD2D. The BSD licences above require their notices in the
 documentation of binary distributions too (Task 58 packaging).
 
 Web decoding uses @imagemagick/magick-wasm 0.0.44 (Dirk Lemstra, Apache-2.0), ImageMagick

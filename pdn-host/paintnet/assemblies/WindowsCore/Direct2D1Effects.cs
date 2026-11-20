@@ -12,9 +12,11 @@ using PaintDotNet.Rendering;
 
 namespace PaintDotNet.Direct2D1.Effects
 {
-    public abstract class DeviceEffect : RefTrackedObject, IDeviceEffect, INativeImage, IPropertySink
+    public abstract class DeviceEffect : RefTrackedObject, IDeviceEffect, INativeImage, IPropertySink, INativeProperties
     {
         private readonly NativeEffect? native;
+
+        unsafe void* INativeProperties.PropertiesPtr => native is not null ? ((INativeProperties)native).PropertiesPtr : null;
         private int inputCount;
 
         /// A native Direct2D effect.

@@ -61,6 +61,7 @@ public class BitmapLayer : Layer
     public BitmapLayer(int width, int height) : this(new Surface(width, height), takeOwnership: true) { }
     public BitmapLayer(int width, int height, ColorBgra fillColor) : this(width, height) => Surface.Fill(fillColor);
     public BitmapLayer(System.Drawing.Size size) : this(size.Width, size.Height) { }
+    public BitmapLayer(System.Drawing.Size size, ColorBgra fillColor) : this(size.Width, size.Height, fillColor) { }
     public Surface Surface { get; }
     public UserBlendOp BlendOp => (UserBlendOp)Activator.CreateInstance(UserBlendOps.GetBlendOps()[(int)BlendMode])!;
     public void SetBlendOp(UserBlendOp blendOp) => BlendMode = blendOp.Mode;
@@ -89,6 +90,10 @@ public sealed class Metadata
     public const string UserSectionName = "$user";
     private readonly Dictionary<string, Dictionary<string, string>> sections = new();
 
+    // Paint.NET's Metadata raises this when a value changes; a document view subscribes to it (CurtisBlack's
+    // DocumentView.set_Document does `Metadata.Changed +=/-=`), so the event must exist or the setter throws.
+    public event EventHandler? Changed;
+
     private Dictionary<string, string> Section(string name)
         => sections.TryGetValue(name, out var s) ? s : sections[name] = new Dictionary<string, string>();
 
@@ -97,8 +102,17 @@ public sealed class Metadata
     public string[] GetKeys() => GetKeys(UserSectionName);
     public string[] GetKeys(string section) => sections.TryGetValue(section, out var s) ? s.Keys.ToArray() : [];
     public string? GetValue(string section, string name) => sections.TryGetValue(section, out var s) && s.TryGetValue(name, out string? v) ? v : null;
-    public void SetValue(string section, string name, string value) => Section(section)[name] = value;
-    public void RemoveValue(string section, string name) { if (sections.TryGetValue(section, out var s)) s.Remove(name); }
+    public void SetValue(string section, string name, string value) { Section(section)[name] = value; Changed?.Invoke(this, EventArgs.Empty); }
+    public void RemoveValue(string section, string name) { if (sections.TryGetValue(section, out var s) && s.Remove(name)) Changed?.Invoke(this, EventArgs.Empty); }
+
+    // EXIF/XMP the survey corpus reads and writes. The host keeps no EXIF store on this path, so the EXIF accessors
+    // are inert (empty read, no-op write); an XMP packet is kept so a set/get round-trips.
+    private PaintDotNet.Imaging.XmpPacket? xmpPacket;
+    public PaintDotNet.Imaging.ExifPropertyItem[] GetExifPropertyItems() => [];
+    public void AddExifPropertyItem(PaintDotNet.Imaging.ExifSection section, ushort tagID, PaintDotNet.Imaging.ExifValue value) { }
+    public void AddExifValues(System.Drawing.Imaging.PropertyItem[] items) { }
+    public PaintDotNet.Imaging.XmpPacket? TryGetXmpPacket() => xmpPacket;
+    public void SetXmpPacket(PaintDotNet.Imaging.XmpPacket packet) { xmpPacket = packet; Changed?.Invoke(this, EventArgs.Empty); }
 }
 
 public sealed class Document : IDisposable
@@ -114,11 +128,28 @@ public sealed class Document : IDisposable
     public MeasurementUnit DpuUnit { get; set; } = MeasurementUnit.Inch;
     public double DpuX { get; set; } = Resolution.DefaultDpi;
     public double DpuY { get; set; } = Resolution.DefaultDpi;
+    // CurtisBlack's document view reads these: a renderer of the document's pixels, pixel->physical conversion, and
+    // an invalidated event.
+    public event System.Windows.Forms.InvalidateEventHandler? Invalidated;
+    public double PixelToPhysicalY(double pixels, MeasurementUnit unit) => pixels;
+    public PaintDotNet.Rendering.IRenderer<ColorBgra> CreateRenderer() => new DocumentRendererBgra(this);
     public static double DefaultDpi => Resolution.DefaultDpi;
     public static double DefaultDpcm => Resolution.DefaultDpi / 2.54;
     public static double DotsPerInchToDotsPerCm(double dpi) => dpi / 2.54;
     public static double DotsPerCmToDotsPerInch(double dpcm) => dpcm * 2.54;
     public static Document FromGdipImage(System.Drawing.Image image, bool flatten) => FromImage(image);
+    public static double CentimetersToInches(double centimeters) => centimeters / 2.54;
+
+    // The default document resolution (96 DPI) — static, as in genuine (distinct from the instance Resolution a
+    // document carries). Loading/saving through a stream and attaching a colour context are the host's own file
+    // path, so those are inert here.
+    public static Resolution DefaultResolution => new Resolution(DefaultDpi, DefaultDpi, MeasurementUnit.Inch);
+    public void SetColorContext(PaintDotNet.Imaging.IColorContext colorContext) { }
+    public static Document FromStream(System.IO.Stream stream)
+        => throw new NotSupportedException("loading a document from a stream is the host's own file path");
+    public void SaveToStream(System.IO.Stream stream)
+        => throw new NotSupportedException("saving a document to a stream is the host's own file path");
+    public void Render(RenderArgs args) => Render(args, clearBackground: true);
 
     /// A one-layer document of the image's pixels.
     public static Document FromImage(System.Drawing.Image image)
@@ -169,6 +200,34 @@ public sealed class Document : IDisposable
     }
 }
 
+/// Composites a document's visible layers (bottom to top) at 1:1 into a tile. CurtisBlack's live document view
+/// gets this from Document.CreateRenderer() and wraps it in its caching + checkers pipeline; without a real body
+/// the preview stays blank.
+internal sealed class DocumentRendererBgra : PaintDotNet.Rendering.RendererBgraBase
+{
+    private readonly Document doc;
+    public DocumentRendererBgra(Document doc) : base(doc.Width, doc.Height) => this.doc = doc;
+
+    protected override unsafe void OnRender(PaintDotNet.Rendering.ISurface<ColorBgra> dst, PaintDotNet.Rendering.Int32Point renderOffset)
+    {
+        var layers = new List<BitmapLayer>();
+        foreach (object? o in doc.Layers) if (o is BitmapLayer b && b.Visible) layers.Add(b);
+        for (int y = 0; y < dst.Height; y++)
+        {
+            ColorBgra* row = Row(dst, y);
+            for (int x = 0; x < dst.Width; x++)
+            {
+                int sx = x + renderOffset.X, sy = y + renderOffset.Y;
+                ColorBgra c = default;   // transparent; the view's checkers show through where the document is clear
+                if ((uint)sx < (uint)doc.Width && (uint)sy < (uint)doc.Height)
+                    foreach (BitmapLayer layer in layers)
+                        c = BlendCompositionOp.Compose(layer.BlendMode, c, layer.Surface[sx, sy], layer.Opacity);
+                row[x] = c;
+            }
+        }
+    }
+}
+
 public sealed class FileTypeOptions
 {
     public IReadOnlyList<string> LoadExtensions { get; set; } = [];
@@ -177,6 +236,7 @@ public sealed class FileTypeOptions
     public bool SupportsCancellation { get; set; }
     public bool SupportsLoading => LoadExtensions.Count > 0;
     public bool SupportsSaving => SaveExtensions.Count > 0;
+    public string DefaultSaveExtension => SaveExtensions.FirstOrDefault() ?? "";
     public bool CanLoadExtension(string extension) => LoadExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase);
 }
 
@@ -243,7 +303,11 @@ public class SaveConfigWidget
     protected FileType? fileType;
     protected SaveConfigToken? token;
     public SaveConfigToken? Token { get => token; set => token = value; }
-    public void UpdateToken() => InitTokenFromWidget();
+    // The save dialog listens for this to re-render the preview when a widget value changes; UpdateToken raises it
+    // after rebuilding the token.
+    public event EventHandler? TokenChanged;
+    protected virtual void OnTokenChanged() => TokenChanged?.Invoke(this, EventArgs.Empty);
+    public void UpdateToken() { InitTokenFromWidget(); OnTokenChanged(); }
     protected virtual void InitFileType() { }
     protected virtual void InitWidgetFromToken(SaveConfigToken sourceToken) { }
     protected virtual void InitTokenFromWidget() { }
@@ -291,6 +355,16 @@ public abstract class FileType
     public string[] Extensions => Options.LoadExtensions.Union(Options.SaveExtensions).ToArray();
     public string DefaultExtension => Options.SaveExtensions.FirstOrDefault() ?? Options.LoadExtensions.FirstOrDefault() ?? "";
     public bool SupportsExtension(string ext) => Extensions.Contains(ext, StringComparer.OrdinalIgnoreCase);
+
+    // True when the type shows a save-config dialog; the configurable FileType<TToken,TWidget> overrides it.
+    public virtual bool SupportsConfiguration => false;
+
+    // A FileType is identity-keyed (one instance per registered type), so equality is reference equality.
+    public bool Equals(FileType? other) => ReferenceEquals(this, other);
+    public override bool Equals(object? obj) => ReferenceEquals(this, obj);
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+    public static bool operator ==(FileType? a, FileType? b) => ReferenceEquals(a, b);
+    public static bool operator !=(FileType? a, FileType? b) => !ReferenceEquals(a, b);
 
     public Document Load(Stream input)
     {
@@ -489,6 +563,7 @@ public abstract class FileType<TToken, TWidget> : FileType where TToken : SaveCo
     protected abstract void OnSaveT(Document input, Stream output, TToken token, Surface scratchSurface, ProgressEventHandler progressCallback);
     protected sealed override void OnSave(Document input, Stream output, SaveConfigToken token, Surface scratchSurface, ProgressEventHandler progressCallback)
         => OnSaveT(input, output, (TToken)token, scratchSurface, progressCallback);
+    public override bool SupportsConfiguration => true;
     protected abstract TWidget OnCreateSaveConfigWidgetT();
     public sealed override SaveConfigWidget CreateSaveConfigWidget() => OnCreateSaveConfigWidgetT();
     protected abstract TToken OnCreateDefaultSaveConfigTokenT();

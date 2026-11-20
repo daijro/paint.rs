@@ -15,6 +15,11 @@ namespace PaintDotNet.Interop
         [DllImport("dwrite")]
         public static extern int DWriteCreateFactory(int factoryType, Guid* riid, void** factory);
 
+        // opend2d's windowscodecs: the SDK's registration-free way to get an IWICImagingFactory (the version
+        // argument is ignored by the drop-in). The WPF-Media stand-in's BitmapEncoder.Save encodes through it.
+        [DllImport("windowscodecs")]
+        public static extern int WICCreateImagingFactory_Proxy(uint sdkVersion, void** factory);
+
         public static void Check(int hr, string what)
         {
             if (hr < 0)
@@ -79,6 +84,13 @@ namespace PaintDotNet.Interop
     internal interface INativeObject
     {
         unsafe void* NativePtr { get; }
+    }
+
+    /// An effect (or sub-properties object) whose properties live on a native ID2D1Properties: its pointer, or null for a
+    /// composed stand-in effect, whose properties are typed writes only.
+    internal interface INativeProperties
+    {
+        unsafe void* PropertiesPtr { get; }
     }
 
     /// Where an effect's typed property writes land: a native ID2D1Effect (encoded per Direct2D property

@@ -1,5 +1,6 @@
 // Image codecs for the managed bitmaps: PNG (read and write), BMP and GIF (read; BMP written as 32-bit), and icons
-// (ICO, whose images are PNG or BMP). Written from the file formats' specifications. JPEG and TIFF are not read.
+// (ICO, whose images are PNG or BMP). Written from the file formats' specifications. JPEG, TIFF and WebP are read,
+// and JPEG written, by paint.rs's codecs, which the host hands in (Host, HostEncode).
 using System.Buffers.Binary;
 using System.Drawing.Imaging;
 using System.IO;
@@ -35,11 +36,25 @@ namespace System.Drawing
                                jpeg ? ImageFormat.Jpeg : tiff ? ImageFormat.Tiff : ImageFormat.Webp);
         }
 
-        public static void Encode(Image image, Stream s, ImageFormat format)
+        public static void Encode(Image image, Stream s, ImageFormat format, int quality = 75)
         {
             if (format.Equals(ImageFormat.Bmp) || format.Equals(ImageFormat.MemoryBmp)) Bmp.Encode(image, s);
             else if (format.Equals(ImageFormat.Png)) Png.Encode(image, s);
+            else if (format.Equals(ImageFormat.Jpeg) && HostEncode(image, "Jpeg", quality) is { } jpeg) s.Write(jpeg);
             else throw Unsupported.Member($"Saving as {format}");
+        }
+
+        // JPEG through paint.rs's encoder, which the host gives as the "System.Drawing.EncodeImage" app-context entry
+        // (the browser host's Host.cs): the image as DecodeImage gives one, the format's name and the quality (the
+        // caller's encoder parameter, GDI+'s 75 when it sets none). Null when the host has no encoder or it writes nothing.
+        private static byte[] HostEncode(Image image, string format, int quality)
+        {
+            if (AppContext.GetData("System.Drawing.EncodeImage") is not Func<byte[], string, int, byte[]> encode) return null;
+            var raw = new byte[8 + image.bgra.Length];
+            BinaryPrimitives.WriteInt32LittleEndian(raw, image.width);
+            BinaryPrimitives.WriteInt32LittleEndian(raw.AsSpan(4), image.height);
+            image.bgra.CopyTo(raw, 8);
+            return encode(raw, format, quality) is { Length: > 0 } bytes ? bytes : null;
         }
     }
 

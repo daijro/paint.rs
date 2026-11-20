@@ -18,7 +18,7 @@ sys.dont_write_bytecode = True  # no __pycache__ in the source tree
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts' / 'ci'))
 import collect_notices  # noqa: E402  (the release's crate-notice collector, reused for opend2d)
 
-NOTICE_PREFIXES = ('license', 'licence', 'third-party-notices', 'notice', 'copying')
+NOTICE_PREFIXES = ('license', 'licence', 'third-party-notices', 'thirdpartynotices', 'notice', 'copying')
 # The vendored chart control's source, whose licence files ship beside its assembly.
 DATAVIS = Path(__file__).resolve().parents[1] / 'paintnet' / 'assemblies' / 'WindowsFormsDataVisualization'
 MIT = '''MIT License
@@ -128,6 +128,15 @@ def main():
         root = max((args.nuget / 'mono.cecil').iterdir())
         package_notice(root, 'Mono.Cecil', root.name, out / 'nuget' / f'Mono.Cecil-{root.name}')
         lines.append(f'- Mono.Cecil {root.name} (Mono.Cecil.bin)')
+    # Roslyn, which the browser host fetches beside itself (Microsoft.CodeAnalysis*.bin) only for plug-ins that compile
+    # C# while they run, and System.Configuration.ConfigurationManager, only for plug-ins that reference it.
+    for package, name in (('microsoft.codeanalysis.common', 'Microsoft.CodeAnalysis'),
+                          ('microsoft.codeanalysis.csharp', 'Microsoft.CodeAnalysis.CSharp'),
+                          ('system.configuration.configurationmanager', 'System.Configuration.ConfigurationManager')):
+        if (args.pdn / f'{name}.bin').exists():
+            root = max((args.nuget / package).iterdir())
+            package_notice(root, name, root.name, out / 'nuget' / f'{name}-{root.name}')
+            lines.append(f'- {name} {root.name} ({name}.bin)')
     if args.emscripten:
         dest = out / 'emscripten'
         dest.mkdir()

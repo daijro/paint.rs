@@ -25,7 +25,21 @@ fn plugin() -> Option<(&'static pdn_bridge::Host, PathBuf)> {
     // One CoreCLR per test process: hostfxr starts the self-contained release bundle only once.
     static HOST: OnceLock<pdn_bridge::Host> = OnceLock::new();
     Some((
-        HOST.get_or_init(|| pdn_bridge::Host::start(&bridge_dir).expect("start CoreCLR")),
+        HOST.get_or_init(|| {
+            // The self-test plug-ins' files go to this run's own folders, not this machine's paint.rs data: the
+            // plug-in area, and a folder outside every one the files gate lets through (SettingsPathsEffect).
+            let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("compat-files");
+            let outside = scratch.join("outside");
+            std::fs::create_dir_all(&outside).expect("scratch folders");
+            // A file that is there, outside every allowed folder: a plug-in's probe must not see it.
+            std::fs::write(outside.join("exists.txt"), "x").expect("scratch file");
+            // SAFETY: set once, before the host starts and before any test thread reads them.
+            unsafe {
+                std::env::set_var("PDN_PLUGIN_FILES", scratch.join("plug-in files"));
+                std::env::set_var("PDN_SELFTEST_OUTSIDE", &outside);
+            }
+            pdn_bridge::Host::start(&bridge_dir).expect("start CoreCLR")
+        }),
         dll,
     ))
 }
@@ -222,88 +236,147 @@ fn dialog_settings_round_trip() {
     );
 }
 
-/// A curve editor in a classic effect's own window (as in pyrochild's Curves+) is a curve setting: its points per
-/// channel, its channels' names and colours, and, as its mode swaps it for a curve with other channels, that mode
-/// and each mode's channels; its channels' check boxes are not settings of their own. Points paint.rs sends after
-/// a mode reach the curve that mode shows, as a drag would.
+/// The host keeps one live window open at a time: tests that open one take turns.
+static LIVE_WINDOW: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The live canvas of a window's control `key` (its size from the window's layout) and a drag in it from `from` to
+/// `to`, as paint.rs sends one: press, move, release.
+fn drag(
+    session: &pdn_bridge::CanvasSession,
+    props: Option<&str>,
+    key: &str,
+    from: (i64, i64),
+    to: (i64, i64),
+) {
+    // The pointer comes to `from` first, as paint.rs forwards it.
+    let events = serde_json::json!([
+        { "e": "move", "x": from.0, "y": from.1, "b": "" },
+        { "e": "down", "x": from.0, "y": from.1, "b": "left" },
+        { "e": "move", "x": to.0, "y": to.1, "b": "left" },
+        { "e": "up", "x": to.0, "y": to.1, "b": "left" },
+    ]);
+    session
+        .input(props, key, &events.to_string())
+        .expect("input");
+}
+
+/// The canvas `key`'s size in its window ("formW,formH,x,y,w,h").
+fn canvas_size(session: &pdn_bridge::CanvasSession, key: &str) -> (i64, i64) {
+    let layout = session.layout(key).expect("layout").expect("a layout");
+    let parts: Vec<i64> = layout.split(',').map(|p| p.parse().unwrap()).collect();
+    (parts[4], parts[5])
+}
+
+/// The one canvas a schema has.
+fn canvas_key(schema: &serde_json::Value) -> String {
+    let canvases: Vec<&serde_json::Value> = schema["properties"]
+        .as_array()
+        .expect("properties")
+        .iter()
+        .filter(|p| p["type"] == "canvas")
+        .collect();
+    assert_eq!(canvases.len(), 1, "{schema}");
+    canvases[0]["name"].as_str().unwrap().to_owned()
+}
+
+/// A curve editor in a classic effect's own window (as in pyrochild's Curves+: it draws itself and is edited by
+/// dragging in it) is the window's live canvas, as any control that draws itself; its mode and channel check box
+/// are settings of their own. A drag in it moves the shown curve's points, and the window's token follows.
 #[test]
-fn a_windows_curve_round_trips() {
+fn a_windows_curve_is_edited_through_its_canvas() {
     let Some((host, dll)) = plugin() else { return };
+    let _turn = LIVE_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let plugin = host.load_plugin(&dll).expect("load plugin");
     let id = "PdnSelfTest.CurveDialogEffect";
     let schema: serde_json::Value =
         serde_json::from_str(&plugin.effect_schema(id).expect("schema")).unwrap();
     let props = schema["properties"].as_array().expect("properties");
-    let curve = props
-        .iter()
-        .find(|p| p["type"] == "curve")
-        .unwrap_or_else(|| panic!("{schema}"));
-    let mode = props[0]["name"].as_str().unwrap();
-    assert!(
-        props.iter().all(|p| p["type"] != "bool"),
-        "the channel's check box is the editor's: {schema}"
-    );
-    assert_eq!(curve["max"], 255, "{schema}");
-    assert_eq!(curve["default"], serde_json::json!([[[0, 0], [255, 255]]]));
-    assert_eq!(curve["channels"], serde_json::json!(["Gray"]));
-    assert_eq!(curve["by"], mode, "{schema}");
-    assert_eq!(
-        curve["sets"][1]["channels"],
-        serde_json::json!(["Red", "Green"])
-    );
-    assert_eq!(
-        curve["sets"][1]["colors"],
-        serde_json::json!(["#ff0000", "#00ff00"])
-    );
+    assert!(props.iter().all(|p| p["type"] != "curve"), "{schema}");
+    assert!(props.iter().any(|p| p["type"] == "bool"), "{schema}");
+    let mode = props[0]["name"].as_str().unwrap().to_owned();
+    let key = canvas_key(&schema);
 
     // R = the second channel's y at x = 128, G = the first's, B = the mode.
-    assert_eq!(render(&plugin, id, None)[0], [0, 0, 0, 255]);
-    let points = serde_json::json!([
-        [[0, 0], [128, 200], [255, 255]],
-        [[0, 0], [128, 50], [255, 255]]
-    ]);
-    let set = serde_json::json!({ mode: 1, curve["name"].as_str().unwrap(): points }).to_string();
-    assert_eq!(
-        render(&plugin, id, Some(&set))[0],
-        [50, 200, 1, 255],
-        "{set}"
+    let (w, h) = (6u32, 4u32);
+    let rgba = vec![255u8; (w * h * 4) as usize];
+    let session = plugin.canvas_open(id, None, &rgba, w, h).expect("open");
+    let (cw, ch) = canvas_size(&session, &key);
+    let x = (128 * (cw - 1) + 127) / 255;
+    let at = |value: i64| (255 - value) * (ch - 1) / 255;
+    // Entry 128 of the gray curve dragged from 100 up to 200.
+    drag(&session, None, &key, (x, at(100)), (x, at(200)));
+    let token = session.token().expect("token");
+    let pixel = render(
+        &plugin,
+        id,
+        Some(&serde_json::json!({ "$token": token }).to_string()),
+    )[0];
+    assert!(
+        (198..=202).contains(&pixel[1]) && pixel[2] == 0,
+        "{pixel:?}"
+    );
+
+    // The colour mode shows its own curve (a canvas of its own); a drag in it moves both channels' points.
+    let colour = serde_json::json!({ mode: 1 }).to_string();
+    // Applying the mode hides the gray curve, so its canvas is gone by the time the input looks it up.
+    let _ = session.input(Some(&colour), &key, "[]");
+    let now: serde_json::Value =
+        serde_json::from_str(&session.values().expect("values").expect("values")).unwrap();
+    let key = canvas_key(&now);
+    drag(&session, Some(&colour), &key, (x, at(60)), (x, at(50)));
+    let token = session.token().expect("token");
+    let pixel = render(
+        &plugin,
+        id,
+        Some(&serde_json::json!({ "$token": token }).to_string()),
+    )[0];
+    assert!(
+        (48..=52).contains(&pixel[0]) && (48..=52).contains(&pixel[1]) && pixel[2] == 1,
+        "{pixel:?}"
     );
 }
 
-/// A displacement grid in a classic effect's own window (as in pyrochild's Grid Warp) is a grid setting: its size in
-/// cells, the nodes moved (none at first), and the choice that sets its columns. Nodes paint.rs sends after a new size
-/// are moved in the grid that size makes, as a drag would.
+/// A displacement grid in a classic effect's own window (as in pyrochild's Grid Warp: a view that draws the grid,
+/// whose nodes the window drags with its mouse handlers) is the window's live canvas; its size drop-down is a
+/// setting of its own. A drag in it moves a node, and the window's token follows.
 #[test]
-fn a_windows_grid_round_trips() {
+fn a_windows_grid_is_edited_through_its_canvas() {
     let Some((host, dll)) = plugin() else { return };
+    let _turn = LIVE_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let plugin = host.load_plugin(&dll).expect("load plugin");
     let id = "PdnSelfTest.GridDialogEffect";
     let schema: serde_json::Value =
         serde_json::from_str(&plugin.effect_schema(id).expect("schema")).unwrap();
     let props = schema["properties"].as_array().expect("properties");
-    let grid = props
-        .iter()
-        .find(|p| p["type"] == "grid")
-        .unwrap_or_else(|| panic!("{schema}"));
-    let columns = props.iter().find(|p| p["type"] == "choice").unwrap()["name"]
-        .as_str()
-        .unwrap();
-    assert_eq!(
-        (grid["columns"].as_i64(), grid["rows"].as_i64()),
-        (Some(2), Some(2)),
-        "{schema}"
-    );
-    assert_eq!(grid["default"], serde_json::json!([]));
-    assert_eq!(grid["columnsBy"], columns, "{schema}");
+    assert!(props.iter().all(|p| p["type"] != "grid"), "{schema}");
+    assert!(props.iter().any(|p| p["type"] == "choice"), "{schema}");
+    let key = canvas_key(&schema);
 
     // R = the columns, G = 100 + 100·dx, B = 100 + 100·dy of node (1, 1).
     assert_eq!(render(&plugin, id, None)[0], [2, 100, 100, 255]);
-    let moved = serde_json::json!([[1, 1, 0.25, -0.5]]);
-    let set = serde_json::json!({ columns: 2, grid["name"].as_str().unwrap(): moved }).to_string();
-    assert_eq!(
-        render(&plugin, id, Some(&set))[0],
-        [4, 125, 50, 255],
-        "{set}"
+    let (w, h) = (6u32, 4u32);
+    let rgba = vec![255u8; (w * h * 4) as usize];
+    let session = plugin.canvas_open(id, None, &rgba, w, h).expect("open");
+    let (cw, ch) = canvas_size(&session, &key);
+    // Node (1, 1) of the 2 × 2 grid dragged a quarter cell right and half a cell up.
+    let (cell_w, cell_h) = (cw / 2, ch / 2);
+    drag(
+        &session,
+        None,
+        &key,
+        (cell_w, cell_h),
+        (cell_w + cell_w / 4, cell_h - cell_h / 2),
+    );
+    let token = session.token().expect("token");
+    let pixel = render(
+        &plugin,
+        id,
+        Some(&serde_json::json!({ "$token": token }).to_string()),
+    )[0];
+    assert_eq!(pixel[0], 2, "{pixel:?}");
+    assert!(
+        (123..=127).contains(&pixel[1]) && (48..=52).contains(&pixel[2]),
+        "{pixel:?}"
     );
 }
 
@@ -430,4 +503,91 @@ fn a_failing_plugin_thread_leaves_the_host_running() {
     for px in render(&plugin, "PdnSelfTest.ThreadThrowEffect", None) {
         assert_eq!(px, [0, 255, 0, 255]);
     }
+}
+
+/// An AssemblyResolve handler that loads the very name it was asked for (pyrochild's do) does not recurse until the
+/// stack runs out and ends the process: an assembly nothing has fails the ordinary way and the effect renders.
+#[test]
+fn a_resolve_handler_that_loads_its_own_name_does_not_recurse() {
+    let Some((host, dll)) = plugin() else { return };
+    let plugin = host.load_plugin(&dll).expect("load plugin");
+    for px in render(&plugin, "PdnSelfTest.ResolveLoopEffect", None) {
+        assert_eq!(px, [0, 255, 0, 255]);
+    }
+}
+
+/// The parts a plug-in's live document view is built on behave as Paint.NET's: its renderer draws in OnRender and
+/// reads its size from the base, surfaces are renderers, a window lands in its surface, clearing a drop-down raises no
+/// selection event, and a panel whose content fits does not scroll. Blue holds the failed checks' bits otherwise.
+#[test]
+fn document_view_parts_behave() {
+    let Some((host, dll)) = plugin() else { return };
+    let plugin = host.load_plugin(&dll).expect("load plugin");
+    for px in render(&plugin, "PdnSelfTest.DocumentViewPartsEffect", None) {
+        assert_eq!(px, [0, 255, 0, 255]);
+    }
+}
+
+/// A plug-in library the desktop rewrites as it loads (it calls WebRequest, which the gate routes) and that holds a
+/// constant of a WinForms 2.0 enum type, so writing the rewritten module back has to find WinForms, which is not in
+/// the current directory: it loads. Simon Brown's SBCommon is such a library.
+#[test]
+fn a_rewritten_plugin_with_a_winforms_2_constant_loads() {
+    let Some((host, _)) = plugin() else { return };
+    let dll = repo_rel("pdn-host/paintnet/.build/resolvetest/PdnResolveTest.dll");
+    if !dll.exists() {
+        eprintln!("skipping: build pdn-host/paintnet/tests/resolvetest first");
+        return;
+    }
+    host.load_plugin(&dll).expect("load the rewritten library");
+}
+
+/// Every way the common plug-ins keep their settings works with no permission prompt, as in Paint.NET, which never
+/// asks: Paint.NET's services, the old Documents user-files folder, the AppData/LocalAppData/Documents folders (the
+/// plug-in area's mirrors), WinForms' UserAppDataPath, a user.config and temp. And paint.rs's saved state (where its
+/// grants are) and the user's real Documents are gated: the Settings Paths self-test effect, one case each.
+#[test]
+fn plugin_settings_folders_never_prompt_and_the_rest_is_gated() {
+    let Some((host, dll)) = plugin() else { return };
+    let plugin = host.load_plugin(&dll).expect("load plugin");
+    let cases = [
+        "AppInfoUserData",
+        "UserFiles",
+        "PdnInfoUserData",
+        "OldUserFiles",
+        "AppData",
+        "LocalAppData",
+        "Documents",
+        "UserAppDataPath",
+        "UserConfig",
+        "Temp",
+        "XDocumentInArea",
+        "BitmapInArea",
+        "GrantsUpFromUserData",
+        "GrantsAbsolute",
+        "RealDocuments",
+        "XmlDocumentOutside",
+        "BitmapOutside",
+        "StreamWriterOutside",
+        "FileInfoOutside",
+        "PathStringOps",
+        "ExistsProbes",
+        "XPathQuery",
+        "ExistingOutsideLooksAbsent",
+        "ListOutside",
+        "ZipInArea",
+        "ZipOutside",
+        "CopyInArea",
+        "CopyOutside",
+    ];
+    let failed: Vec<&str> = cases
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| {
+            let props = format!(r#"{{"Case":{i}}}"#);
+            render(&plugin, "PdnSelfTest.SettingsPathsEffect", Some(&props))[0] != [0, 255, 0, 255]
+        })
+        .map(|(_, &c)| c)
+        .collect();
+    assert!(failed.is_empty(), "failed: {failed:?}");
 }

@@ -27,6 +27,10 @@ namespace PaintDotNet.Bridge;
 
 internal static class GpuDriver
 {
+    // The renderer a plug-in hosting another effect gets from it (IEffect.CreateRenderer), wired before any effect runs:
+    // every Paint.NET 5 effect is listed, set up and rendered here.
+    static GpuDriver() => EffectBase.HostRenderer = effect => new HostedRenderer(ComponentModel.ObjectRefExtensions.CreateRef<EffectBase>(effect));
+
     /// Concrete Paint.NET 5 effects (GPU image/drawing, CPU bitmap) with a public parameterless ctor.
     public static List<Type> Discover(IEnumerable<Type> defined) =>
         defined.Where(t => t.IsClass && !t.IsAbstract
@@ -84,9 +88,9 @@ internal static class GpuDriver
         try
         {
             if (effect is BitmapEffect bitmapEffect)
-                RenderBitmap(scope, bitmapEffect, propsJson);
+                RenderBitmap(scope, bitmapEffect, () => Token(effect, propsJson));
             else
-                RenderGpu(scope, (GpuImageEffect)effect, propsJson);
+                RenderGpu(scope, (GpuImageEffect)effect, () => Token(effect, propsJson));
         }
         finally
         {
@@ -94,24 +98,96 @@ internal static class GpuDriver
         }
     }
 
-    private static void RenderGpu(RenderScope scope, GpuImageEffect effect, string? propsJson)
+    /// `token` runs once the effect has its environment and render info.
+    private static void RenderGpu(RenderScope scope, GpuImageEffect effect, Func<EffectConfigToken?> token)
     {
         GpuRenderInfo? info = null;
         scope.Attach(effect, () => (info!.ColorContext.IsLinear, info.InputAlphaMode == GpuEffectAlphaMode.Straight));
         info = effect.InitializeRenderInfo();
-        effect.SetToken(Token(effect, propsJson));
+        effect.SetToken(token());
         effect.PrepareDraw(scope.Dc);
         scope.WriteBack(scope.ReadOutput(effect.Output, info.ColorContext.IsLinear, info.OutputAlphaMode == GpuEffectAlphaMode.Straight));
     }
 
-    private static void RenderBitmap(RenderScope scope, BitmapEffect effect, string? propsJson)
+    private static void RenderBitmap(RenderScope scope, BitmapEffect effect, Func<EffectConfigToken?> token)
     {
         scope.Attach(effect, () => (false, false));
         PixelFormat format = effect.InitializeRenderInfo();
-        effect.SetToken(Token(effect, propsJson));
+        effect.SetToken(token());
         var output = new BitmapOutput(scope.Roi, format);
         effect.Render(output);
         scope.WriteBack(output.ToBgra(scope.Width, scope.Height));
+    }
+
+    /// The renderer for an effect another plug-in hosts (IEffect.CreateRenderer: CodeLab's preview of its script). Render
+    /// draws the effect as Render does, over the source and selection of the environment the effect was made in, with
+    /// the last token set, and copies `renderRect` of the result out. It holds its own reference to the effect.
+    private sealed unsafe class HostedRenderer(EffectBase effect) : ComponentModel.RefTrackedObject, IBitmapEffectRenderer
+    {
+        private EffectConfigToken? token;
+
+        public IEffect Effect => effect;
+        public bool IsCancelRequested => effect.IsCancelRequested;
+        public System.Threading.CancellationToken CancellationToken => effect.CancellationToken;
+        public void CancelRendering() => effect.IsCancelRequested = true;
+        public IReadOnlyBitmapEffectRenderInfo RenderInfo => throw new NotSupportedException("a hosted effect's render info");
+        public void Initialize(BitmapEffectInitializeInfo initializeInfo) { }
+        public void SetToken(EffectConfigToken? newToken) => token = newToken;
+        public IColorContext GetRenderColorContext(in PixelFormat renderPixelFormat)
+            => throw new NotSupportedException("a hosted effect's render colour context");
+
+        public void Render(void* pBuffer, int bufferStride, nint bufferSize, in PixelFormat bufferPixelFormat, RectInt32 renderRect)
+        {
+            if (bufferPixelFormat != PixelFormats.Bgra32)
+                throw new NotSupportedException($"a hosted effect renders into BGRA8, not {bufferPixelFormat.GetName()}");
+            var environment = (GpuEnvironment)((IEffect)effect).Environment;
+            int width = environment.Size.Width, height = environment.Size.Height, row = renderRect.Width * 4;
+            if (renderRect.X < 0 || renderRect.Y < 0 || renderRect.Width < 0 || renderRect.Height < 0
+                || renderRect.X + renderRect.Width > width || renderRect.Y + renderRect.Height > height)
+                throw new ArgumentOutOfRangeException(nameof(renderRect), $"{renderRect} is outside the {width}x{height} image");
+            if (renderRect.Height > 0 && (bufferStride < row || bufferSize < (nint)(renderRect.Height - 1) * bufferStride + row))
+                throw new ArgumentException($"a {bufferSize}-byte buffer of stride {bufferStride} cannot hold {renderRect}");
+            byte[] bgra = (byte[])environment.SourcePixels.Clone();
+            using (var scope = new RenderScope(bgra, width, height, environment.RenderBounds, HostState.Selection))
+            {
+                if (effect is BitmapEffect bitmapEffect) RenderBitmap(scope, bitmapEffect, () => token);
+                else RenderGpu(scope, (GpuImageEffect)effect, () => token);
+            }
+            for (int y = 0; y < renderRect.Height; y++)
+                new ReadOnlySpan<byte>(bgra, ((renderRect.Y + y) * width + renderRect.X) * 4, row)
+                    .CopyTo(new Span<byte>((byte*)pBuffer + (nint)y * bufferStride, row));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) effect.Dispose();
+        }
+    }
+
+    /// The token kept in this process that propsJson's "$token" names (mem:<n>), when it is of the effect's token
+    /// type (TToken of its BitmapEffect<TToken>, GpuImageEffect<TToken> or GpuDrawingEffect<TToken> base); else null.
+    private static EffectConfigToken? KeptToken(EffectBase effect, string? propsJson)
+    {
+        if (string.IsNullOrEmpty(propsJson) || TokenType(effect.GetType()) is not { } tokenType) return null;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(propsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                   && doc.RootElement.TryGetProperty("$token", out JsonElement kept) && kept.ValueKind == JsonValueKind.String
+                   && kept.GetString() is { } s && s.StartsWith("mem:", StringComparison.Ordinal) && int.TryParse(s.AsSpan(4), out int slot)
+                   && TokenJson.FromSlot(slot) is { } token && tokenType.IsInstanceOfType(token)
+                ? token : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static Type? TokenType(Type? t)
+    {
+        for (; t is not null; t = t.BaseType)
+            if (t.IsGenericType && t.GetGenericTypeDefinition() is var g
+                && (g == typeof(BitmapEffect<>) || g == typeof(GpuImageEffect<>) || g == typeof(GpuDrawingEffect<>)))
+                return t.GetGenericArguments()[0];
+        return null;
     }
 
     private static EffectConfigToken? Token(EffectBase effect, string? propsJson)
@@ -130,26 +206,102 @@ internal static class GpuDriver
     /// environment must be set.
     public static EffectConfigToken FormToken(EffectBase effect, string? propsJson = null)
     {
+        // A token this process keeps for the live window ("mem:<n>") is the window's own and renders as it is, with
+        // no second form built for it: loading one runs its load, which may change what the live window holds
+        // (CodeLab's load compiles its default script into the compiled effect its window's token reads).
+        if (KeptToken(effect, propsJson) is { } live) return live;
         using var form = LoadForm(effect);
+        bool applied = false;
         if (!string.IsNullOrEmpty(propsJson))
             try
             {
                 using JsonDocument doc = JsonDocument.Parse(propsJson);
+                // A kept "$token" (mem:<n> for a live-canvas form, whose token carries state its dialog does not
+                // restore, like Liquify's warp mesh) drives the render directly, as the classic dialog's Load does.
+                if (doc.RootElement.TryGetProperty("$token", out JsonElement kept) && kept.ValueKind == JsonValueKind.String
+                    && TokenJson.Read((EffectConfigToken)form.Token.Clone(), kept.GetString()!) is { } restored)
+                    return restored;
                 DialogSettings.Apply(form, doc.RootElement);
-                form.HostUpdateToken();
+                applied = true;
             }
             catch (Exception ex) when (ex is not JsonException)
             {
                 // A value the form cannot take: it renders with the token it has, as the dialog path does.
                 if (PluginHost.Trace) Console.Error.WriteLine($"{effect.Name}: replaying its settings: {ex}");
             }
+        if (DialogCanvas.Settle(form) | applied) form.HostUpdateToken();
         return (EffectConfigToken)form.Token.Clone();
     }
 
-    private static EffectConfigForm LoadForm(EffectBase effect)
+    /// A Paint.NET 5 settings form kept open over the image for a live-canvas session (PluginHost.Canvas*): its
+    /// RenderScope (the GPU environment) and the loaded form stay alive, instead of FormToken's one-shot using.
+    public sealed class LiveForm : IDisposable
+    {
+        public EffectConfigForm Form { get; }
+        private readonly RenderScope scope;
+        private readonly EffectBase effect;
+        private LiveForm(EffectConfigForm form, RenderScope scope, EffectBase effect) => (Form, this.scope, this.effect) = (form, scope, effect);
+        internal static LiveForm Make(EffectConfigForm form, RenderScope scope, EffectBase effect) => new(form, scope, effect);
+        public void Dispose()
+        {
+            try { Form.Dispose(); } catch (Exception) { }
+            if (effect is GpuEffect gpu) gpu.HostEnvironment = null;
+            else if (effect is BitmapEffect bitmap) bitmap.HostEnvironment = null;
+            try { scope.Dispose(); } catch (Exception) { }
+        }
+    }
+
+    /// Opens `effect`'s own settings form over the image and keeps it and its GPU environment alive; propsJson
+    /// (and its "$token") is applied as FormToken does. The scope is kept, not disposed, for the form's whole life.
+    public static LiveForm OpenForm(EffectBase effect, string? propsJson, byte[] bgra, int width, int height, System.Drawing.Size? ownerSize = null)
+    {
+        if (bgra.Length != width * height * 4)
+            throw new InvalidOperationException($"buffer is {bgra.Length} bytes, expected {width * height * 4}");
+        var scope = new RenderScope(bgra, width, height, new RectInt32(0, 0, width, height), HostState.Selection);
+        try
+        {
+            scope.Attach(effect, static () => (false, false));
+            EffectConfigForm form = LoadForm(effect, ownerSize);
+            bool applied = false;
+            if (!string.IsNullOrEmpty(propsJson))
+                try
+                {
+                    using JsonDocument doc = JsonDocument.Parse(propsJson);
+                    if (doc.RootElement.TryGetProperty("$token", out JsonElement kept) && kept.ValueKind == JsonValueKind.String
+                        && TokenJson.Read((EffectConfigToken)form.Token.Clone(), kept.GetString()!) is { } restored)
+                        form.Token = restored;
+                    DialogSettings.Apply(form, doc.RootElement);
+                    applied = true;
+                }
+                catch (Exception ex) when (ex is not JsonException) { if (PluginHost.Trace) Console.Error.WriteLine($"canvas form apply: {ex}"); }
+            // Its timers run once paint.rs shows it ({"e": "settle"}): a plug-in that builds on load (CodeLab compiles
+            // its script) then does so with the window already on screen.
+            if (applied) form.HostUpdateToken();
+            return LiveForm.Make(form, scope, effect);
+        }
+        catch
+        {
+            if (effect is GpuEffect gpu) gpu.HostEnvironment = null;
+            else if (effect is BitmapEffect bitmap) bitmap.HostEnvironment = null;
+            scope.Dispose();
+            throw;
+        }
+    }
+
+    /// The live form's token now (UpdateTokenFromDialog), for the session's CanvasToken.
+    public static EffectConfigToken FormTokenNow(EffectConfigForm form)
+    {
+        form.HostUpdateToken();
+        return (EffectConfigToken)form.Token.Clone();
+    }
+
+    private static EffectConfigForm LoadForm(EffectBase effect, System.Drawing.Size? ownerSize = null)
     {
         var form = (EffectConfigForm)effect.CreateConfigForm();
         ((IEffectConfigForm)form).SetEffect(effect);
+        // A stand-in Owner whose ClientSize is paint.rs's window, so a form that sizes itself from
+        // Owner.ClientSize on load (Liquify) opens full-size rather than keeping its small designer size.
+        if (ownerSize is { } sz) form.Owner = new System.Windows.Forms.Form { ClientSize = sz };
         form.RaiseLoad();
         return form;
     }
@@ -166,7 +318,7 @@ internal static class GpuDriver
     }
 
     /// One render's factories, device context, and the device resources built for it.
-    private sealed unsafe class RenderScope : IDisposable
+    internal sealed unsafe class RenderScope : IDisposable
     {
         private readonly byte[] bgra;
         private readonly List<IDisposable> owned = new();
@@ -181,8 +333,8 @@ internal static class GpuDriver
             Width = width;
             Height = height;
             Roi = roi;
-            D2d = Direct2DFactory.Create();
-            DWrite = DirectWriteFactory.Create();
+            D2d = HostDirect2DFactory.Create();
+            DWrite = DWriteFactory.Create();
             Dc = D2d.CreateDeviceContext();
             // No context bufferPrecision: Paint.NET sets one only when an effect's render info asks for it, which none of
             // its GPU image effects do, so effects inherit their inputs' precision.
@@ -191,8 +343,8 @@ internal static class GpuDriver
         public int Width { get; }
         public int Height { get; }
         public RectInt32 Roi { get; }
-        public Direct2DFactory D2d { get; }
-        public DirectWriteFactory DWrite { get; }
+        public HostDirect2DFactory D2d { get; }
+        public DWriteFactory DWrite { get; }
         public DeviceContextImpl Dc { get; }
         private SizeInt32 Size => new(Width, Height);
 

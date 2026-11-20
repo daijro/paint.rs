@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Microsoft.Win32.Registry off Windows, for plugins: .NET's throws PlatformNotSupportedException there, and
-       plugins remember their last settings in HKEY_CURRENT_USER (Ed Harvey's). Not referenced by the bridge (the
+  <!-- Microsoft.Win32.Registry for plugins, on every platform: their keys kept in each plug-in's settings area, never
+       the system's registry (on Windows .NET's is the real one; elsewhere it throws PlatformNotSupportedException).
+       Plug-ins remember their last settings in HKEY_CURRENT_USER (Ed Harvey's). Not referenced by the bridge (the
        framework ships an assembly of this name): publish.sh builds it into plugin-shims/, which the plugin load
        context checks first. -->
   <PropertyGroup>

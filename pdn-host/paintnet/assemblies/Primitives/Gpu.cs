@@ -210,7 +210,10 @@ namespace PaintDotNet.Imaging
         public float G { readonly get; set; }
         public float B { readonly get; set; }
         public static implicit operator ColorRgba128Float(SrgbColor c) => new(c.R, c.G, c.B, 1);
-        public static implicit operator SrgbColorA(SrgbColor c) => new(c.R, c.G, c.B, 1);
+        public static implicit operator ColorRgb24(SrgbColor c) => new(Byte(c.R), Byte(c.G), Byte(c.B));
+        internal static byte Byte(float v) => (byte)System.Math.Clamp(System.MathF.Round(v * 255f), 0f, 255f);
+        // The SrgbColor -> SrgbColorA conversion is declared on SrgbColorA (its target type), matching how a plug-in
+        // references it (SrgbColorA::op_Implicit).
     }
 
     public static class SrgbColors
@@ -220,6 +223,9 @@ namespace PaintDotNet.Imaging
         public static SrgbColor Red => new(1, 0, 0);
         public static SrgbColor Green => new(0, 1, 0);
         public static SrgbColor Blue => new(0, 0, 1);
+        public static SrgbColor DeepSkyBlue => new(0f, 191f / 255f, 1f);
+        public static SrgbColor Gainsboro => new(220f / 255f, 220f / 255f, 220f / 255f);
+        public static SrgbColor Orange => new(1f, 165f / 255f, 0f);
         public static SrgbColorA Transparent => new(1, 1, 1, 0);
         public static SrgbColorA TransparentBlack => new(0, 0, 0, 0);
     }

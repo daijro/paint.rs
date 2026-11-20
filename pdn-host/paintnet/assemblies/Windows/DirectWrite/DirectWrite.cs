@@ -24,7 +24,11 @@ namespace PaintDotNet.DirectWrite
     public enum TextMeasuringMode { Natural, GdiClassic, GdiNatural }
     public enum TextRenderingMode { Default, Aliased, GdiClassic, GdiNatural, Natural, NaturalSymmetric, Outline, NaturalSymmetricDownsampled }
 
-    public interface IFontCollection : IObjectRef, IDisposable, IIsDisposed { }
+    public interface IFontCollection : IObjectRef, IDisposable, IIsDisposed, IInternalImpl
+    {
+        int FontFamilyCount { get; }
+        IFontFamily GetFontFamily(int index);
+    }
 
     public interface ITextFormat : IObjectRef, IDisposable, IIsDisposed
     {
@@ -39,18 +43,23 @@ namespace PaintDotNet.DirectWrite
         ITextFormat CreateTextFormat(string fontFamilyName, IFontCollection? fontCollection = null, FontWeight fontWeight = FontWeight.Normal,
             FontStyle fontStyle = FontStyle.Normal, FontStretch fontStretch = FontStretch.Normal, float fontSize = 12f, string? localeName = null);
         ITextLayout CreateTextLayout(string text, ITextFormat textFormat, float maxWidth, float maxHeight);
+        IFontCollection GetSystemFontCollection();
+        IFontCollection GetSystemFontCollection(bool includeDownloadableFonts) => GetSystemFontCollection();
     }
 
-    internal sealed unsafe class DirectWriteFactory : ComObject, IDirectWriteFactory
+    // The concrete DirectWrite factory. Named DWriteFactory, not DirectWriteFactory, so the public Windows.Core
+    // DirectWriteFactory a plug-in binds (CodeLab's CreateRef) does not clash with this internal type (IVT-visible to
+    // Windows.Core). CreateRef hands back one of these through the IDirectWriteFactory interface.
+    internal sealed unsafe class DWriteFactory : ComObject, IDirectWriteFactory
     {
-        private DirectWriteFactory(void* p) : base(p) { }
+        private DWriteFactory(void* p) : base(p) { }
 
-        public static DirectWriteFactory Create()
+        public static DWriteFactory Create()
         {
             Guid iid = Interop.IDWriteFactory.IID;
             void* f;
             Native.Check(Native.DWriteCreateFactory(0 /* SHARED */, &iid, &f), "DWriteCreateFactory");
-            return new DirectWriteFactory(f);
+            return new DWriteFactory(f);
         }
 
         public ITextFormat CreateTextFormat(string fontFamilyName, IFontCollection? fontCollection = null, FontWeight fontWeight = FontWeight.Normal,
@@ -71,6 +80,13 @@ namespace PaintDotNet.DirectWrite
                 Native.Check(Interop.IDWriteFactory.CreateTextLayout(Ptr, t, (uint)text.Length, ((INativeObject)textFormat).NativePtr, maxWidth, maxHeight, &layout),
                     "IDWriteFactory::CreateTextLayout");
             return new TextFormat(layout);
+        }
+
+        public IFontCollection GetSystemFontCollection()
+        {
+            void* collection;
+            Native.Check(Interop.IDWriteFactory.GetSystemFontCollection(Ptr, &collection, 0), "IDWriteFactory::GetSystemFontCollection");
+            return new FontCollection(collection);
         }
 
         /// The system font collection's family names (each family's first localized name).

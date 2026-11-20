@@ -1615,6 +1615,9 @@ pub enum UiRequest {
     FadeDialog,
     ImportFromFile,
     EffectDialog(String),
+    /// A settings-free Paint.NET plug-in effect: its final render goes through the effect dialog (final only), so
+    /// an outside request it stops at is asked about.
+    EffectFinal(String),
     /// Seam Repeat retains a final-only cancellable UI owner.
     RepeatSeam,
     /// Clipboard and file Repeat capture a final-only invocation before awaiting their input.
@@ -2100,11 +2103,12 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
                 return Ui(UiRequest::RepeatExternal);
             }
             // Seam carving, Liquify and Content Aware Fill repeat through the dialog's
-            // cancellable final render.
+            // cancellable final render, and so does a Paint.NET plug-in (an outside request it stops at is asked).
             if app.last_effect.as_deref().is_some_and(|id| {
                 crate::effect::bb::seam::orientation(id).is_some()
                     || id == crate::effect::extra::liquify::ID
                     || id == crate::effect::forum::content_aware_fill::ID
+                    || crate::effect::dotnet::is_plugin(id)
             }) {
                 return Ui(UiRequest::RepeatSeam);
             }
@@ -2129,6 +2133,9 @@ fn run(app: &mut AppWorkspace, id: &'static str) -> ActionOutcome {
                     Done
                 }
                 Some(d) if d.is_configurable() => Ui(UiRequest::EffectDialog(effect.into())),
+                Some(d) if crate::effect::dotnet::is_plugin(d.id) => {
+                    Ui(UiRequest::EffectFinal(effect.into()))
+                }
                 Some(d) => {
                     crate::effect::session::run_instant(app, d);
                     Done

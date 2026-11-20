@@ -209,6 +209,16 @@ const script = `(async () => {
       && opened[8] === 0 && opened[9] === 0 && opened[10] === 255);   // BGRA red
   }
 
+  // Print path: a one-page PrintDocument -> PrintPage draws -> the host's PrintPages wiring hands the rendered
+  // page to the page's printPages hook. Spy on that hook, run the managed print, and assert the base64 PNG the
+  // byte[][]->string[] round-trip delivered decodes to a PNG.
+  globalThis.pdnPrintPages = (pages) => { globalThis.__pdnPrinted = pages; };
+  await pdnweb.printTest();
+  const printed = globalThis.__pdnPrinted;
+  const isPng = (s) => { const b = atob(s); return b.length > 8 && b.charCodeAt(0) === 0x89 && b.charCodeAt(1) === 0x50 && b.charCodeAt(2) === 0x4E && b.charCodeAt(3) === 0x47; };
+  const printOk = Array.isArray(printed) && printed.length > 0
+    && printed.every((p) => typeof p === "string" && p.length > 0 && isPng(p));
+
   // Extra real-world plugins: report that each loads and enumerates in the browser host (not
   // asserted — a plugin may be incompatible). Render the first supported effect if there is one.
   const extras = ${JSON.stringify(extraNames)};
@@ -256,10 +266,11 @@ const script = `(async () => {
   }
 
   return {
-    pass: !booted0 && fullOk && roiOk && steppedOk && ftOk !== false && ftWindows !== false
+    pass: !booted0 && fullOk && roiOk && steppedOk && ftOk !== false && ftWindows !== false && printOk
           && (gpu === null || (gpu.kinds >= 3 && gpu.scaleIdentity && gpu.drawIdentity && gpu.zoomResample && gpu.zoomChanged)),
     detail: { id, bootedBeforeUse: booted0, runtimeBytes: pdnweb.runtimeBytes(),
               properties: schema.properties.length, fullOk, roiOk, steppedOk, strips, ftOk, ftWindows,
+              printOk, printedPages: Array.isArray(printed) ? printed.length : 0,
               fileTypes: enumJson.fileTypes.length, gpu,
               full: Array.from(full), roi: Array.from(roi), extras: extraReport },
   };
@@ -280,6 +291,7 @@ console.log("      render whole image byte-exact:", r.detail.fullOk, "| ROI byte
 console.log("      incremental (stepped) render == one-shot:", r.detail.steppedOk, `(${r.detail.strips} strip(s))`);
 console.log("      FileType save->open round-trip byte-exact:", r.detail.ftOk, `(${r.detail.fileTypes} fileType(s))`);
 console.log("      FileType windows answered on save and open:", r.detail.ftWindows);
+console.log("      print path (PrintDocument.Print -> PNG pages via printPages):", r.detail.printOk, `(${r.detail.printedPages} page(s))`);
 if (r.detail.gpu)
   console.log("      GPU (vs desktop ref): pixel-shader identity:", r.detail.gpu.scaleIdentity,
     "| D2D-drawing identity:", r.detail.gpu.drawIdentity, "| Zoom=2 resample:", r.detail.gpu.zoomResample,

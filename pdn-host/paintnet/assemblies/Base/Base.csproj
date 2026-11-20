@@ -10,5 +10,8 @@
     <ProjectReference Include="../PropertySystem/PropertySystem.csproj" />
     <ProjectReference Include="../Fundamentals/Fundamentals.csproj" />
     <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
+    <!-- PaintDotNet.Rendering's Int32Point/Size/Rect helpers convert to/from WPF's Point/Size/Rect/Int32Rect. -->
+    <ProjectReference Include="../WindowsBase/WindowsBase.csproj" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
   </ItemGroup>
 </Project>

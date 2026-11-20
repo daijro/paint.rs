@@ -1,5 +1,5 @@
-// Paint.NET's own pixel shaders behind ScenePositionEffect, HlslBinaryFunctionEffect, the per-pixel level
-// selector of its blur maps and the sample-map renderer's stages (SampleMapBorderEffect,
+// Paint.NET's own pixel shaders behind ScenePositionEffect, HlslBinaryFunctionEffect, RandomNoiseEffect, the
+// per-pixel level selector of its blur maps and the sample-map renderer's stages (SampleMapBorderEffect,
 // MultisampleInputEffect), as ComputeSharp.D2D1 shader descriptors.
 // Genuine Paint.NET builds these with ComputeSharp's source generator, which compiles HLSL at build time through
 // Windows' d3dcompiler; that cannot run here, so each descriptor is written out by hand around the bytecode
@@ -25,6 +25,19 @@ namespace PaintDotNet.Direct2D1.Effects
         {
             ((IFactoryProperty)context).Factory.RegisterEffectFromBlob(D2D1PixelShaderEffect.GetRegistrationBlob<T>(out Guid id));
             return id;
+        }
+
+        /// Give a registered shader effect `node` its resource texture `index`: a 1-D Float32 single-channel texture of
+        /// `data`, point-sampled and clamped, under a fresh resource ID (a texture is never shared between tables).
+        public static unsafe void SetResourceTexture1D(IDeviceEffect node, int index, ReadOnlySpan<float> data)
+        {
+            void* manager;
+            D2D1ResourceTextureManager.Create(&manager);
+            D2D1ResourceTextureManager.Initialize(manager, Guid.NewGuid(), stackalloc uint[] { (uint)data.Length }, D2D1BufferPrecision.Float32,
+                D2D1ChannelDepth.One, D2D1Filter.MinMagMipPoint, stackalloc D2D1ExtendMode[] { D2D1ExtendMode.Clamp }, MemoryMarshal.AsBytes(data), default);
+            ((IPropertySink)node).SetPropertyBytes((int)D2D1PixelShaderEffectProperty.ResourceTextureManager0 + index, DeviceEffectPropertyType.IObjectRef,
+                new ReadOnlySpan<byte>(&manager, sizeof(nint)));
+            PaintDotNet.Interop.IUnknown.Release(manager);
         }
 
         /// Give a registered shader effect `node` its resource texture `index`: a 1-D UNORM8 single-channel
@@ -1262,5 +1275,449 @@ namespace PaintDotNet.Direct2D1.Effects
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
         private static unsafe int CreateEffect(void** effectImpl) => D2D1PixelShaderEffect.CreateEffectUnsafe<LinearToSrgbShader>(effectImpl);
+    }
+
+    /// RandomNoiseEffect: Paint.NET's noise, four PCG hashes of the instance seed and the pixel's scene position, each
+    /// a uniform value in [0, 1), mapped to min + value·delta per channel. Constant buffer (48 bytes): seed at 0, min 16,
+    /// delta 32.
+    [D2DInputCount(0)]
+    [D2DRequiresScenePosition]
+    [StructLayout(LayoutKind.Sequential, Size = 1)]
+    internal readonly struct PcgNoiseShader : ID2D1PixelShader, ID2D1PixelShaderDescriptor<PcgNoiseShader>
+    {
+        private static readonly Guid Id = new("ade37b33-b8d1-1927-1525-e4e5843e714f");
+        private static readonly byte[] Bytecode = Convert.FromBase64String(
+            "RFhCQ/yQsbJ7gk5daJYZtTHP6G4BAAAA1xQAAAYAAAA4AAAA1AEAADACAABkAgAAgAkAABwKAABSREVGlAEAAAEAAABoAAAAAQAAADwAAAAABf//CIEEAGoB" +
+            "AABSRDExPAAAABgAAAAgAAAAKAAAACQAAAAMAAAAAAAAAFwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAJEdsb2JhbHMAq6urXAAAAAMAAACAAAAA" +
+            "MAAAAAAAAAAAAAAA+AAAAAAAAAAEAAAAAgAAAAQBAAAAAAAA/////wAAAAD/////AAAAACgBAAAQAAAAEAAAAAIAAABAAQAAAAAAAP////8AAAAA/////wAA" +
+            "AABkAQAAIAAAABAAAAACAAAAQAEAAAAAAAD/////AAAAAP////8AAAAAc2VlZABkd29yZACrAAATAAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD9AAAA" +
+            "X19yZXNlcnZlZF9fbWluAGZsb2F0NACrAQADAAEABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4AQAAZGVsdGEATWljcm9zb2Z0IChSKSBITFNMIFNoYWRl" +
+            "ciBDb21waWxlciAxMC4xAKurSVNHTlQAAAACAAAACAAAADgAAAAAAAAAAQAAAAMAAAAAAAAADwAAAEQAAAAAAAAAAAAAAAMAAAABAAAADwMAAFNWX1BPU0lU" +
+            "SU9OAFNDRU5FX1BPU0lUSU9OAKtPU0dOLAAAAAEAAAAIAAAAIAAAAAAAAAAAAAAAAwAAAAAAAAAPAAAAU1ZfVEFSR0VUAKurU0hFWBQHAABQAAAAxQEAAGoI" +
+            "AAFZAAAERo4gAAAAAAADAAAAYhAAAzIQEAABAAAAZQAAA/IgEAAAAAAAaAAAAgIAAAAjAAAPMgAQAAAAAABGEBAAAQAAAAJAAAC1d5IstXeSLAAAAAAAAAAA" +
+            "AkAAAAVLVqwFS1asAAAAAAAAAABVAAAKwgAQAAAAAAAGBBAAAAAAAAJAAAAAAAAAAAAAABwAAAAcAAAAHgAACsIAEAAAAAAApg4QAAAAAAACQAAAAAAAAAAA" +
+            "AAAEAAAABAAAAFUAAAfCABAAAAAAAAYEEAAAAAAApg4QAAAAAABXAAAHMgAQAAAAAABGABAAAAAAAOYKEAAAAAAAJgAACwDQAAAyABAAAAAAAEYAEAAAAAAA" +
+            "AkAAANnyjhDZ8o4QAAAAAAAAAABVAAAKwgAQAAAAAAAGBBAAAAAAAAJAAAAAAAAAAAAAABYAAAAWAAAAVwAABzIAEAAAAAAARgAQAAAAAADmChAAAAAAACYA" +
+            "AAgA0AAAEgAQAAAAAAAKABAAAAAAAAFAAAAhAAAAVwAABxIAEAAAAAAAGgAQAAAAAAAKABAAAAAAACYAAAkA0AAAIgAQAAAAAAAKgCAAAAAAAAAAAAABQAAA" +
+            "IQAAAFcAAAcSABAAAAAAAAoAEAAAAAAAGgAQAAAAAAAjAAAJEgAQAAAAAAAKABAAAAAAAAFAAAC1d5IsAUAAAAVLVqxVAAAHIgAQAAAAAAAKABAAAAAAAAFA" +
+            "AAAcAAAAHgAAByIAEAAAAAAAGgAQAAAAAAABQAAABAAAAFUAAAciABAAAAAAAAoAEAAAAAAAGgAQAAAAAABXAAAHEgAQAAAAAAAKABAAAAAAABoAEAAAAAAA" +
+            "JgAACADQAAASABAAAAAAAAoAEAAAAAAAAUAAANnyjhBVAAAHIgAQAAAAAAAKABAAAAAAAAFAAAAWAAAAVwAABxIAEAAAAAAACgAQAAAAAAAaABAAAAAAAFUA" +
+            "AAciABAAAAAAAAoAEAAAAAAAAUAAAAgAAAAjAAAJEgAQAAAAAAAKABAAAAAAAAFAAAC1d5IsAUAAAAVLVqxWAAAFIgAQAAAAAAAaABAAAAAAADgAAAgSABAA" +
+            "AQAAABoAEAAAAAAACoAgAAAAAAACAAAAVQAAByIAEAAAAAAACgAQAAAAAAABQAAAHAAAAB4AAAciABAAAAAAABoAEAAAAAAAAUAAAAQAAABVAAAHIgAQAAAA" +
+            "AAAKABAAAAAAABoAEAAAAAAAVwAABxIAEAAAAAAACgAQAAAAAAAaABAAAAAAACYAAAgA0AAAEgAQAAAAAAAKABAAAAAAAAFAAADZ8o4QVQAAByIAEAAAAAAA" +
+            "CgAQAAAAAAABQAAAFgAAAFcAAAcSABAAAAAAAAoAEAAAAAAAGgAQAAAAAAAjAAAJIgAQAAAAAAAKABAAAAAAAAFAAAC1d5IsAUAAAAVLVqxVAAAHEgAQAAAA" +
+            "AAAKABAAAAAAAAFAAAAIAAAAVgAABRIAEAAAAAAACgAQAAAAAAA4AAAIIgAQAAEAAAAKABAAAAAAABqAIAAAAAAAAgAAAFUAAAcSABAAAAAAABoAEAAAAAAA" +
+            "AUAAABwAAAAeAAAHEgAQAAAAAAAKABAAAAAAAAFAAAAEAAAAVQAABxIAEAAAAAAAGgAQAAAAAAAKABAAAAAAAFcAAAcSABAAAAAAABoAEAAAAAAACgAQAAAA" +
+            "AAAmAAAIANAAABIAEAAAAAAACgAQAAAAAAABQAAA2fKOEFUAAAciABAAAAAAAAoAEAAAAAAAAUAAABYAAABXAAAHEgAQAAAAAAAKABAAAAAAABoAEAAAAAAA" +
+            "IwAACSIAEAAAAAAACgAQAAAAAAABQAAAtXeSLAFAAAAFS1asVQAABxIAEAAAAAAACgAQAAAAAAABQAAACAAAAFYAAAUSABAAAAAAAAoAEAAAAAAAOAAACEIA" +
+            "EAABAAAACgAQAAAAAAAqgCAAAAAAAAIAAABVAAAHEgAQAAAAAAAaABAAAAAAAAFAAAAcAAAAHgAABxIAEAAAAAAACgAQAAAAAAABQAAABAAAAFUAAAcSABAA" +
+            "AAAAABoAEAAAAAAACgAQAAAAAABXAAAHEgAQAAAAAAAaABAAAAAAAAoAEAAAAAAAJgAACADQAAASABAAAAAAAAoAEAAAAAAAAUAAANnyjhBVAAAHIgAQAAAA" +
+            "AAAKABAAAAAAAAFAAAAWAAAAVwAABxIAEAAAAAAACgAQAAAAAAAaABAAAAAAAFUAAAcSABAAAAAAAAoAEAAAAAAAAUAAAAgAAABWAAAFEgAQAAAAAAAKABAA" +
+            "AAAAADgAAAiCABAAAQAAAAoAEAAAAAAAOoAgAAAAAAACAAAAMgAADfIgEAAAAAAARg4QAAEAAAACQAAAAACAMwAAgDMAAIAzAACAM0aOIAAAAAAAAQAAAD4A" +
+            "AAFTVEFUlAAAADoAAAACAAAAAAAAAAIAAAAFAAAAEQAAAB8AAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQUklWswoAAERYQkMY1Bb18/kacrvs" +
+            "Z/51H6n+AQAAALMKAAACAAAAKAAAAFgKAABMSUJGKAoAAERYQkOcwshJKw0Fjuzmn3/ED3kzAQAAACgKAAAEAAAAMAAAAMwBAABwAgAAjAkAAFJERUaUAQAA" +
+            "AQAAAGgAAAABAAAAPAAAAAAFRkwIgQQAagEAAFJEMTE8AAAAGAAAACAAAAAoAAAAJAAAAAwAAAAAAAAAXAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAA" +
+            "AAAkR2xvYmFscwCrq6tcAAAAAwAAAIAAAAAwAAAAAAAAAAAAAAD4AAAAAAAAAAQAAAACAAAABAEAAAAAAAD/////AAAAAP////8AAAAAKAEAABAAAAAQAAAA" +
+            "AgAAAEABAAAAAAAA/////wAAAAD/////AAAAAGQBAAAgAAAAEAAAAAIAAABAAQAAAAAAAP////8AAAAA/////wAAAABzZWVkAGR3b3JkAKsAABMAAQABAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAP0AAABfX3Jlc2VydmVkX19taW4AZmxvYXQ0AKsBAAMAAQAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADgBAABkZWx0" +
+            "YQBNaWNyb3NvZnQgKFIpIEhMU0wgU2hhZGVyIENvbXBpbGVyIDEwLjEAq6tMRlMwnAAAAAIAAAAIAAAAaAAAAAAAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAIA" +
+            "AAD//////////wAAAAAAAAAAdwAAAIsAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAEAAAAAAAAAAAAAAP//////////RDJEX2Z1bmNfZW50cnkAX19kMmRpbnB1" +
+            "dF9zY2VuZVBvcwBTQ0VORV9QT1NJVElPTgCrq1NIRVgUBwAAUADw/8UBAABqCAABWQAABEaOIAAAAAAAAwAAAF8AAAMyEBAAAAAAAGUAAAPyIBAAAAAAAGgA" +
+            "AAICAAAAIwAADzIAEAAAAAAARhAQAAAAAAACQAAAtXeSLLV3kiwAAAAAAAAAAAJAAAAFS1asBUtWrAAAAAAAAAAAVQAACsIAEAAAAAAABgQQAAAAAAACQAAA" +
+            "AAAAAAAAAAAcAAAAHAAAAB4AAArCABAAAAAAAKYOEAAAAAAAAkAAAAAAAAAAAAAABAAAAAQAAABVAAAHwgAQAAAAAAAGBBAAAAAAAKYOEAAAAAAAVwAABzIA" +
+            "EAAAAAAARgAQAAAAAADmChAAAAAAACYAAAsA0AAAMgAQAAAAAABGABAAAAAAAAJAAADZ8o4Q2fKOEAAAAAAAAAAAVQAACsIAEAAAAAAABgQQAAAAAAACQAAA" +
+            "AAAAAAAAAAAWAAAAFgAAAFcAAAcyABAAAAAAAEYAEAAAAAAA5goQAAAAAAAmAAAIANAAABIAEAAAAAAACgAQAAAAAAABQAAAIQAAAFcAAAcSABAAAAAAABoA" +
+            "EAAAAAAACgAQAAAAAAAmAAAJANAAACIAEAAAAAAACoAgAAAAAAAAAAAAAUAAACEAAABXAAAHEgAQAAAAAAAKABAAAAAAABoAEAAAAAAAIwAACRIAEAAAAAAA" +
+            "CgAQAAAAAAABQAAAtXeSLAFAAAAFS1asVQAAByIAEAAAAAAACgAQAAAAAAABQAAAHAAAAB4AAAciABAAAAAAABoAEAAAAAAAAUAAAAQAAABVAAAHIgAQAAAA" +
+            "AAAKABAAAAAAABoAEAAAAAAAVwAABxIAEAAAAAAACgAQAAAAAAAaABAAAAAAACYAAAgA0AAAEgAQAAAAAAAKABAAAAAAAAFAAADZ8o4QVQAAByIAEAAAAAAA" +
+            "CgAQAAAAAAABQAAAFgAAAFcAAAcSABAAAAAAAAoAEAAAAAAAGgAQAAAAAABVAAAHIgAQAAAAAAAKABAAAAAAAAFAAAAIAAAAIwAACRIAEAAAAAAACgAQAAAA" +
+            "AAABQAAAtXeSLAFAAAAFS1asVgAABSIAEAAAAAAAGgAQAAAAAAA4AAAIEgAQAAEAAAAaABAAAAAAAAqAIAAAAAAAAgAAAFUAAAciABAAAAAAAAoAEAAAAAAA" +
+            "AUAAABwAAAAeAAAHIgAQAAAAAAAaABAAAAAAAAFAAAAEAAAAVQAAByIAEAAAAAAACgAQAAAAAAAaABAAAAAAAFcAAAcSABAAAAAAAAoAEAAAAAAAGgAQAAAA" +
+            "AAAmAAAIANAAABIAEAAAAAAACgAQAAAAAAABQAAA2fKOEFUAAAciABAAAAAAAAoAEAAAAAAAAUAAABYAAABXAAAHEgAQAAAAAAAKABAAAAAAABoAEAAAAAAA" +
+            "IwAACSIAEAAAAAAACgAQAAAAAAABQAAAtXeSLAFAAAAFS1asVQAABxIAEAAAAAAACgAQAAAAAAABQAAACAAAAFYAAAUSABAAAAAAAAoAEAAAAAAAOAAACCIA" +
+            "EAABAAAACgAQAAAAAAAagCAAAAAAAAIAAABVAAAHEgAQAAAAAAAaABAAAAAAAAFAAAAcAAAAHgAABxIAEAAAAAAACgAQAAAAAAABQAAABAAAAFUAAAcSABAA" +
+            "AAAAABoAEAAAAAAACgAQAAAAAABXAAAHEgAQAAAAAAAaABAAAAAAAAoAEAAAAAAAJgAACADQAAASABAAAAAAAAoAEAAAAAAAAUAAANnyjhBVAAAHIgAQAAAA" +
+            "AAAKABAAAAAAAAFAAAAWAAAAVwAABxIAEAAAAAAACgAQAAAAAAAaABAAAAAAACMAAAkiABAAAAAAAAoAEAAAAAAAAUAAALV3kiwBQAAABUtWrFUAAAcSABAA" +
+            "AAAAAAoAEAAAAAAAAUAAAAgAAABWAAAFEgAQAAAAAAAKABAAAAAAADgAAAhCABAAAQAAAAoAEAAAAAAAKoAgAAAAAAACAAAAVQAABxIAEAAAAAAAGgAQAAAA" +
+            "AAABQAAAHAAAAB4AAAcSABAAAAAAAAoAEAAAAAAAAUAAAAQAAABVAAAHEgAQAAAAAAAaABAAAAAAAAoAEAAAAAAAVwAABxIAEAAAAAAAGgAQAAAAAAAKABAA" +
+            "AAAAACYAAAgA0AAAEgAQAAAAAAAKABAAAAAAAAFAAADZ8o4QVQAAByIAEAAAAAAACgAQAAAAAAABQAAAFgAAAFcAAAcSABAAAAAAAAoAEAAAAAAAGgAQAAAA" +
+            "AABVAAAHEgAQAAAAAAAKABAAAAAAAAFAAAAIAAAAVgAABRIAEAAAAAAACgAQAAAAAAA4AAAIggAQAAEAAAAKABAAAAAAADqAIAAAAAAAAgAAADIAAA3yIBAA" +
+            "AAAAAEYOEAABAAAAAkAAAAAAgDMAAIAzAACAMwAAgDNGjiAAAAAAAAEAAAA+AAABU1RBVJQAAAA6AAAAAgAAAAAAAAACAAAABQAAABEAAAAfAAAAAQAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATElCSFMAAAABAAAAHAAAAAAAAAABAAAAFAAAAAAAAABEAAAATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21w" +
+            "aWxlciAxMC4xAEQyRF9mdW5jX2VudHJ5AA==");
+
+        public Float4 Execute() => default; // the bytecode runs, not this
+
+        static ref readonly Guid ID2D1PixelShaderDescriptor<PcgNoiseShader>.EffectId => ref Id;
+        static string? ID2D1PixelShaderDescriptor<PcgNoiseShader>.EffectDisplayName => null;
+        static string? ID2D1PixelShaderDescriptor<PcgNoiseShader>.EffectDescription => null;
+        static string? ID2D1PixelShaderDescriptor<PcgNoiseShader>.EffectCategory => null;
+        static string? ID2D1PixelShaderDescriptor<PcgNoiseShader>.EffectAuthor => null;
+        static unsafe nint ID2D1PixelShaderDescriptor<PcgNoiseShader>.EffectFactory => (nint)(delegate* unmanaged[Stdcall]<void**, int>)&CreateEffect;
+        static int ID2D1PixelShaderDescriptor<PcgNoiseShader>.ConstantBufferSize => 48;
+        static int ID2D1PixelShaderDescriptor<PcgNoiseShader>.InputCount => 0;
+        static int ID2D1PixelShaderDescriptor<PcgNoiseShader>.ResourceTextureCount => 0;
+        static ReadOnlyMemory<D2D1PixelShaderInputType> ID2D1PixelShaderDescriptor<PcgNoiseShader>.InputTypes => default;
+        static ReadOnlyMemory<D2D1InputDescription> ID2D1PixelShaderDescriptor<PcgNoiseShader>.InputDescriptions => default;
+        static ReadOnlyMemory<D2D1ResourceTextureDescription> ID2D1PixelShaderDescriptor<PcgNoiseShader>.ResourceTextureDescriptions => default;
+        static D2D1PixelOptions ID2D1PixelShaderDescriptor<PcgNoiseShader>.PixelOptions => D2D1PixelOptions.None;
+        static D2D1BufferPrecision ID2D1PixelShaderDescriptor<PcgNoiseShader>.BufferPrecision => D2D1BufferPrecision.Unknown;
+        static D2D1ChannelDepth ID2D1PixelShaderDescriptor<PcgNoiseShader>.ChannelDepth => D2D1ChannelDepth.Default;
+        static D2D1ShaderProfile ID2D1PixelShaderDescriptor<PcgNoiseShader>.ShaderProfile => D2D1ShaderProfile.PixelShader50;
+        static D2D1CompileOptions ID2D1PixelShaderDescriptor<PcgNoiseShader>.CompileOptions => D2D1CompileOptions.Default;
+        static string ID2D1PixelShaderDescriptor<PcgNoiseShader>.HlslSource => "#define D2D_INPUT_COUNT 0\n#define D2D_REQUIRES_SCENE_POSITION\n\n#include \"d2d1effecthelpers.hlsli\"\n\nstatic uint PaintDotNet_Direct2D1_Effects_HlslRandom_PcgInitializedSeed(uint instanceSeed, float2 scenePos);\n\nstatic uint PaintDotNet_Direct2D1_Effects_HlslRandom_PcgHash(uint input);\n\nstatic uint PaintDotNet_Direct2D1_Effects_HlslRandom_CombineHashCodes(uint hash1, uint hash2);\n\nstatic float PaintDotNet_Direct2D1_Effects_HlslRandom_PcgNextFloat(inout uint seed);\n\nuint seed;\nfloat4 __reserved__min;\nfloat4 delta;\n\nstatic uint PaintDotNet_Direct2D1_Effects_HlslRandom_PcgInitializedSeed(uint instanceSeed, float2 scenePos)\n{\n    return PaintDotNet_Direct2D1_Effects_HlslRandom_CombineHashCodes(instanceSeed, PaintDotNet_Direct2D1_Effects_HlslRandom_CombineHashCodes(PaintDotNet_Direct2D1_Effects_HlslRandom_PcgHash(asuint(scenePos.x)), PaintDotNet_Direct2D1_Effects_HlslRandom_PcgHash(asuint(scenePos.y))));\n}\n\nstatic uint PaintDotNet_Direct2D1_Effects_HlslRandom_PcgHash(uint input)\n{\n    uint state = input * 747796405u + 2891336453u;\n    uint word = ((state >> (int)((state >> 28) + 4)) ^ state) * 277803737u;\n    return (word >> 22) ^ word;\n}\n\nstatic uint PaintDotNet_Direct2D1_Effects_HlslRandom_CombineHashCodes(uint hash1, uint hash2)\n{\n    uint result = hash1;\n    result = ((result << 5) + result) ^ hash2;\n    return result;\n}\n\nstatic float PaintDotNet_Direct2D1_Effects_HlslRandom_PcgNextFloat(inout uint seed)\n{\n    seed = PaintDotNet_Direct2D1_Effects_HlslRandom_PcgHash(seed);\n    return (seed >> 8) * asfloat(864026624U);\n}\n\nD2D_PS_ENTRY(Execute)\n{\n    float2 scenePos = D2DGetScenePosition().xy;\n    uint pixelSeed = PaintDotNet_Direct2D1_Effects_HlslRandom_PcgInitializedSeed(seed, scenePos);\n    float r = PaintDotNet_Direct2D1_Effects_HlslRandom_PcgNextFloat(pixelSeed);\n    float g = PaintDotNet_Direct2D1_Effects_HlslRandom_PcgNextFloat(pixelSeed);\n    float b = PaintDotNet_Direct2D1_Effects_HlslRandom_PcgNextFloat(pixelSeed);\n    float a = PaintDotNet_Direct2D1_Effects_HlslRandom_PcgNextFloat(pixelSeed);\n    float4 rawValue = float4(r, g, b, a);\n    float4 value = __reserved__min + (rawValue * delta);\n    return value;\n}";
+        static ReadOnlyMemory<byte> ID2D1PixelShaderDescriptor<PcgNoiseShader>.HlslBytecode => Bytecode;
+        static PcgNoiseShader ID2D1PixelShaderDescriptor<PcgNoiseShader>.CreateFromConstantBuffer(ReadOnlySpan<byte> buffer) => default;
+        static void ID2D1PixelShaderDescriptor<PcgNoiseShader>.LoadConstantBuffer<TLoader>(in PcgNoiseShader shader, ref TLoader loader) => loader.LoadConstantBuffer(default);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+        private static unsafe int CreateEffect(void** effectImpl) => D2D1PixelShaderEffect.CreateEffectUnsafe<PcgNoiseShader>(effectImpl);
+    }
+
+    /// PdnZoomBlurEffect's pass: per output pixel, sampleCount bilinear taps of input 0 (complex, sampled by scene
+    /// position) at center + (pos - center) / scale for scale from scaleLo to scaleHi, each weighted by
+    /// alphaMultiplier·|(scale - alphaSubtrahend)·alphaDenominatorInv|^alphaExponent, summed. Constant buffer (48 bytes):
+    /// center 0, scaleMin 8, scaleMax 12, alphaSubtrahend 16, alphaDenominatorInv 20, alphaExponent 24, alphaMultiplier
+    /// 28, scaleLo 32, scaleHi 36, sampleCount (uint) 40, invSampleCount 44. Its rectangles come from a transform
+    /// mapper (ZoomBlurTransformMapper).
+    [D2DInputCount(1)]
+    [D2DInputComplex(0)]
+    [D2DInputDescription(0, D2D1Filter.MinMagMipLinear)]
+    [D2DRequiresScenePosition]
+    [StructLayout(LayoutKind.Sequential)]
+    internal readonly struct ZoomBlurShader : ID2D1PixelShader, ID2D1PixelShaderDescriptor<ZoomBlurShader>
+    {
+        public readonly Float2 Center;
+        public readonly float ScaleMin, ScaleMax, AlphaSubtrahend, AlphaDenominatorInv, AlphaExponent, AlphaMultiplier, ScaleLo, ScaleHi;
+        public readonly uint SampleCount;
+        public readonly float InvSampleCount;
+
+        public ZoomBlurShader(Float2 center, float scaleMin, float scaleMax, float alphaSubtrahend, float alphaDenominatorInv, float alphaExponent,
+            float alphaMultiplier, float scaleLo, float scaleHi, uint sampleCount, float invSampleCount)
+        {
+            Center = center;
+            (ScaleMin, ScaleMax, AlphaSubtrahend, AlphaDenominatorInv) = (scaleMin, scaleMax, alphaSubtrahend, alphaDenominatorInv);
+            (AlphaExponent, AlphaMultiplier, ScaleLo, ScaleHi) = (alphaExponent, alphaMultiplier, scaleLo, scaleHi);
+            (SampleCount, InvSampleCount) = (sampleCount, invSampleCount);
+        }
+
+        private static readonly Guid Id = new(new byte[] { 37, 164, 136, 147, 149, 150, 165, 200, 244, 66, 39, 61, 4, 111, 212, 198 });
+        private static readonly byte[] Bytecode = Convert.FromBase64String(
+            "RFhCQx0cOX4yDmcmKEtEEfyYyWEBAAAAzxEAAAYAAAA4AAAACAQAAIQEAAC4BAAA6AcAAIQIAABSREVGyAMAAAEAAADEAAAAAwAAADwAAAAABf//CIEEAJ8D" +
+            "AABSRDExPAAAABgAAAAgAAAAKAAAACQAAAAMAAAAAAAAAJwAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAqgAAAAIAAAAFAAAABAAAAP////8AAAAA" +
+            "AQAAAA0AAAC4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAElucHV0U2FtcGxlcjAASW5wdXRUZXh0dXJlMAAkR2xvYmFscwCrq6u4AAAACwAAANwA" +
+            "AAAwAAAAAAAAAAAAAACUAgAAAAAAAAgAAAACAAAApAIAAAAAAAD/////AAAAAP////8AAAAAyAIAAAgAAAAEAAAAAAAAANgCAAAAAAAA/////wAAAAD/////" +
+            "AAAAAPwCAAAMAAAABAAAAAAAAADYAgAAAAAAAP////8AAAAA/////wAAAAAFAwAAEAAAAAQAAAACAAAA2AIAAAAAAAD/////AAAAAP////8AAAAAFQMAABQA" +
+            "AAAEAAAAAgAAANgCAAAAAAAA/////wAAAAD/////AAAAACkDAAAYAAAABAAAAAIAAADYAgAAAAAAAP////8AAAAA/////wAAAAA3AwAAHAAAAAQAAAACAAAA" +
+            "2AIAAAAAAAD/////AAAAAP////8AAAAARwMAACAAAAAEAAAAAgAAANgCAAAAAAAA/////wAAAAD/////AAAAAE8DAAAkAAAABAAAAAIAAADYAgAAAAAAAP//" +
+            "//8AAAAA/////wAAAABXAwAAKAAAAAQAAAACAAAAbAMAAAAAAAD/////AAAAAP////8AAAAAkAMAACwAAAAEAAAAAgAAANgCAAAAAAAA/////wAAAAD/////" +
+            "AAAAAGNlbnRlcgBmbG9hdDIAq6sBAAMAAQACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJsCAABzY2FsZU1pbgBmbG9hdACrAAADAAEAAQAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAADRAgAAc2NhbGVNYXgAYWxwaGFTdWJ0cmFoZW5kAGFscGhhRGVub21pbmF0b3JJbnYAYWxwaGFFeHBvbmVudABhbHBoYU11bHRpcGxp" +
+            "ZXIAc2NhbGVMbwBzY2FsZUhpAHNhbXBsZUNvdW50AGR3b3JkAKurqwAAEwABAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYwMAAGludlNhbXBsZUNvdW50" +
+            "AE1pY3Jvc29mdCAoUikgSExTTCBTaGFkZXIgQ29tcGlsZXIgMTAuMQCrSVNHTnQAAAADAAAACAAAAFAAAAAAAAAAAQAAAAMAAAAAAAAADwAAAFwAAAAAAAAA" +
+            "AAAAAAMAAAABAAAADwMAAGsAAAAAAAAAAAAAAAMAAAACAAAADw8AAFNWX1BPU0lUSU9OAFNDRU5FX1BPU0lUSU9OAFRFWENPT1JEAE9TR04sAAAAAQAAAAgA" +
+            "AAAgAAAAAAAAAAAAAAADAAAAAAAAAA8AAABTVl9UQVJHRVQAq6tTSEVYKAMAAFAAAADKAAAAaggAAVkAAARGjiAAAAAAAAMAAABaAAADAGAQAAAAAABYGAAE" +
+            "AHAQAAAAAABVVQAAYhAAAzIQEAABAAAAYhAAA/IQEAACAAAAZQAAA/IgEAAAAAAAaAAAAgQAAAAAAAAJMgAQAAAAAABGEBAAAQAAAEaAIIBBAAAAAAAAAAAA" +
+            "AAAAAAAKQgAQAAAAAAAKgCCAQQAAAAAAAAACAAAAGoAgAAAAAAACAAAANgAACPIAEAABAAAAAkAAAAAAAAAAAAAAAAAAAAAAAAA2AAAFggAQAAAAAAABQAAA" +
+            "AAAAADAAAAFQAAAIEgAQAAIAAAA6ABAAAAAAACqAIAAAAAAAAgAAAAMABAMKABAAAgAAAFYAAAUSABAAAgAAADoAEAAAAAAAOAAACBIAEAACAAAACgAQAAIA" +
+            "AAA6gCAAAAAAAAIAAAAyAAAKEgAQAAIAAAAKABAAAgAAACoAEAAAAAAACoAgAAAAAAACAAAAAAAACSIAEAACAAAACgAQAAIAAAAKgCCAQQAAAAAAAAABAAAA" +
+            "OAAACCIAEAACAAAAGgAQAAIAAAAagCAAAAAAAAEAAAAvAAAGIgAQAAIAAAAaABCAgQAAAAIAAAA4AAAIIgAQAAIAAAAaABAAAgAAACqAIAAAAAAAAQAAABkA" +
+            "AAUiABAAAgAAABoAEAACAAAAOAAACCIAEAACAAAAGgAQAAIAAAA6gCAAAAAAAAEAAAAOAAAHUgAQAAIAAAAGARAAAAAAAAYAEAACAAAAAAAACFIAEAACAAAA" +
+            "BgIQAAIAAAAGgSAAAAAAAAAAAAAAAAAIUgAQAAIAAAAGAhAAAgAAAAYREIBBAAAAAQAAADIAAAlSABAAAgAAAKYbEAACAAAABgIQAAIAAAAGERAAAgAAAEUA" +
+            "AIvCAACAQ1UVAPIAEAADAAAAhgAQAAIAAABGfhAAAAAAAABgEAAAAAAAMgAACfIAEAABAAAARg4QAAMAAABWBRAAAgAAAEYOEAABAAAAHgAAB4IAEAAAAAAA" +
+            "OgAQAAAAAAABQAAAAQAAABYAAAE2AAAF8iAQAAAAAABGDhAAAQAAAD4AAAFTVEFUlAAAABoAAAAEAAAAAAAAAAMAAAAPAAAAAQAAAAEAAAABAAAAAQAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAADAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAABQUklWQwkAAERYQkMXxVaLSlb+VjqhB6KPr7OxAQAAAEMJAAACAAAAKAAAAOgIAABMSUJGuAgAAERYQkNHwPe10pTQNdqK" +
+            "szp6+ehWAQAAALgIAAAEAAAAMAAAAAAEAADsBAAAHAgAAFJERUbIAwAAAQAAAMQAAAADAAAAPAAAAAAFRkwIgQQAnwMAAFJEMTE8AAAAGAAAACAAAAAoAAAA" +
+            "JAAAAAwAAAAAAAAAnAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAEAAACqAAAAAgAAAAUAAAAEAAAA/////wAAAAABAAAADQAAALgAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAEAAAAAAAAASW5wdXRTYW1wbGVyMABJbnB1dFRleHR1cmUwACRHbG9iYWxzAKurq7gAAAALAAAA3AAAADAAAAAAAAAAAAAAAJQCAAAAAAAA" +
+            "CAAAAAIAAACkAgAAAAAAAP////8AAAAA/////wAAAADIAgAACAAAAAQAAAAAAAAA2AIAAAAAAAD/////AAAAAP////8AAAAA/AIAAAwAAAAEAAAAAAAAANgC" +
+            "AAAAAAAA/////wAAAAD/////AAAAAAUDAAAQAAAABAAAAAIAAADYAgAAAAAAAP////8AAAAA/////wAAAAAVAwAAFAAAAAQAAAACAAAA2AIAAAAAAAD/////" +
+            "AAAAAP////8AAAAAKQMAABgAAAAEAAAAAgAAANgCAAAAAAAA/////wAAAAD/////AAAAADcDAAAcAAAABAAAAAIAAADYAgAAAAAAAP////8AAAAA/////wAA" +
+            "AABHAwAAIAAAAAQAAAACAAAA2AIAAAAAAAD/////AAAAAP////8AAAAATwMAACQAAAAEAAAAAgAAANgCAAAAAAAA/////wAAAAD/////AAAAAFcDAAAoAAAA" +
+            "BAAAAAIAAABsAwAAAAAAAP////8AAAAA/////wAAAACQAwAALAAAAAQAAAACAAAA2AIAAAAAAAD/////AAAAAP////8AAAAAY2VudGVyAGZsb2F0MgCrqwEA" +
+            "AwABAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAmwIAAHNjYWxlTWluAGZsb2F0AKsAAAMAAQABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANECAABzY2Fs" +
+            "ZU1heABhbHBoYVN1YnRyYWhlbmQAYWxwaGFEZW5vbWluYXRvckludgBhbHBoYUV4cG9uZW50AGFscGhhTXVsdGlwbGllcgBzY2FsZUxvAHNjYWxlSGkAc2Ft" +
+            "cGxlQ291bnQAZHdvcmQAq6urAAATAAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABjAwAAaW52U2FtcGxlQ291bnQATWljcm9zb2Z0IChSKSBITFNMIFNo" +
+            "YWRlciBDb21waWxlciAxMC4xAKtMRlMw5AAAAAMAAAAIAAAAmAAAAAAAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAIAAAD//////////wAAAAAAAAAApwAAALsA" +
+            "AAADAAAAAQAAAAEAAAAEAAAAAAAAAAEAAAAAAAAAAAAAAP//////////ygAAANkAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAEAAAABAAAAAAAAAP//////////" +
+            "RDJEX2Z1bmNfZW50cnkAX19kMmRpbnB1dF9zY2VuZVBvcwBTQ0VORV9QT1NJVElPTgBfX2QyZGlucHV0X3V2MABURVhDT09SRDAAq1NIRVgoAwAAUADw/8oA" +
+            "AABqCAABWQAABEaOIAAAAAAAAwAAAFoAAAMAYBAAAAAAAFgYAAQAcBAAAAAAAFVVAABfAAADMhAQAAAAAABfAAAD8hAQAAEAAABlAAAD8iAQAAAAAABoAAAC" +
+            "BAAAAAAAAAkyABAAAAAAAEYQEAAAAAAARoAggEEAAAAAAAAAAAAAAAAAAApCABAAAAAAAAqAIIBBAAAAAAAAAAIAAAAagCAAAAAAAAIAAAA2AAAI8gAQAAEA" +
+            "AAACQAAAAAAAAAAAAAAAAAAAAAAAADYAAAWCABAAAAAAAAFAAAAAAAAAMAAAAVAAAAgSABAAAgAAADoAEAAAAAAAKoAgAAAAAAACAAAAAwAEAwoAEAACAAAA" +
+            "VgAABRIAEAACAAAAOgAQAAAAAAA4AAAIEgAQAAIAAAAKABAAAgAAADqAIAAAAAAAAgAAADIAAAoSABAAAgAAAAoAEAACAAAAKgAQAAAAAAAKgCAAAAAAAAIA" +
+            "AAAAAAAJIgAQAAIAAAAKABAAAgAAAAqAIIBBAAAAAAAAAAEAAAA4AAAIIgAQAAIAAAAaABAAAgAAABqAIAAAAAAAAQAAAC8AAAYiABAAAgAAABoAEICBAAAA" +
+            "AgAAADgAAAgiABAAAgAAABoAEAACAAAAKoAgAAAAAAABAAAAGQAABSIAEAACAAAAGgAQAAIAAAA4AAAIIgAQAAIAAAAaABAAAgAAADqAIAAAAAAAAQAAAA4A" +
+            "AAdSABAAAgAAAAYBEAAAAAAABgAQAAIAAAAAAAAIUgAQAAIAAAAGAhAAAgAAAAaBIAAAAAAAAAAAAAAAAAhSABAAAgAAAAYCEAACAAAABhEQgEEAAAAAAAAA" +
+            "MgAACVIAEAACAAAAphsQAAEAAAAGAhAAAgAAAAYREAABAAAARQAAi8IAAIBDVRUA8gAQAAMAAACGABAAAgAAAEZ+EAAAAAAAAGAQAAAAAAAyAAAJ8gAQAAEA" +
+            "AABGDhAAAwAAAFYFEAACAAAARg4QAAEAAAAeAAAHggAQAAAAAAA6ABAAAAAAAAFAAAABAAAAFgAAATYAAAXyIBAAAAAAAEYOEAABAAAAPgAAAVNUQVSUAAAA" +
+            "GgAAAAQAAAAAAAAAAwAAAA8AAAABAAAAAQAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAQAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAExJQkhTAAAAAQAAABwAAAAAAAAAAQAAABQAAAAAAAAA" +
+            "RAAAAE1pY3Jvc29mdCAoUikgSExTTCBTaGFkZXIgQ29tcGlsZXIgMTAuMQBEMkRfZnVuY19lbnRyeQA=");
+
+        public Float4 Execute() => default; // the bytecode runs, not this
+
+        static ref readonly Guid ID2D1PixelShaderDescriptor<ZoomBlurShader>.EffectId => ref Id;
+        static string? ID2D1PixelShaderDescriptor<ZoomBlurShader>.EffectDisplayName => null;
+        static string? ID2D1PixelShaderDescriptor<ZoomBlurShader>.EffectDescription => null;
+        static string? ID2D1PixelShaderDescriptor<ZoomBlurShader>.EffectCategory => null;
+        static string? ID2D1PixelShaderDescriptor<ZoomBlurShader>.EffectAuthor => null;
+        static unsafe nint ID2D1PixelShaderDescriptor<ZoomBlurShader>.EffectFactory => (nint)(delegate* unmanaged[Stdcall]<void**, int>)&CreateEffect;
+        static int ID2D1PixelShaderDescriptor<ZoomBlurShader>.ConstantBufferSize => 48;
+        static int ID2D1PixelShaderDescriptor<ZoomBlurShader>.InputCount => 1;
+        static int ID2D1PixelShaderDescriptor<ZoomBlurShader>.ResourceTextureCount => 0;
+        static ReadOnlyMemory<D2D1PixelShaderInputType> ID2D1PixelShaderDescriptor<ZoomBlurShader>.InputTypes => new[] { D2D1PixelShaderInputType.Complex };
+        static ReadOnlyMemory<D2D1InputDescription> ID2D1PixelShaderDescriptor<ZoomBlurShader>.InputDescriptions => new D2D1InputDescription[] { new(0, D2D1Filter.MinMagMipLinear) };
+        static ReadOnlyMemory<D2D1ResourceTextureDescription> ID2D1PixelShaderDescriptor<ZoomBlurShader>.ResourceTextureDescriptions => default;
+        static D2D1PixelOptions ID2D1PixelShaderDescriptor<ZoomBlurShader>.PixelOptions => D2D1PixelOptions.None;
+        static D2D1BufferPrecision ID2D1PixelShaderDescriptor<ZoomBlurShader>.BufferPrecision => D2D1BufferPrecision.Unknown;
+        static D2D1ChannelDepth ID2D1PixelShaderDescriptor<ZoomBlurShader>.ChannelDepth => D2D1ChannelDepth.Default;
+        static D2D1ShaderProfile ID2D1PixelShaderDescriptor<ZoomBlurShader>.ShaderProfile => D2D1ShaderProfile.PixelShader50;
+        static D2D1CompileOptions ID2D1PixelShaderDescriptor<ZoomBlurShader>.CompileOptions => D2D1CompileOptions.Default;
+        static string ID2D1PixelShaderDescriptor<ZoomBlurShader>.HlslSource => "#define D2D_INPUT_COUNT 1\n#define D2D_INPUT0_COMPLEX\n#define D2D_REQUIRES_SCENE_POSITION\n\n#include \"d2d1effecthelpers.hlsli\"\n\nfloat2 center;\nfloat scaleMin;\nfloat scaleMax;\nfloat alphaSubtrahend;\nfloat alphaDenominatorInv;\nfloat alphaExponent;\nfloat alphaMultiplier;\nfloat scaleLo;\nfloat scaleHi;\nuint sampleCount;\nfloat invSampleCount;\n\nD2D_PS_ENTRY(Execute)\n{\n    float2 scenePos = D2DGetScenePosition().xy;\n    float2 dxy = scenePos - center;\n    float4 samples = (float4)0;\n    for (uint i = 0; i < sampleCount; ++i)\n    {\n        float t = i * invSampleCount;\n        float scale = lerp(scaleLo, scaleHi, t);\n        float alpha = alphaMultiplier * pow(abs((scale - alphaSubtrahend) * alphaDenominatorInv), alphaExponent);\n        float2 samplePos = center + dxy / scale;\n        float4 __reserved__sample = D2DSampleInputAtPosition(0, samplePos);\n        samples += __reserved__sample * alpha;\n    }\n\n    return samples;\n}";
+        static ReadOnlyMemory<byte> ID2D1PixelShaderDescriptor<ZoomBlurShader>.HlslBytecode => Bytecode;
+        static ZoomBlurShader ID2D1PixelShaderDescriptor<ZoomBlurShader>.CreateFromConstantBuffer(ReadOnlySpan<byte> buffer) => default;
+        static void ID2D1PixelShaderDescriptor<ZoomBlurShader>.LoadConstantBuffer<TLoader>(in ZoomBlurShader shader, ref TLoader loader) => loader.LoadConstantBuffer(default);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+        private static unsafe int CreateEffect(void** effectImpl) => D2D1PixelShaderEffect.CreateEffectUnsafe<ZoomBlurShader>(effectImpl);
+    }
+
+    /// ZoomBlurShader's rectangles, as Paint.NET's transform maps them: the output is the input scaled about the centre
+    /// by scaleLo and by scaleHi (their union), and the input needed is the output scaled back by both; each clipped to
+    /// the logically infinite rect, grown by a pixel for the bilinear taps and rounded out.
+    internal sealed class ZoomBlurTransformMapper : D2D1DrawTransformMapper<ZoomBlurShader>
+    {
+        private const long InfiniteMin = int.MinValue / 2, InfiniteMax = InfiniteMin + int.MaxValue;
+        private readonly ZoomBlurShader shader;
+
+        public ZoomBlurTransformMapper(in ZoomBlurShader shader) => this.shader = shader;
+
+        public override void MapInputsToOutput(D2D1DrawInfoUpdateContext<ZoomBlurShader> drawInfoUpdateContext, ReadOnlySpan<System.Drawing.Rectangle> inputs,
+            ReadOnlySpan<System.Drawing.Rectangle> opaqueInputs, out System.Drawing.Rectangle output, out System.Drawing.Rectangle opaqueOutput)
+        {
+            output = Map(inputs[0], shader, inverse: false);
+            opaqueOutput = default;
+        }
+
+        public override void MapInvalidOutput(int inputIndex, in System.Drawing.Rectangle invalidInput, out System.Drawing.Rectangle invalidOutput)
+            => invalidOutput = Map(invalidInput, shader, inverse: false);
+
+        public override void MapOutputToInputs(in System.Drawing.Rectangle output, Span<System.Drawing.Rectangle> inputs)
+            => inputs[0] = Map(output, shader, inverse: true);
+
+        /// The rect through ScalingAt(scaleLo) and ScalingAt(scaleHi) about the centre (or their inverses), unioned.
+        public static System.Drawing.Rectangle Map(System.Drawing.Rectangle r, in ZoomBlurShader shader, bool inverse)
+        {
+            double cx = shader.Center.X, cy = shader.Center.Y;
+            double l = double.MaxValue, t = double.MaxValue, rr = double.MinValue, b = double.MinValue;
+            foreach (double s in (ReadOnlySpan<double>)[shader.ScaleLo, shader.ScaleHi])
+            {
+                double k = inverse ? 1 / s : s;
+                l = Math.Min(l, cx + ((long)r.Left - cx) * k);
+                t = Math.Min(t, cy + ((long)r.Top - cy) * k);
+                rr = Math.Max(rr, cx + ((long)r.Left + r.Width - cx) * k);
+                b = Math.Max(b, cy + ((long)r.Top + r.Height - cy) * k);
+            }
+            l = Math.Floor(Math.Max(l, InfiniteMin) - 1);
+            t = Math.Floor(Math.Max(t, InfiniteMin) - 1);
+            rr = Math.Ceiling(Math.Min(rr, InfiniteMax) + 1);
+            b = Math.Ceiling(Math.Min(b, InfiniteMax) + 1);
+            long L = Math.Max((long)l, InfiniteMin), T = Math.Max((long)t, InfiniteMin);
+            long R = Math.Min((long)rr, InfiniteMax), B = Math.Min((long)b, InfiniteMax);
+            return new System.Drawing.Rectangle((int)L, (int)T, (int)(R - L), (int)(B - T));
+        }
+    }
+
+    /// UnaccumulateCoverageEffect: `color / max(1, coverage)`, input 0 the weighted sums, input 1 the summed weights.
+    [D2DInputCount(2)]
+    [D2DInputSimple(0)]
+    [D2DInputSimple(1)]
+    [StructLayout(LayoutKind.Sequential, Size = 1)]
+    internal readonly struct UnaccumulateShader : ID2D1PixelShader, ID2D1PixelShaderDescriptor<UnaccumulateShader>
+    {
+        private static readonly Guid Id = new(new byte[] { 17, 211, 117, 227, 105, 97, 160, 228, 116, 255, 154, 105, 255, 196, 38, 43 });
+        private static readonly byte[] Bytecode = Convert.FromBase64String(
+            "RFhCQ30/6HCO7nrxNXhGQyt7U+UBAAAADwcAAAYAAAA4AAAAXAEAAPABAAAkAgAAPAMAANgDAABSREVGHAEAAAAAAAAAAAAABAAAADwAAAAABf//CIEEAPQA" +
+            "AABSRDExPAAAABgAAAAgAAAAKAAAACQAAAAMAAAAAAAAALwAAAADAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAygAAAAMAAAAAAAAAAAAAAAAAAAABAAAA" +
+            "AQAAAAEAAADYAAAAAgAAAAUAAAAEAAAA/////wAAAAABAAAADQAAAOYAAAACAAAABQAAAAQAAAD/////AQAAAAEAAAANAAAASW5wdXRTYW1wbGVyMABJbnB1" +
+            "dFNhbXBsZXIxAElucHV0VGV4dHVyZTAASW5wdXRUZXh0dXJlMQBNaWNyb3NvZnQgKFIpIEhMU0wgU2hhZGVyIENvbXBpbGVyIDEwLjEASVNHTowAAAAEAAAA" +
+            "CAAAAGgAAAAAAAAAAQAAAAMAAAAAAAAADwAAAHQAAAAAAAAAAAAAAAMAAAABAAAADwAAAIMAAAAAAAAAAAAAAAMAAAACAAAADwMAAIMAAAABAAAAAAAAAAMA" +
+            "AAADAAAADwMAAFNWX1BPU0lUSU9OAFNDRU5FX1BPU0lUSU9OAFRFWENPT1JEAE9TR04sAAAAAQAAAAgAAAAgAAAAAAAAAAAAAAADAAAAAAAAAA8AAABTVl9U" +
+            "QVJHRVQAq6tTSEVYEAEAAFAAAABEAAAAaggAAVoAAAMAYBAAAAAAAFoAAAMAYBAAAQAAAFgYAAQAcBAAAAAAAFVVAABYGAAEAHAQAAEAAABVVQAAYhAAAzIQ" +
+            "EAACAAAAYhAAAzIQEAADAAAAZQAAA/IgEAAAAAAAaAAAAgIAAABFAACLwgAAgENVFQDyABAAAAAAAEYQEAADAAAARn4QAAEAAAAAYBAAAQAAADQAAAryABAA" +
+            "AAAAAEYOEAAAAAAAAkAAAAAAgD8AAIA/AACAPwAAgD9FAACLwgAAgENVFQDyABAAAQAAAEYQEAACAAAARn4QAAAAAAAAYBAAAAAAAA4AAAfyIBAAAAAAAEYO" +
+            "EAABAAAARg4QAAAAAAA+AAABU1RBVJQAAAAFAAAAAgAAAAAAAAADAAAAAgAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUFJJVi8D" +
+            "AABEWEJDb7c14eyeYlFg7rKSy+NdUQEAAAAvAwAAAgAAACgAAADUAgAATElCRqQCAABEWEJD7o44apg62DERDv6c/cZ6DQEAAACkAgAABAAAADAAAACcAAAA" +
+            "gAEAAAgCAABSREVGZAAAAAAAAAAAAAAAAAAAADwAAAAABUZMCIEEADwAAABSRDExPAAAABgAAAAgAAAAKAAAACQAAAAMAAAAAAAAAE1pY3Jvc29mdCAoUikg" +
+            "SExTTCBTaGFkZXIgQ29tcGlsZXIgMTAuMQBMRlMw3AAAAAMAAAAIAAAAmAAAAAAAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAIAAAD//////////wAAAAAAAAAA" +
+            "pwAAALkAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAEAAAAAAAAAAAAAAP//////////wAAAANIAAAADAAAAAQAAAAEAAAAEAAAAAAAAAAEAAAABAAAAAAAAAP//" +
+            "////////RDJEX2Z1bmNfZW50cnkAX19kMmRpbnB1dF9jb2xvcjAASU5QVVQwAF9fZDJkaW5wdXRfY29sb3IxAElOUFVUMQCrq6tTSEVYgAAAAFAA8P8gAAAA" +
+            "aggAAV8AAAPyEBAAAAAAAF8AAAPyEBAAAQAAAGUAAAPyIBAAAAAAAGgAAAIBAAAANAAACvIAEAAAAAAARh4QAAEAAAACQAAAAACAPwAAgD8AAIA/AACAPw4A" +
+            "AAfyIBAAAAAAAEYeEAAAAAAARg4QAAAAAAA+AAABU1RBVJQAAAADAAAAAQAAAAAAAAADAAAAAgAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAATElCSFMAAAABAAAAHAAAAAAAAAABAAAAFAAAAAAAAABEAAAATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21waWxlciAxMC4xAEQyRF9mdW5j" +
+            "X2VudHJ5AA==");
+
+        public Float4 Execute() => default; // the bytecode runs, not this
+
+        static ref readonly Guid ID2D1PixelShaderDescriptor<UnaccumulateShader>.EffectId => ref Id;
+        static string? ID2D1PixelShaderDescriptor<UnaccumulateShader>.EffectDisplayName => null;
+        static string? ID2D1PixelShaderDescriptor<UnaccumulateShader>.EffectDescription => null;
+        static string? ID2D1PixelShaderDescriptor<UnaccumulateShader>.EffectCategory => null;
+        static string? ID2D1PixelShaderDescriptor<UnaccumulateShader>.EffectAuthor => null;
+        static unsafe nint ID2D1PixelShaderDescriptor<UnaccumulateShader>.EffectFactory => (nint)(delegate* unmanaged[Stdcall]<void**, int>)&CreateEffect;
+        static int ID2D1PixelShaderDescriptor<UnaccumulateShader>.ConstantBufferSize => 0;
+        static int ID2D1PixelShaderDescriptor<UnaccumulateShader>.InputCount => 2;
+        static int ID2D1PixelShaderDescriptor<UnaccumulateShader>.ResourceTextureCount => 0;
+        static ReadOnlyMemory<D2D1PixelShaderInputType> ID2D1PixelShaderDescriptor<UnaccumulateShader>.InputTypes => new[] { D2D1PixelShaderInputType.Simple, D2D1PixelShaderInputType.Simple };
+        static ReadOnlyMemory<D2D1InputDescription> ID2D1PixelShaderDescriptor<UnaccumulateShader>.InputDescriptions => new D2D1InputDescription[] { new(0, D2D1Filter.MinMagMipPoint), new(1, D2D1Filter.MinMagMipPoint) };
+        static ReadOnlyMemory<D2D1ResourceTextureDescription> ID2D1PixelShaderDescriptor<UnaccumulateShader>.ResourceTextureDescriptions => default;
+        static D2D1PixelOptions ID2D1PixelShaderDescriptor<UnaccumulateShader>.PixelOptions => D2D1PixelOptions.None;
+        static D2D1BufferPrecision ID2D1PixelShaderDescriptor<UnaccumulateShader>.BufferPrecision => D2D1BufferPrecision.Unknown;
+        static D2D1ChannelDepth ID2D1PixelShaderDescriptor<UnaccumulateShader>.ChannelDepth => D2D1ChannelDepth.Default;
+        static D2D1ShaderProfile ID2D1PixelShaderDescriptor<UnaccumulateShader>.ShaderProfile => D2D1ShaderProfile.PixelShader50;
+        static D2D1CompileOptions ID2D1PixelShaderDescriptor<UnaccumulateShader>.CompileOptions => D2D1CompileOptions.Default;
+        static string ID2D1PixelShaderDescriptor<UnaccumulateShader>.HlslSource => "#define D2D_INPUT_COUNT 2\n#define D2D_INPUT0_SIMPLE\n#define D2D_INPUT1_SIMPLE\n\n#include \"d2d1effecthelpers.hlsli\"\n\nD2D_PS_ENTRY(Execute)\n{\n    float4 color = D2DGetInput(0);\n    float4 coverage = D2DGetInput(1);\n    return color / max(1, coverage);\n}";
+        static ReadOnlyMemory<byte> ID2D1PixelShaderDescriptor<UnaccumulateShader>.HlslBytecode => Bytecode;
+        static UnaccumulateShader ID2D1PixelShaderDescriptor<UnaccumulateShader>.CreateFromConstantBuffer(ReadOnlySpan<byte> buffer) => default;
+        static void ID2D1PixelShaderDescriptor<UnaccumulateShader>.LoadConstantBuffer<TLoader>(in UnaccumulateShader shader, ref TLoader loader) => loader.LoadConstantBuffer(default);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+        private static unsafe int CreateEffect(void** effectImpl) => D2D1PixelShaderEffect.CreateEffectUnsafe<UnaccumulateShader>(effectImpl);
+    }
+
+    /// TableTransferEffect2: each channel through its lookup table, as Paint.NET's effect samples it (established by
+    /// probing it, not from its code): the table is a Float32 1-D texture of its n entries; x (clamped to [0, 1]) maps to
+    /// u = (x(n-1) + 0.5)/n, and the texel address (u·n - 0.5)·256 is truncated for a power-of-two n and rounded half to
+    /// even otherwise, giving entries i, i+1 and a weight in 1/256 steps, blended t0 + w(t1 - t0). A disabled channel
+    /// passes through; ClampOutput saturates. Premultiplied: colour is divided by alpha (a != 0) before the tables and by
+    /// the new alpha after. Textures t1-t4 (red, green, blue, alpha); constant buffer (64 bytes): int4 sizes 0, int4 pow2
+    /// 16, int4 disabled 32, int premultiplied 48, int clampOutput 52. Compiled from the HLSL below with
+    /// D2D1CompileOptions.Default.
+    [D2DInputCount(1)]
+    [D2DInputSimple(0)]
+    [StructLayout(LayoutKind.Sequential, Size = 1)]
+    internal readonly struct TableTransfer2Shader : ID2D1PixelShader, ID2D1PixelShaderDescriptor<TableTransfer2Shader>
+    {
+        private static readonly Guid Id = new("435969fd-8595-5c4c-8b77-feb9b3784496");
+        private static readonly byte[] Bytecode = Convert.FromBase64String(
+            "RFhCQ9f23l2Ujpx+AEVS5E3JDKoBAAAAGx4AAAYAAAA4AAAANAMAALADAADkAwAAqA4AAEQPAABSREVG9AIAAAEAAABsAQAABwAAADwAAAAABf//CIEEAMwC" +
+            "AABSRDExPAAAABgAAAAgAAAAKAAAACQAAAAMAAAAAAAAABwBAAADAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAKgEAAAIAAAAFAAAABAAAAP////8AAAAA" +
+            "AQAAAA0AAAA4AQAAAgAAAAUAAAACAAAA/////wEAAAABAAAAAQAAAEEBAAACAAAABQAAAAIAAAD/////AgAAAAEAAAABAAAATAEAAAIAAAAFAAAAAgAAAP//" +
+            "//8DAAAAAQAAAAEAAABWAQAAAgAAAAUAAAACAAAA/////wQAAAABAAAAAQAAAGEBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAASW5wdXRTYW1wbGVy" +
+            "MABJbnB1dFRleHR1cmUwAHJlZFRhYmxlAGdyZWVuVGFibGUAYmx1ZVRhYmxlAGFscGhhVGFibGUAJEdsb2JhbHMAq6thAQAABQAAAIQBAABAAAAAAAAAAAAA" +
+            "AABMAgAAAAAAABAAAAACAAAAWAIAAAAAAAD/////AAAAAP////8AAAAAfAIAABAAAAAQAAAAAgAAAFgCAAAAAAAA/////wAAAAD/////AAAAAIECAAAgAAAA" +
+            "EAAAAAIAAABYAgAAAAAAAP////8AAAAA/////wAAAACKAgAAMAAAAAQAAAACAAAAnAIAAAAAAAD/////AAAAAP////8AAAAAwAIAADQAAAAEAAAAAgAAAJwC" +
+            "AAAAAAAA/////wAAAAD/////AAAAAHNpemVzAGludDQAqwEAAgABAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUgIAAHBvdzIAZGlzYWJsZWQAcHJlbXVs" +
+            "dGlwbGllZABpbnQAAAACAAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACYAgAAY2xhbXBPdXRwdXQATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21w" +
+            "aWxlciAxMC4xAElTR050AAAAAwAAAAgAAABQAAAAAAAAAAEAAAADAAAAAAAAAA8AAABcAAAAAAAAAAAAAAADAAAAAQAAAA8AAABrAAAAAAAAAAAAAAADAAAA" +
+            "AgAAAA8DAABTVl9QT1NJVElPTgBTQ0VORV9QT1NJVElPTgBURVhDT09SRABPU0dOLAAAAAEAAAAIAAAAIAAAAAAAAAAAAAAAAwAAAAAAAAAPAAAAU1ZfVEFS" +
+            "R0VUAKurU0hFWLwKAABQAAAArwIAAGoIAAFZAAAERo4gAAAAAAAEAAAAWgAAAwBgEAAAAAAAWBgABABwEAAAAAAAVVUAAFgQAAQAcBAAAQAAAFVVAABYEAAE" +
+            "AHAQAAIAAABVVQAAWBAABABwEAADAAAAVVUAAFgQAAQAcBAABAAAAFVVAABiEAADMhAQAAIAAABlAAAD8iAQAAAAAABoAAACBwAAAB4AeAvyABAAAAAAAEaO" +
+            "IAAAAAAAAAAAAAJAAAD/////////////////////KwB4BfIAEAABAAAARg4QAAAAAABFAHiLwgAAgENVFQDyABAAAgAAAEYQEAACAAAARn4QAAAAAAAAYBAA" +
+            "AAAAADYgCAUSABAAAwAAADoAEAACAAAAOABAB4IAEAABAAAAOgAQAAEAAAAKABAAAwAAAAAAQAeCABAAAQAAADoAEAABAAAAAUAAAAAAAD8rAHgG8gAQAAMA" +
+            "AABGjiAAAAAAAAAAAAAOAEAHggAQAAEAAAA6ABAAAQAAADoAEAADAAAAOABAB4IAEAABAAAAOgAQAAMAAAA6ABAAAQAAAAAAQAeCABAAAQAAADoAEAABAAAA" +
+            "AUAAAAAAAL84AEAHggAQAAEAAAA6ABAAAQAAAAFAAAAAAIBDQQBABYIAEAADAAAAOgAQAAEAAABAAEAFggAQAAEAAAA6ABAAAQAAABsAQAWCABAAAQAAADoA" +
+            "EAABAAAAGwBABYIAEAADAAAAOgAQAAMAAAA3AEAKggAQAAEAAAA6gCAAAAAAAAEAAAA6ABAAAwAAADoAEAABAAAAJABAB4IAEAABAAAAOgAQAAEAAAABQAAA" +
+            "AAAAACkAeAvyABAABAAAAEaOIAAAAAAAAAAAAAJAAAAIAAAACAAAAAgAAAAIAAAAHgB4CvIAEAAEAAAARg4QAAQAAAACQAAAAP///wD///8A////AP///yUA" +
+            "QAeCABAAAQAAADoAEAABAAAAOgAQAAQAAAAqAAgHEgAQAAUAAAA6ABAAAQAAAAFAAAAIAAAAAQBAB4IAEAABAAAAOgAQAAEAAAABQAAA/wAAACsAQAWCABAA" +
+            "AQAAADoAEAABAAAAOABAB4IAEAABAAAAOgAQAAEAAAABQAAAAACAOx4AQAeCABAAAwAAAAoAEAAFAAAAAUAAAAEAAAAlAAgHEgAQAAYAAAA6ABAAAAAAADoA" +
+            "EAADAAAANgBwCOIAEAAGAAAAAkAAAAAAAAAAAAAAAAAAAAAAAAAtAECJggAAgENVFQCCABAAAAAAAEYOEAAGAAAAlnMQAAQAAAA2AHAI4gAQAAUAAAACQAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAC0AQImCAACAQ1UVAIIAEAADAAAARg4QAAUAAACWcxAABAAAAAAAQAiCABAAAAAAADoAEAAAAAAAOgAQgEEAAAADAAAAOABAB4IA" +
+            "EAAAAAAAOgAQAAAAAAA6ABAAAQAAAAAAQAeCABAAAAAAADoAEAAAAAAAOgAQAAMAAAA3AEAKggAQAAUAAAA6gCAAAAAAAAIAAAA6ABAAAgAAADoAEAAAAAAA" +
+            "OQBAB4IAEAAAAAAAOgAQAAIAAAABQAAAAAAAAA4AOAdyABAABgAAAEYCEAACAAAA9g8QAAIAAAABADgHcgAQAAYAAAD2DxAAAAAAAEYCEAAGAAAANwA4CnIA" +
+            "EAACAAAABoAgAAAAAAADAAAARgIQAAYAAABGAhAAAgAAADYgOAVyABAABgAAAEYCEAACAAAAOAA4B3IAEAABAAAARgIQAAEAAABGAhAABgAAAAAAOApyABAA" +
+            "AQAAAEYCEAABAAAAAkAAAAAAAD8AAAA/AAAAPwAAAAAOADgHcgAQAAEAAABGAhAAAQAAAEYCEAADAAAAOAA4B3IAEAABAAAARgIQAAMAAABGAhAAAQAAAAAA" +
+            "OApyABAAAQAAAEYCEAABAAAAAkAAAAAAAL8AAAC/AAAAvwAAAAA4ADgKcgAQAAEAAABGAhAAAQAAAAJAAAAAAIBDAACAQwAAgEMAAAAAQQA4BXIAEAADAAAA" +
+            "RgIQAAEAAABAADgFcgAQAAEAAABGAhAAAQAAABsAOAVyABAAAQAAAEYCEAABAAAAGwA4BXIAEAADAAAARgIQAAMAAAA3ADgKcgAQAAEAAABGgiAAAAAAAAEA" +
+            "AABGAhAAAwAAAEYCEAABAAAAJAA4CnIAEAABAAAARgIQAAEAAAACQAAAAAAAAAAAAAAAAAAAAAAAACUAOAdyABAAAQAAAEYCEAAEAAAARgIQAAEAAAAqADgK" +
+            "cgAQAAMAAABGAhAAAQAAAAJAAAAIAAAACAAAAAgAAAAAAAAAAQA4CnIAEAABAAAARgIQAAEAAAACQAAA/wAAAP8AAAD/AAAAAAAAACsAOAVyABAAAQAAAEYC" +
+            "EAABAAAAOAA4CnIAEAABAAAARgIQAAEAAAACQAAAAACAOwAAgDsAAIA7AAAAADYAQAWCABAAAwAAAAFAAAAAAAAALQBAiYIAAIBDVRUAggAQAAAAAADGDxAA" +
+            "AwAAAJZzEAABAAAAHgA4CnIAEAAEAAAARgIQAAMAAAACQAAAAQAAAAEAAAABAAAAAAAAACUAOAdyABAABAAAAEYCEAAAAAAARgIQAAQAAAA2AEAFggAQAAQA" +
+            "AAABQAAAAAAAAC0ACImCAACAQ1UVABIAEAAAAAAAxg8QAAQAAABGfhAAAQAAAAAACAgSABAAAAAAADoAEIBBAAAAAAAAAAoAEAAAAAAAOAAIBxIAEAAAAAAA" +
+            "CgAQAAAAAAAKABAAAQAAAAAACAcSABAAAAAAAAoAEAAAAAAAOgAQAAAAAAA3AAgKEgAQAAUAAAAKgCAAAAAAAAIAAAAKABAAAgAAAAoAEAAAAAAALQAIiYIA" +
+            "AIBDVRUAEgAQAAAAAADWDxAAAwAAAEZ+EAACAAAALQAQiYIAAIBDVRUAIgAQAAAAAADmDxAAAwAAABZ+EAADAAAALQAgiYIAAIBDVRUAQgAQAAAAAADWDxAA" +
+            "BAAAAJZ8EAACAAAALQBAiYIAAIBDVRUAggAQAAAAAADmDxAABAAAAJZzEAADAAAAAABACIIAEAAAAAAAGgAQgEEAAAAAAAAAOgAQAAAAAAA4AEAHggAQAAAA" +
+            "AAA6ABAAAAAAACoAEAABAAAAAAAQByIAEAAAAAAAOgAQAAAAAAAaABAAAAAAADcAIApCABAABQAAACqAIAAAAAAAAgAAACoAEAACAAAAGgAQAAAAAAAAABAI" +
+            "IgAQAAAAAAAKABCAQQAAAAAAAAAqABAAAAAAADgAEAciABAAAAAAABoAEAAAAAAAGgAQAAEAAAAAAAgHEgAQAAAAAAAaABAAAAAAAAoAEAAAAAAANwAQCiIA" +
+            "EAAFAAAAGoAgAAAAAAACAAAAGgAQAAIAAAAKABAAAAAAADYgAAXyABAAAAAAAEYOEAAFAAAANwAACvIAEAAAAAAAVoUgAAAAAAADAAAARg4QAAAAAABGDhAA" +
+            "BQAAADkAAAcSABAAAQAAADoAEAAAAAAAAUAAAAAAAAAOAAAH4gAQAAEAAAAGCRAAAAAAAPYPEAAAAAAAAQAAB3IAEAABAAAAlgcQAAEAAAAGABAAAQAAADcA" +
+            "AApyIBAAAAAAAAaAIAAAAAAAAwAAAEYCEAABAAAARgIQAAAAAAA2AAAFgiAQAAAAAAA6ABAAAAAAAD4AAAFTVEFUlAAAAFYAAAAHAAAAAAAAAAIAAAAiAAAA" +
+            "DQAAAAQAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAgAAAAAAAAAAAAAAAAAAAAIAAAACQAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQUklWzw4AAERYQkNm6AAd6qbXLplMg69GCAroAQAAAM8OAAACAAAAKAAAAHQOAABMSUJG" +
+            "RA4AAERYQkOosVyxrVGMGoPKi0Q8TpeKAQAAAEQOAAAEAAAAMAAAANACAABoAwAAqA0AAFJERUaYAgAAAQAAABABAAAFAAAAPAAAAAAFRkwIgQQAcAIAAFJE" +
+            "MTE8AAAAGAAAACAAAAAoAAAAJAAAAAwAAAAAAAAA3AAAAAIAAAAFAAAAAgAAAP////8BAAAAAQAAAAEAAADlAAAAAgAAAAUAAAACAAAA/////wIAAAABAAAA" +
+            "AQAAAPAAAAACAAAABQAAAAIAAAD/////AwAAAAEAAAABAAAA+gAAAAIAAAAFAAAAAgAAAP////8EAAAAAQAAAAEAAAAFAQAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+            "AAABAAAAAAAAAHJlZFRhYmxlAGdyZWVuVGFibGUAYmx1ZVRhYmxlAGFscGhhVGFibGUAJEdsb2JhbHMAq6sFAQAABQAAACgBAABAAAAAAAAAAAAAAADwAQAA" +
+            "AAAAABAAAAACAAAA/AEAAAAAAAD/////AAAAAP////8AAAAAIAIAABAAAAAQAAAAAgAAAPwBAAAAAAAA/////wAAAAD/////AAAAACUCAAAgAAAAEAAAAAIA" +
+            "AAD8AQAAAAAAAP////8AAAAA/////wAAAAAuAgAAMAAAAAQAAAACAAAAQAIAAAAAAAD/////AAAAAP////8AAAAAZAIAADQAAAAEAAAAAgAAAEACAAAAAAAA" +
+            "/////wAAAAD/////AAAAAHNpemVzAGludDQAqwEAAgABAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA9gEAAHBvdzIAZGlzYWJsZWQAcHJlbXVsdGlwbGll" +
+            "ZABpbnQAAAACAAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AgAAY2xhbXBPdXRwdXQATWljcm9zb2Z0IChSKSBITFNMIFNoYWRlciBDb21waWxlciAx" +
+            "MC4xAExGUzCQAAAAAgAAAAgAAABoAAAAAAAAAAMAAAABAAAAAQAAAAQAAAAAAAAAAgAAAP//////////AAAAAAAAAAB3AAAAiQAAAAMAAAABAAAAAQAAAAQA" +
+            "AAAAAAAAAQAAAAAAAAAAAAAA//////////9EMkRfZnVuY19lbnRyeQBfX2QyZGlucHV0X2NvbG9yMABJTlBVVDAAU0hFWDgKAABQAPD/jgIAAGoIAAFZAAAE" +
+            "Ro4gAAAAAAAEAAAAWBAABABwEAABAAAAVVUAAFgQAAQAcBAAAgAAAFVVAABYEAAEAHAQAAMAAABVVQAAWBAABABwEAAEAAAAVVUAAF8AAAPyEBAAAAAAAGUA" +
+            "AAPyIBAAAAAAAGgAAAIHAAAANiAIBRIAEAAAAAAAOhAQAAAAAAAeAHgL8gAQAAEAAABGjiAAAAAAAAAAAAACQAAA/////////////////////ysAeAXyABAA" +
+            "AgAAAEYOEAABAAAAOAAIBxIAEAAAAAAACgAQAAAAAAA6ABAAAgAAAAAACAcSABAAAAAAAAoAEAAAAAAAAUAAAAAAAD8rAHgG8gAQAAMAAABGjiAAAAAAAAAA" +
+            "AAAOAAgHEgAQAAAAAAAKABAAAAAAADoAEAADAAAAOAAIBxIAEAAAAAAAOgAQAAMAAAAKABAAAAAAAAAACAcSABAAAAAAAAoAEAAAAAAAAUAAAAAAAL84AAgH" +
+            "EgAQAAAAAAAKABAAAAAAAAFAAAAAAIBDQQAQBSIAEAAAAAAACgAQAAAAAABAAAgFEgAQAAAAAAAKABAAAAAAABsAGAUyABAAAAAAAEYAEAAAAAAANwAIChIA" +
+            "EAAAAAAAOoAgAAAAAAABAAAAGgAQAAAAAAAKABAAAAAAACQACAcSABAAAAAAAAoAEAAAAAAAAUAAAAAAAAApAHgL8gAQAAQAAABGjiAAAAAAAAAAAAACQAAA" +
+            "CAAAAAgAAAAIAAAACAAAAB4AeAryABAABAAAAEYOEAAEAAAAAkAAAAD///8A////AP///wD///8lAAgHEgAQAAAAAAAKABAAAAAAADoAEAAEAAAAKgAIBxIA" +
+            "EAAFAAAACgAQAAAAAAABQAAACAAAAAEACAcSABAAAAAAAAoAEAAAAAAAAUAAAP8AAAArAAgFEgAQAAAAAAAKABAAAAAAADgACAcSABAAAAAAAAoAEAAAAAAA" +
+            "AUAAAAAAgDseABAHIgAQAAAAAAAKABAABQAAAAFAAAABAAAAJQAIBxIAEAAGAAAAOgAQAAEAAAAaABAAAAAAADYAcAjiABAABgAAAAJAAAAAAAAAAAAAAAAA" +
+            "AAAAAAAALQAQiYIAAIBDVRUAIgAQAAAAAABGDhAABgAAABZ+EAAEAAAANgBwCOIAEAAFAAAAAkAAAAAAAAAAAAAAAAAAAAAAAAAtACCJggAAgENVFQBCABAA" +
+            "AAAAAEYOEAAFAAAAlnwQAAQAAAAAABAIIgAQAAAAAAAqABCAQQAAAAAAAAAaABAAAAAAADgACAcSABAAAAAAABoAEAAAAAAACgAQAAAAAAAAAAgHEgAQAAAA" +
+            "AAAKABAAAAAAACoAEAAAAAAANwBACoIAEAAAAAAAOoAgAAAAAAACAAAAOhAQAAAAAAAKABAAAAAAADkAQAeCABAAAQAAADoQEAAAAAAAAUAAAAAAAAAOADgH" +
+            "cgAQAAUAAABGEhAAAAAAAPYfEAAAAAAAAQA4B3IAEAAFAAAA9g8QAAEAAABGAhAABQAAADcAOApyABAABQAAAAaAIAAAAAAAAwAAAEYCEAAFAAAARhIQAAAA" +
+            "AAA2IDgFcgAQAAYAAABGAhAABQAAADgAOAdyABAAAgAAAEYCEAACAAAARgIQAAYAAAAAADgKcgAQAAIAAABGAhAAAgAAAAJAAAAAAAA/AAAAPwAAAD8AAAAA" +
+            "DgA4B3IAEAACAAAARgIQAAIAAABGAhAAAwAAADgAOAdyABAAAgAAAEYCEAADAAAARgIQAAIAAAAAADgKcgAQAAIAAABGAhAAAgAAAAJAAAAAAAC/AAAAvwAA" +
+            "AL8AAAAAOAA4CnIAEAACAAAARgIQAAIAAAACQAAAAACAQwAAgEMAAIBDAAAAAEEAOAVyABAAAwAAAEYCEAACAAAAQAA4BXIAEAACAAAARgIQAAIAAAAbADgF" +
+            "cgAQAAIAAABGAhAAAgAAABsAOAVyABAAAwAAAEYCEAADAAAANwA4CnIAEAACAAAARoIgAAAAAAABAAAARgIQAAMAAABGAhAAAgAAACQAOApyABAAAgAAAEYC" +
+            "EAACAAAAAkAAAAAAAAAAAAAAAAAAAAAAAAAlADgHcgAQAAIAAABGAhAABAAAAEYCEAACAAAAAQA4CnIAEAADAAAARgIQAAIAAAACQAAA/wAAAP8AAAD/AAAA" +
+            "AAAAACoAOApyABAAAgAAAEYCEAACAAAAAkAAAAgAAAAIAAAACAAAAAAAAAArADgFcgAQAAMAAABGAhAAAwAAADgAOApyABAAAwAAAEYCEAADAAAAAkAAAAAA" +
+            "gDsAAIA7AACAOwAAAAAeADgKcgAQAAQAAABGAhAAAgAAAAJAAAABAAAAAQAAAAEAAAAAAAAAJQA4B3IAEAABAAAARgIQAAEAAABGAhAABAAAADYAQAWCABAA" +
+            "AQAAAAFAAAAAAAAALQAIiYIAAIBDVRUAEgAQAAEAAADGDxAAAQAAAEZ+EAABAAAANgBABYIAEAACAAAAAUAAAAAAAAAtAAiJggAAgENVFQASABAAAgAAAMYP" +
+            "EAACAAAARn4QAAEAAAAAAAgIEgAQAAEAAAAKABAAAQAAAAoAEIBBAAAAAgAAADgACAcSABAAAQAAAAoAEAABAAAACgAQAAMAAAAAAAgHEgAQAAEAAAAKABAA" +
+            "AQAAAAoAEAACAAAANwAIChIAEAAAAAAACoAgAAAAAAACAAAACgAQAAUAAAAKABAAAQAAAC0ACImCAACAQ1UVABIAEAABAAAA1g8QAAIAAABGfhAAAgAAAC0A" +
+            "CImCAACAQ1UVABIAEAACAAAA5g8QAAIAAABGfhAAAwAAAC0AEImCAACAQ1UVACIAEAABAAAA1g8QAAEAAAAWfhAAAgAAAC0AIImCAACAQ1UVAEIAEAABAAAA" +
+            "5g8QAAEAAACWfBAAAwAAAAAAIAhCABAAAQAAAAoAEIBBAAAAAgAAACoAEAABAAAAOAAgB0IAEAABAAAAKgAQAAEAAAAqABAAAwAAAAAAIAdCABAAAQAAACoA" +
+            "EAABAAAACgAQAAIAAAAAABAIIgAQAAEAAAAKABCAQQAAAAEAAAAaABAAAQAAADgAEAciABAAAQAAABoAEAABAAAAGgAQAAMAAAAAAAgHEgAQAAEAAAAaABAA" +
+            "AQAAAAoAEAABAAAANwAwCmIAEAAAAAAAVoYgAAAAAAACAAAAVgYQAAUAAAAGAhAAAQAAADYgAAXyABAAAQAAAEYOEAAAAAAANwAACvIAEAAAAAAAVoUgAAAA" +
+            "AAADAAAARg4QAAEAAABGDhAAAAAAADkAAAcSABAAAQAAADoAEAAAAAAAAUAAAAAAAAAOAAAH4gAQAAEAAAAGCRAAAAAAAPYPEAAAAAAAAQAAB3IAEAABAAAA" +
+            "lgcQAAEAAAAGABAAAQAAADcAAApyIBAAAAAAAAaAIAAAAAAAAwAAAEYCEAABAAAARgIQAAAAAAA2AAAFgiAQAAAAAAA6ABAAAAAAAD4AAAFTVEFUlAAAAFMA" +
+            "AAAHAAAAAAAAAAIAAAAiAAAADQAAAAQAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAIAAAACAAAAAsAAAAAAAAA" +
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABMSUJIUwAAAAEAAAAcAAAAAAAAAAEAAAAUAAAAAAAAAEQA" +
+            "AABNaWNyb3NvZnQgKFIpIEhMU0wgU2hhZGVyIENvbXBpbGVyIDEwLjEARDJEX2Z1bmNfZW50cnkA");
+
+        public Float4 Execute() => default; // the bytecode runs, not this
+
+        static ref readonly Guid ID2D1PixelShaderDescriptor<TableTransfer2Shader>.EffectId => ref Id;
+        static string? ID2D1PixelShaderDescriptor<TableTransfer2Shader>.EffectDisplayName => null;
+        static string? ID2D1PixelShaderDescriptor<TableTransfer2Shader>.EffectDescription => null;
+        static string? ID2D1PixelShaderDescriptor<TableTransfer2Shader>.EffectCategory => null;
+        static string? ID2D1PixelShaderDescriptor<TableTransfer2Shader>.EffectAuthor => null;
+        static unsafe nint ID2D1PixelShaderDescriptor<TableTransfer2Shader>.EffectFactory => (nint)(delegate* unmanaged[Stdcall]<void**, int>)&CreateEffect;
+        static int ID2D1PixelShaderDescriptor<TableTransfer2Shader>.ConstantBufferSize => 64;
+        static int ID2D1PixelShaderDescriptor<TableTransfer2Shader>.InputCount => 1;
+        static int ID2D1PixelShaderDescriptor<TableTransfer2Shader>.ResourceTextureCount => 4;
+        static ReadOnlyMemory<D2D1PixelShaderInputType> ID2D1PixelShaderDescriptor<TableTransfer2Shader>.InputTypes => new[] { D2D1PixelShaderInputType.Simple };
+        static ReadOnlyMemory<D2D1InputDescription> ID2D1PixelShaderDescriptor<TableTransfer2Shader>.InputDescriptions => new D2D1InputDescription[] { new(0, D2D1Filter.MinMagMipPoint) };
+        static ReadOnlyMemory<D2D1ResourceTextureDescription> ID2D1PixelShaderDescriptor<TableTransfer2Shader>.ResourceTextureDescriptions =>
+            new D2D1ResourceTextureDescription[] { new(1, 1), new(2, 1), new(3, 1), new(4, 1) };
+        static D2D1PixelOptions ID2D1PixelShaderDescriptor<TableTransfer2Shader>.PixelOptions => D2D1PixelOptions.None;
+        static D2D1BufferPrecision ID2D1PixelShaderDescriptor<TableTransfer2Shader>.BufferPrecision => D2D1BufferPrecision.Unknown;
+        static D2D1ChannelDepth ID2D1PixelShaderDescriptor<TableTransfer2Shader>.ChannelDepth => D2D1ChannelDepth.Default;
+        static D2D1ShaderProfile ID2D1PixelShaderDescriptor<TableTransfer2Shader>.ShaderProfile => D2D1ShaderProfile.PixelShader50;
+        static D2D1CompileOptions ID2D1PixelShaderDescriptor<TableTransfer2Shader>.CompileOptions => D2D1CompileOptions.Default;
+        static string ID2D1PixelShaderDescriptor<TableTransfer2Shader>.HlslSource => "#define D2D_INPUT_COUNT 1\n#define D2D_INPUT0_SIMPLE\n\n#include \"d2d1effecthelpers.hlsli\"\n\nTexture1D<float> redTable : register(t1);\nTexture1D<float> greenTable : register(t2);\nTexture1D<float> blueTable : register(t3);\nTexture1D<float> alphaTable : register(t4);\n\nint4 sizes;\nint4 pow2;\nint4 disabled;\nint premultiplied;\nint clampOutput;\n\nfloat Lookup(Texture1D<float> table, int n, int isPow2, float x)\n{\n    precise float xs = saturate(x);\n    precise float u = (xs * (float)(n - 1) + 0.5) / (float)n;\n    precise float fx = (u * (float)n - 0.5) * 256.0;\n    int k = isPow2 != 0 ? (int)floor(fx) : (int)round(fx);\n    k = clamp(k, 0, (n - 1) * 256);\n    int i = k >> 8;\n    precise float w = (float)(k & 255) * (1.0 / 256.0);\n    float t0 = table.Load(int2(i, 0));\n    float t1 = table.Load(int2(min(i + 1, n - 1), 0));\n    precise float r = t0 + w * (t1 - t0);\n    return r;\n}\n\nD2D_PS_ENTRY(Execute)\n{\n    float4 color = D2DGetInput(0);\n    float a = color.a;\n    float3 c = color.rgb;\n    if (premultiplied != 0)\n        c = a != 0 ? c / a : 0;\n    float4 o;\n    o.r = disabled.x != 0 ? c.r : Lookup(redTable, sizes.x, pow2.x, c.r);\n    o.g = disabled.y != 0 ? c.g : Lookup(greenTable, sizes.y, pow2.y, c.g);\n    o.b = disabled.z != 0 ? c.b : Lookup(blueTable, sizes.z, pow2.z, c.b);\n    o.a = disabled.w != 0 ? a : Lookup(alphaTable, sizes.w, pow2.w, a);\n    if (clampOutput != 0)\n        o = saturate(o);\n    if (premultiplied != 0)\n        o.rgb = o.a != 0 ? o.rgb / o.a : 0;\n    return o;\n}";
+        static ReadOnlyMemory<byte> ID2D1PixelShaderDescriptor<TableTransfer2Shader>.HlslBytecode => Bytecode;
+        static TableTransfer2Shader ID2D1PixelShaderDescriptor<TableTransfer2Shader>.CreateFromConstantBuffer(ReadOnlySpan<byte> buffer) => default;
+        static void ID2D1PixelShaderDescriptor<TableTransfer2Shader>.LoadConstantBuffer<TLoader>(in TableTransfer2Shader shader, ref TLoader loader) => loader.LoadConstantBuffer(default);
+
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+        private static unsafe int CreateEffect(void** effectImpl) => D2D1PixelShaderEffect.CreateEffectUnsafe<TableTransfer2Shader>(effectImpl);
     }
 }

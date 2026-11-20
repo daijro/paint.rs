@@ -74,64 +74,97 @@ public abstract class UserBlendOp : BinaryPixelOp
     internal LayerBlendMode Mode => mode;
     private protected UserBlendOp(LayerBlendMode mode) => this.mode = mode;
     public override ColorBgra Apply(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(mode, lhs, rhs, 255);
+
+    /// A copy of this blend op that composites at the given opacity (0..255), as genuine CreateWithOpacity;
+    /// classic plug-ins (Simon Brown's Fire and SubtleEffect) use it to composite a layer at partial strength.
+    public UserBlendOp CreateWithOpacity(int opacity) => new OpacityOp(mode, System.Math.Clamp(opacity, 0, 255));
+
+    private sealed class OpacityOp(LayerBlendMode mode, int opacity) : UserBlendOp(mode)
+    {
+        public override ColorBgra Apply(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(mode, lhs, rhs, opacity);
+    }
 }
 
 public static class UserBlendOps
 {
+    // The display name for a blend-op type, shown in a blend-mode UI. Derived from the type name (NormalBlendOp ->
+    // "Normal"); the genuine looks up a localized string, which the host does not carry.
+    public static string GetBlendOpFriendlyName(System.Type blendOpType)
+    {
+        string n = blendOpType?.Name ?? "";
+        return n.EndsWith("BlendOp", System.StringComparison.Ordinal) ? n.Substring(0, n.Length - "BlendOp".Length) : n;
+    }
+
+    // Each op exposes a shared singleton as `.Static` (CurtisBlack's CanvasLayer.Render composites through
+    // NormalBlendOp.Static), matching Paint.NET where every UserBlendOp subclass declares its own Static.
     public sealed class NormalBlendOp() : UserBlendOp(LayerBlendMode.Normal)
     {
+        public static NormalBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Normal, lhs, rhs, 255);
     }
     public sealed class MultiplyBlendOp() : UserBlendOp(LayerBlendMode.Multiply)
     {
+        public static MultiplyBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Multiply, lhs, rhs, 255);
     }
     public sealed class AdditiveBlendOp() : UserBlendOp(LayerBlendMode.Additive)
     {
+        public static AdditiveBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Additive, lhs, rhs, 255);
     }
     public sealed class ColorBurnBlendOp() : UserBlendOp(LayerBlendMode.ColorBurn)
     {
+        public static ColorBurnBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.ColorBurn, lhs, rhs, 255);
     }
     public sealed class ColorDodgeBlendOp() : UserBlendOp(LayerBlendMode.ColorDodge)
     {
+        public static ColorDodgeBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.ColorDodge, lhs, rhs, 255);
     }
     public sealed class ReflectBlendOp() : UserBlendOp(LayerBlendMode.Reflect)
     {
+        public static ReflectBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Reflect, lhs, rhs, 255);
     }
     public sealed class GlowBlendOp() : UserBlendOp(LayerBlendMode.Glow)
     {
+        public static GlowBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Glow, lhs, rhs, 255);
     }
     public sealed class OverlayBlendOp() : UserBlendOp(LayerBlendMode.Overlay)
     {
+        public static OverlayBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Overlay, lhs, rhs, 255);
     }
     public sealed class DifferenceBlendOp() : UserBlendOp(LayerBlendMode.Difference)
     {
+        public static DifferenceBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Difference, lhs, rhs, 255);
     }
     public sealed class NegationBlendOp() : UserBlendOp(LayerBlendMode.Negation)
     {
+        public static NegationBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Negation, lhs, rhs, 255);
     }
     public sealed class LightenBlendOp() : UserBlendOp(LayerBlendMode.Lighten)
     {
+        public static LightenBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Lighten, lhs, rhs, 255);
     }
     public sealed class DarkenBlendOp() : UserBlendOp(LayerBlendMode.Darken)
     {
+        public static DarkenBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Darken, lhs, rhs, 255);
     }
     public sealed class ScreenBlendOp() : UserBlendOp(LayerBlendMode.Screen)
     {
+        public static ScreenBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Screen, lhs, rhs, 255);
     }
     public sealed class XorBlendOp() : UserBlendOp(LayerBlendMode.Xor)
     {
+        public static XorBlendOp Static { get; } = new();
         public static ColorBgra ApplyStatic(ColorBgra lhs, ColorBgra rhs) => BlendCompositionOp.Compose(LayerBlendMode.Xor, lhs, rhs, 255);
     }
 
@@ -142,6 +175,10 @@ public static class UserBlendOps
         typeof(ReflectBlendOp), typeof(GlowBlendOp), typeof(OverlayBlendOp), typeof(DifferenceBlendOp), typeof(NegationBlendOp),
         typeof(LightenBlendOp), typeof(DarkenBlendOp), typeof(ScreenBlendOp), typeof(XorBlendOp),
     ];
+
+    /// Paint.NET's default blend op (Normal), as plug-ins (ObjectTools' Bevel Object, SelectionTools'
+    /// Bevel Selection) request it.
+    public static UserBlendOp CreateDefaultBlendOp() => new NormalBlendOp();
 
     /// A new blend op of one of those types.
     public static UserBlendOp CreateBlendOp(System.Type opType) => (UserBlendOp)System.Activator.CreateInstance(opType)!;

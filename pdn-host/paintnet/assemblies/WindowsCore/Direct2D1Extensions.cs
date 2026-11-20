@@ -108,6 +108,20 @@ namespace PaintDotNet.Direct2D1
 
     public static class DeviceContextExtensions
     {
+        /// Fill a rectangle given as edges, forwarding to the context's own rect fill.
+        public static void FillRectangle(this IDeviceContext dc, float x, float y, float width, float height, IDeviceBrush brush)
+            => dc.FillRectangle(new PaintDotNet.Rendering.RectFloat(x, y, width, height), brush);
+
+        /// A device bitmap of `size` from `pBuffer` (rows `bufferStride` bytes apart; null for an uninitialised bitmap) in
+        /// the given format, alpha mode, DPI, options and colour context: ID2D1DeviceContext::CreateBitmap.
+        public static unsafe IDeviceBitmap CreateBitmap(this IDeviceContext dc, PaintDotNet.Rendering.SizeInt32 size, void* pBuffer, int bufferStride, PaintDotNet.Dxgi.DxgiFormat dxgiFormat, AlphaMode alphaMode, float dpiX, float dpiY, BitmapOptions options, IDeviceColorContext colorContext)
+            => ((DeviceContextImpl)dc).CreateBitmap(size, pBuffer, bufferStride, (int)dxgiFormat, (int)options, (int)alphaMode, dpiX, dpiY, colorContext);
+
+        /// A bitmap brush with the given extend modes, interpolation, opacity and transform.
+        public static IBitmapBrush CreateBitmapBrush(this IDeviceContext dc, IDeviceBitmap bitmap, ExtendMode extendModeX, ExtendMode extendModeY, InterpolationMode interpolationMode, float opacity, in System.Nullable<PaintDotNet.Rendering.Matrix3x2Float> transform)
+            => dc.CreateBitmapBrush(bitmap, new BitmapBrushProperties(extendModeX, extendModeY, interpolationMode),
+                new BrushProperties(opacity, transform ?? PaintDotNet.Rendering.Matrix3x2Float.Identity));
+
         /// Runs an analysis effect (a histogram) over its input on `dc`, so its output property can be read.
         public static void RunAnalysisEffect(this IDeviceContext dc, Effects.IAnalysisEffect effect)
         {
@@ -131,6 +145,8 @@ namespace PaintDotNet.Direct2D1
 
         public static PushTransformScope UseTranslateTransform(this IDeviceContext dc, float dx, float dy, MatrixMultiplyOrder order = MatrixMultiplyOrder.Prepend)
             => new(dc, Matrix3x2Float.Translation(dx, dy), order);
+        public static PushTransformScope UseTranslateTransform(this IDeviceContext dc, Point2Float offset, MatrixMultiplyOrder order = MatrixMultiplyOrder.Prepend)
+            => UseTranslateTransform(dc, offset.X, offset.Y, order);
 
         public static PushTransformScope UseScaleAtTransform(this IDeviceContext dc, float scaleX, float scaleY, float centerX, float centerY,
                                                              MatrixMultiplyOrder order = MatrixMultiplyOrder.Prepend)
@@ -210,7 +226,7 @@ namespace PaintDotNet.DirectWrite
 
     public static class DirectWriteFactoryExtensions
     {
-        public static IGdiFontMap GetGdiFontMap(this IDirectWriteFactory factory, bool includeSimulatedFonts = false) => new GdiFontMap((DirectWriteFactory)factory);
+        public static IGdiFontMap GetGdiFontMap(this IDirectWriteFactory factory, bool includeSimulatedFonts = false) => new GdiFontMap((DWriteFactory)factory);
     }
 
     /// Maps a GDI font name ("Arial Black", "Segoe UI Semibold Italic") to a DirectWrite family plus weight and
@@ -239,9 +255,9 @@ namespace PaintDotNet.DirectWrite
             ("Black", FontWeight.Black), ("Heavy", FontWeight.Heavy),
         };
 
-        private readonly DirectWriteFactory factory;
+        private readonly DWriteFactory factory;
 
-        internal GdiFontMap(DirectWriteFactory factory) => this.factory = factory;
+        internal GdiFontMap(DWriteFactory factory) => this.factory = factory;
 
         public FontProperties? TryGetFontProperties(string fontName)
         {

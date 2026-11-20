@@ -58,22 +58,22 @@ namespace PaintDotNet.Direct2D1
 
     internal unsafe class D2DResource : ComObject, IDirect2DResource, INativeObject
     {
-        internal readonly Direct2DFactory Owner;
-        internal D2DResource(void* p, Direct2DFactory owner) : base(p) => Owner = owner;
+        internal readonly HostDirect2DFactory Owner;
+        internal D2DResource(void* p, HostDirect2DFactory owner) : base(p) => Owner = owner;
         public IDirect2DFactory Factory => Owner;
         public void* NativePtr => Ptr;
     }
 
-    internal sealed unsafe class Direct2DFactory : ComObject, IDirect2DFactory
+    internal sealed unsafe class HostDirect2DFactory : ComObject, IDirect2DFactory
     {
-        private Direct2DFactory(void* p) : base(p) { }
+        private HostDirect2DFactory(void* p) : base(p) { }
 
-        public static Direct2DFactory Create()
+        public static HostDirect2DFactory Create()
         {
             Guid iid = ID2D1Factory1.IID;
             void* f;
             Native.Check(Native.D2D1CreateFactory(0, &iid, null, &f), "D2D1CreateFactory");
-            return new Direct2DFactory(f);
+            return new HostDirect2DFactory(f);
         }
 
         public IRectangleGeometry CreateRectangleGeometry(RectFloat rect)
@@ -199,9 +199,9 @@ namespace PaintDotNet.Direct2D1
         /// The ID2D1Device (held), whose other contexts can draw this one's images.
         private void* device;
 
-        private DeviceContextImpl(void* p, Direct2DFactory owner) : base(p, owner) { }
+        private DeviceContextImpl(void* p, HostDirect2DFactory owner) : base(p, owner) { }
 
-        internal static DeviceContextImpl Create(void* device, Direct2DFactory owner)
+        internal static DeviceContextImpl Create(void* device, HostDirect2DFactory owner)
         {
             void* dc;
             Native.Check(ID2D1Device.CreateDeviceContext(device, 0, &dc), "ID2D1Device::CreateDeviceContext");
@@ -321,6 +321,17 @@ namespace PaintDotNet.Direct2D1
                 Native.Check(ID2D1RenderTarget.CreateGradientStopCollection(Ptr, s, (uint)gradientStops.Length, (int)colorInterpolationGamma, (int)extendMode, &g),
                     "ID2D1RenderTarget::CreateGradientStopCollection");
             return new GradientStopCollection(g, Owner);
+        }
+
+        public IBitmapBrush CreateBitmapBrush(IDeviceBitmap bitmap, in BitmapBrushProperties? bitmapBrushProperties = null, in BrushProperties? brushProperties = null)
+        {
+            BitmapBrushProperties p = bitmapBrushProperties ?? BitmapBrushProperties.Default;
+            int* bb = stackalloc int[] { (int)p.ExtendModeX, (int)p.ExtendModeY, (int)p.InterpolationMode }; // D2D1_BITMAP_BRUSH_PROPERTIES1
+            D2DBrushProperties bp = brushProperties is BrushProperties b ? new(b) : default;
+            void* brush;
+            Native.Check(ID2D1DeviceContext.CreateBitmapBrush(Ptr, D2D.Object(bitmap), bb, brushProperties.HasValue ? &bp : null, &brush),
+                "ID2D1DeviceContext::CreateBitmapBrush");
+            return new BitmapBrush(brush, Owner, brushProperties ?? BrushProperties.Default, p, bitmap);
         }
 
         public IImageBrush CreateImageBrush(IDeviceImage image, in ImageBrushProperties imageBrushProperties, in BrushProperties? brushProperties = null)
@@ -475,9 +486,14 @@ namespace PaintDotNet.Direct2D1
             return r.ToRectFloat();
         }
 
-        internal DeviceBitmapImpl CreateBitmap(SizeInt32 size, void* data, int stride, int format, int options)
+        internal DeviceBitmapImpl CreateBitmap(SizeInt32 size, void* data, int stride, int format, int options, int alphaMode = D2D.AlphaPremultiplied,
+            float dpiX = 96, float dpiY = 96, IDeviceColorContext? colorContext = null)
         {
-            var props = new D2DBitmapProperties { Format = format, AlphaMode = D2D.AlphaPremultiplied, DpiX = 96, DpiY = 96, Options = options };
+            var props = new D2DBitmapProperties
+            {
+                Format = format, AlphaMode = alphaMode, DpiX = dpiX, DpiY = dpiY, Options = options,
+                ColorContext = colorContext is INativeObject native ? native.NativePtr : null,
+            };
             void* bitmap;
             Native.Check(ID2D1DeviceContext.CreateBitmap(Ptr, new D2D_SIZE_U { width = (uint)size.Width, height = (uint)size.Height },
                 data, (uint)stride, &props, &bitmap), "ID2D1DeviceContext::CreateBitmap");
@@ -525,13 +541,13 @@ namespace PaintDotNet.Direct2D1
 
     internal unsafe class DeviceImageImpl : D2DResource, IDeviceImage, INativeImage
     {
-        internal DeviceImageImpl(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal DeviceImageImpl(void* p, HostDirect2DFactory owner) : base(p, owner) { }
         public void* ImagePtr => Ptr;
     }
 
     internal sealed unsafe class DeviceBitmapImpl : DeviceImageImpl, IDeviceBitmap
     {
-        internal DeviceBitmapImpl(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal DeviceBitmapImpl(void* p, HostDirect2DFactory owner) : base(p, owner) { }
         public SizeInt32 PixelSize
         {
             get { D2D_SIZE_U s; ID2D1Bitmap.GetPixelSize(Ptr, &s); return new SizeInt32((int)s.width, (int)s.height); }
@@ -540,16 +556,18 @@ namespace PaintDotNet.Direct2D1
 
     internal sealed unsafe class CommandListImpl : DeviceImageImpl, ICommandList
     {
-        internal CommandListImpl(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal CommandListImpl(void* p, HostDirect2DFactory owner) : base(p, owner) { }
         public void Close() => Native.Check(ID2D1CommandList.Close(Ptr), "ID2D1CommandList::Close");
     }
 
     /// A Direct2D effect created by class ID. Its output image is fetched once and held.
-    internal sealed unsafe class NativeEffect : D2DResource, IDeviceEffect, INativeImage, IPropertySink
+    internal sealed unsafe class NativeEffect : D2DResource, IDeviceEffect, INativeImage, IPropertySink, INativeProperties
     {
+        void* INativeProperties.PropertiesPtr => Ptr;
+
         private void* output;
 
-        internal NativeEffect(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal NativeEffect(void* p, HostDirect2DFactory owner) : base(p, owner) { }
 
         public void* ImagePtr
         {
@@ -666,7 +684,7 @@ namespace PaintDotNet.Direct2D1
         private BrushProperties props;
         private ColorRgba128Float color;
 
-        internal Brush(void* p, Direct2DFactory owner, BrushProperties props) : base(p, owner) => this.props = props;
+        internal Brush(void* p, HostDirect2DFactory owner, BrushProperties props) : base(p, owner) => this.props = props;
 
         internal ColorRgba128Float SolidColor { set => color = value; }
 
@@ -689,11 +707,174 @@ namespace PaintDotNet.Direct2D1
         }
     }
 
-    internal sealed unsafe class LookupTable3D(void* p, Direct2DFactory owner) : D2DResource(p, owner), ILookupTable3D { }
+    /// ID2D1BitmapBrush1 (vtable: SetOpacity 4, SetTransform 5, SetExtendModeX 8, SetExtendModeY 9, SetBitmap 11,
+    /// SetInterpolationMode1 16).
+    internal sealed unsafe class BitmapBrush : D2DResource, IBitmapBrush
+    {
+        private BrushProperties props;
+        private BitmapBrushProperties bitmapProps;
+        private IDeviceBitmap bitmap;
+
+        internal BitmapBrush(void* p, HostDirect2DFactory owner, BrushProperties props, BitmapBrushProperties bitmapProps, IDeviceBitmap bitmap)
+            : base(p, owner) => (this.props, this.bitmapProps, this.bitmap) = (props, bitmapProps, bitmap);
+
+        private void Call(int slot, int value) => ((delegate* unmanaged<void*, int, void>)(*(void***)Ptr)[slot])(Ptr, value);
+
+        public float Opacity
+        {
+            get => props.Opacity;
+            set { props.Opacity = value; ID2D1Brush.SetOpacity(Ptr, value); }
+        }
+
+        public Matrix3x2Float Transform
+        {
+            get => props.Transform;
+            set { props.Transform = value; var m = new D2DMatrix(value); ID2D1Brush.SetTransform(Ptr, &m); }
+        }
+
+        public ExtendMode ExtendModeX
+        {
+            get => bitmapProps.ExtendModeX;
+            set { bitmapProps.ExtendModeX = value; Call(8, (int)value); }
+        }
+
+        public ExtendMode ExtendModeY
+        {
+            get => bitmapProps.ExtendModeY;
+            set { bitmapProps.ExtendModeY = value; Call(9, (int)value); }
+        }
+
+        public InterpolationMode InterpolationMode
+        {
+            get => bitmapProps.InterpolationMode;
+            set { bitmapProps.InterpolationMode = value; Call(16, (int)value); }
+        }
+
+        public IDeviceBitmap GetBitmap() => bitmap;
+
+        public void SetBitmap(IDeviceBitmap value)
+        {
+            bitmap = value;
+            ((delegate* unmanaged<void*, void*, void>)(*(void***)Ptr)[11])(Ptr, D2D.Object(value));
+        }
+    }
+
+    /// IDeviceEffectProperties over ID2D1Properties: a native effect's (or sub-properties object's) own pointer. A composed
+    /// stand-in effect has none: its writes go to its typed setters (IPropertySink), and nothing reads back.
+    internal static unsafe class EffectProperties
+    {
+        private const uint InvalidIndex = uint.MaxValue;
+
+        private static void* Ptr(IDeviceEffectProperties props) => props is INativeProperties n ? n.PropertiesPtr : null;
+
+        private static void* Need(IDeviceEffectProperties props)
+            => Ptr(props) is var p && p != null ? p : throw new NotSupportedException($"{props.GetType().Name}: its properties are not readable by index");
+
+        internal static int Count(IDeviceEffectProperties props) => Ptr(props) is var p && p != null ? (int)ID2D1Properties.GetPropertyCount(p) : 0;
+
+        internal static bool TryGetType(IDeviceEffectProperties props, int index, out DeviceEffectPropertyType type)
+        {
+            void* p = Ptr(props);
+            int t = p == null ? 0 : ID2D1Properties.GetType(p, (uint)index);
+            type = (DeviceEffectPropertyType)t;
+            return t != 0;
+        }
+
+        internal static bool TryGetSize(IDeviceEffectProperties props, int index, out int size)
+        {
+            size = TryGetType(props, index, out _) ? (int)ID2D1Properties.GetValueSize(Ptr(props), (uint)index) : 0;
+            return size > 0 || TryGetType(props, index, out _);
+        }
+
+        internal static bool TryGetName(IDeviceEffectProperties props, int index, out string? name)
+        {
+            name = null;
+            if (!TryGetType(props, index, out _)) return false;
+            void* p = Ptr(props);
+            uint len = ID2D1Properties.GetPropertyNameLength(p, (uint)index) + 1;
+            char* buf = stackalloc char[(int)len];
+            if (ID2D1Properties.GetPropertyName(p, (uint)index, buf, len) < 0) return false;
+            name = new string(buf);
+            return true;
+        }
+
+        internal static bool TryGetIndex(IDeviceEffectProperties props, string name, out int index)
+        {
+            void* p = Ptr(props);
+            uint i = InvalidIndex;
+            if (p != null)
+                fixed (char* n = name)
+                    i = ID2D1Properties.GetPropertyIndex(p, n);
+            index = (int)i;
+            return i != InvalidIndex;
+        }
+
+        internal static int IndexOf(IDeviceEffectProperties props, string name)
+            => TryGetIndex(props, name, out int index) ? index : throw new ArgumentException($"no effect property named {name}", nameof(name));
+
+        internal static void GetValue(IDeviceEffectProperties props, int index, DeviceEffectPropertyType type, Span<byte> data)
+        {
+            void* p = Need(props);
+            fixed (byte* d = data)
+                Native.Check(ID2D1Properties.GetValue(p, (uint)index, (int)type, d, (uint)data.Length), $"ID2D1Properties::GetValue({index}, {type})");
+        }
+
+        internal static void SetValue(IDeviceEffectProperties props, int index, DeviceEffectPropertyType type, ReadOnlySpan<byte> data)
+        {
+            if (props is IPropertySink sink)
+            {
+                sink.SetPropertyBytes(index, type, data);
+                return;
+            }
+            void* p = Need(props);
+            fixed (byte* d = data)
+                Native.Check(ID2D1Properties.SetValue(p, (uint)index, (int)type, d, (uint)data.Length), $"ID2D1Properties::SetValue({index}, {type})");
+        }
+
+        internal static void SetValueRef(IDeviceEffectProperties props, int index, DeviceEffectPropertyType type, PaintDotNet.ComponentModel.IObjectRef? valueRef)
+        {
+            nint v = valueRef switch
+            {
+                PaintDotNet.Interop.ComObjectRef com => com.Pointer,
+                INativeObject native => (nint)native.NativePtr,
+                null => 0,
+                _ => throw new NotSupportedException($"{valueRef.GetType().Name} is not a COM object"),
+            };
+            SetValue(props, index, type, new ReadOnlySpan<byte>(&v, sizeof(nint)));
+        }
+
+        /// The interface pointer the property holds (Direct2D adds a reference): a colour context as the host's own
+        /// wrapper, anything else as a ComObjectRef.
+        internal static PaintDotNet.ComponentModel.IObjectRef GetValueRef(IDeviceEffectProperties props, int index, DeviceEffectPropertyType type, Type interfaceType)
+        {
+            void* v = null;
+            GetValue(props, index, type, new Span<byte>(&v, sizeof(nint)));
+            if (interfaceType == typeof(IDeviceColorContext) && props is D2DResource owner && v != null)
+                return new ColorContext(v, owner.Owner, (DeviceColorSpace)((delegate* unmanaged<void*, int>)(*(void***)v)[4])(v)); // ID2D1ColorContext::GetColorSpace
+            return new PaintDotNet.Interop.ComObjectRef(null!, (nint)v);
+        }
+
+        internal static bool TryGetSubProperties(IDeviceEffectProperties props, int index, out IDeviceEffectProperties? sub)
+        {
+            sub = null;
+            void* p = Ptr(props), s = null;
+            if (p == null || ID2D1Properties.GetSubProperties(p, (uint)index, &s) < 0 || s == null) return false;
+            sub = new SubProperties(s);
+            return true;
+        }
+    }
+
+    /// An ID2D1Properties a property's sub-properties come as (D2D1_SUBPROPERTY: display name, field, ...).
+    internal sealed unsafe class SubProperties(void* p) : ComObject(p), IDeviceEffectProperties, INativeProperties
+    {
+        void* INativeProperties.PropertiesPtr => Ptr;
+    }
+
+    internal sealed unsafe class LookupTable3D(void* p, HostDirect2DFactory owner) : D2DResource(p, owner), ILookupTable3D { }
 
     internal sealed unsafe class ColorContext : D2DResource, IDeviceColorContext
     {
-        internal ColorContext(void* p, Direct2DFactory owner, DeviceColorSpace colorSpace) : base(p, owner) => ColorSpace = colorSpace;
+        internal ColorContext(void* p, HostDirect2DFactory owner, DeviceColorSpace colorSpace) : base(p, owner) => ColorSpace = colorSpace;
         public DeviceColorSpace ColorSpace { get; }
         /// For a known colour space's profile: the same space with a linear tone curve, which
         /// CreateLinearizedColorContextOrScRgb returns (scRGB only for sRGB itself or an unknown profile).
@@ -704,17 +885,17 @@ namespace PaintDotNet.Direct2D1
 
     internal sealed unsafe class GradientStopCollection : D2DResource, IGradientStopCollection
     {
-        internal GradientStopCollection(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal GradientStopCollection(void* p, HostDirect2DFactory owner) : base(p, owner) { }
     }
 
     internal sealed unsafe class StrokeStyle : D2DResource, IStrokeStyle
     {
-        internal StrokeStyle(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal StrokeStyle(void* p, HostDirect2DFactory owner) : base(p, owner) { }
     }
 
     internal sealed unsafe class Geometry : D2DResource, IRectangleGeometry, ITransformedGeometry, IPathGeometry
     {
-        internal Geometry(void* p, Direct2DFactory owner) : base(p, owner) { }
+        internal Geometry(void* p, HostDirect2DFactory owner) : base(p, owner) { }
 
         public RectFloat GetBounds(in Matrix3x2Float? worldTransform = null)
         {

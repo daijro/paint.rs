@@ -25,18 +25,28 @@ namespace System.Drawing
             this.family = family ?? throw new ArgumentNullException(nameof(family));
             (Size, Style, Unit, GdiCharSet, GdiVerticalFont) = (emSize, style, unit, gdiCharSet, gdiVerticalFont);
         }
-        public Font(string familyName, float emSize, FontStyle style, GraphicsUnit unit, byte gdiCharSet) : this(new FontFamily(familyName), emSize, style, unit, gdiCharSet) { }
+        public Font(string familyName, float emSize, FontStyle style, GraphicsUnit unit, byte gdiCharSet) : this(Family(familyName), emSize, style, unit, gdiCharSet) { }
         public Font(string familyName, float emSize, FontStyle style, GraphicsUnit unit, byte gdiCharSet, bool gdiVerticalFont)
-            : this(new FontFamily(familyName), emSize, style, unit, gdiCharSet, gdiVerticalFont) { OriginalFontName = familyName; }
+            : this(Family(familyName), emSize, style, unit, gdiCharSet, gdiVerticalFont) { OriginalFontName = familyName; }
         public Font(FontFamily family, float emSize, FontStyle style) : this(family, emSize, style, GraphicsUnit.Point) { }
         public Font(FontFamily family, float emSize, GraphicsUnit unit) : this(family, emSize, FontStyle.Regular, unit) { }
         public Font(FontFamily family, float emSize) : this(family, emSize, FontStyle.Regular, GraphicsUnit.Point) { }
-        public Font(string familyName, float emSize, FontStyle style, GraphicsUnit unit) : this(new FontFamily(familyName), emSize, style, unit) { OriginalFontName = familyName; }
+        public Font(string familyName, float emSize, FontStyle style, GraphicsUnit unit) : this(Family(familyName), emSize, style, unit) { OriginalFontName = familyName; }
         public Font(string familyName, float emSize, FontStyle style) : this(familyName, emSize, style, GraphicsUnit.Point) { }
         public Font(string familyName, float emSize, GraphicsUnit unit) : this(familyName, emSize, FontStyle.Regular, unit) { }
         public Font(string familyName, float emSize) : this(familyName, emSize, FontStyle.Regular, GraphicsUnit.Point) { }
 
         internal Font(string familyName, float points, string systemFontName) : this(familyName, points) => systemName = systemFontName;
+
+        // A Font built from an empty or whitespace family name resolves to the generic sans-serif family rather than
+        // throwing: the family-name ctor is lenient (only the font-family type's own ctor rejects an empty name), so a
+        // plug-in that constructs a font from an unset name gets a usable default instead of an error.
+        private static FontFamily Family(string familyName)
+            => string.IsNullOrWhiteSpace(familyName) ? FontFamily.GenericSansSerif : new FontFamily(familyName);
+
+        // Regression guard: an empty or whitespace family name never throws and resolves to the generic sans family.
+        static Font() => System.Diagnostics.Debug.Assert(
+            new Font("", 1f).Name == FontFamily.GenericSansSerif.Name && new Font("   ", 1f).Name == FontFamily.GenericSansSerif.Name);
 
         private Font(SerializationInfo info, StreamingContext context)
             : this((string)info.GetValue("Name", typeof(string)), (float)info.GetValue("Size", typeof(float)),

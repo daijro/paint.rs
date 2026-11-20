@@ -2,7 +2,8 @@
 # tools/web-dist.sh copies it into dist/, the site (README "Web").
 # Cloudflare compresses HTML and JS itself, but doesn't send a stored .gz with Content-Encoding. So the wasm files
 # and the fonts are fetched as their .gz and gunzipped in the browser (index.html's loader), and a .gz needs no
-# header here. Types come from the extension. Paths not listed keep Cloudflare's default, which revalidates.
+# header here. The wasm files ship only as their .gz, and one over Cloudflare's 25 MiB per file in parts (.gz.0,
+# .1, …), which the loader joins. Types come from the extension. Paths not listed keep Cloudflare's default, which revalidates.
 
 # Trunk names the app's wasm and JS, its snippets and the icon by their content: cache them for good.
 /paintrs-*

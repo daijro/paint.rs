@@ -9,6 +9,8 @@
     <ProjectReference Include="../ComponentModel/ComponentModel.csproj" />
     <ProjectReference Include="../Windows/Windows.csproj" />
     <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
+    <!-- The genuine Windows.Framework references WPF for CreateGeometryFromWpfGeometry's Geometry argument. -->
+    <ProjectReference Include="../PresentationCore/PresentationCore.csproj" />
     <!-- Paint.NET's own pixel shaders (PdnShaders.cs) run through ComputeSharp.D2D1, as plugins' do. -->
     <PackageReference Include="ComputeSharp.D2D1" Version="3.2.0" />
   </ItemGroup>

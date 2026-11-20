@@ -11,12 +11,14 @@ using Image = System.Drawing.Image;
 
 namespace PaintDotNet.Effects
 {
-    public record BitmapEffectOptions : EffectOptionsBase { }
-
-    public static class BitmapEffectOptionsFactory
+    // As the GPU options: the factory (Create) sits between the options type and the one before it, as in Paint.NET.
+    public abstract record BitmapEffectOptionsFactory : EffectOptionsBase
     {
+        private protected BitmapEffectOptionsFactory() { }
         public static BitmapEffectOptions Create() => new();
     }
+
+    public record BitmapEffectOptions : BitmapEffectOptionsFactory { }
 
     /// How the output is cut into tiles. The host renders each effect's whole region at once, so it is not read.
     public enum BitmapEffectRenderingSchedule : long { DefaultTiles = -2, SmallHorizontalStrips = 0, None = 5 }
@@ -25,12 +27,14 @@ namespace PaintDotNet.Effects
     {
         PixelFormat OutputPixelFormat { get; set; }
         BitmapEffectRenderingSchedule Schedule { get; set; }
+        BitmapEffectRenderingFlags Flags { get; set; }
     }
 
     internal sealed class BitmapRenderInfo : IBitmapEffectRenderInfo
     {
         public PixelFormat OutputPixelFormat { get; set; } = PixelFormats.Bgra32;
         public BitmapEffectRenderingSchedule Schedule { get; set; } = BitmapEffectRenderingSchedule.DefaultTiles;
+        public BitmapEffectRenderingFlags Flags { get; set; }
     }
 
     /// The tile an effect renders: its bounds in document space and its pixels, locked in a pixel format.
@@ -48,12 +52,18 @@ namespace PaintDotNet.Effects
         public static IBitmapLock<ColorBgra32> LockBgra32(this IBitmapEffectOutput output) => output.Lock<ColorBgra32>();
     }
 
-    public interface IBitmapEffectDocumentInfo : IEffectDocumentInfo { }
+    public interface IBitmapEffectDocumentInfo : IEffectDocumentInfo
+    {
+        // The bitmap-effect document's layers (the survey corpus reads these). No live document on the host, so the
+        // default is an empty list; a real implementation overrides it.
+        new System.Collections.Generic.IReadOnlyList<IBitmapEffectLayerInfo> Layers => System.Array.Empty<IBitmapEffectLayerInfo>();
+    }
 
     public interface IBitmapEffectEnvironment : IEffectEnvironment
     {
         new IBitmapEffectDocumentInfo Document { get; }
         IImagingFactory ImagingFactory { get; }
+        new IBitmapEffectSelectionInfo Selection { get; }
     }
 
     public abstract class BitmapEffect : EffectBase

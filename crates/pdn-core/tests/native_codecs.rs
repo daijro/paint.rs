@@ -73,24 +73,23 @@ fn avif_without_dav1d_is_unsupported() {
     );
 }
 
+/// HEIC saving is refused, as paintdotjs refuses it. (JPEG XR saves, on the web too: io::encode's
+/// jxr tests.)
 #[test]
-fn heic_and_jxr_saving_is_refused_like_paintdotjs() {
+fn heic_saving_is_refused_like_paintdotjs() {
     let img = pdn_core::canvas::ImageData {
         width: 1,
         height: 1,
         data: vec![1, 2, 3, 255],
     };
-    for f in ["heic", "jxr"] {
-        assert!(
-            pdn_core::io::encode::encode(
-                &img,
-                f,
-                &pdn_core::io::encode::SaveOptions::default_for(f)
-            )
-            .is_err(),
-            "{f}"
-        );
-    }
+    assert!(
+        pdn_core::io::encode::encode(
+            &img,
+            "heic",
+            &pdn_core::io::encode::SaveOptions::default_for("heic")
+        )
+        .is_err()
+    );
 }
 
 /// `gradient:red-blue` runs from red at the top to blue at the bottom; both fixtures are opaque.

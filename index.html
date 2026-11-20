@@ -35,18 +35,39 @@
             // tools/web-dist.sh writes `<file>.gz` beside the wasm files (the app's, the codecs')
             // and the fonts, which are all fetched with fetch(). Ask for that and gunzip it as it
             // streams, unless the host sent it with Content-Encoding, which the browser has undone.
-            // No .gz (trunk serve, which answers with index.html): the plain file.
+            // No .gz (trunk serve, which answers with index.html): the plain file. The site has no
+            // plain .wasm (tools/gz-parts.py), only the MobileSAM worker's, which it fetches itself.
             const types = { wasm: "application/wasm", ttf: "font/ttf", otf: "font/otf" };
             const fetchPlain = window.fetch;
+            // A .gz over the host's per-file limit goes out in parts, <file>.gz.0, .1, …: the count of
+            // each, by file name (tools/gz-parts.py writes it). They are fetched together and joined
+            // in order.
+            const parts = {};
+            const fetchParts = async (url, init, n) => {
+                const all = await Promise.all(Array.from({ length: n }, (_, i) => fetchPlain(`${url}.${i}`, init)));
+                const failed = all.find((res) => !res.ok);
+                if (failed) return failed;
+                const body = new ReadableStream({
+                    async start(c) {
+                        for (const res of all) {
+                            const reader = res.body.getReader();
+                            for (let read; !(read = await reader.read()).done; ) c.enqueue(read.value);
+                        }
+                        c.close();
+                    },
+                });
+                return new Response(body, { headers: { "content-type": "application/gzip" } });
+            };
             window.fetch = async (input, init) => {
                 const url = new URL(input instanceof Request ? input.url : input, document.baseURI);
                 const type = types[url.pathname.match(/\.(wasm|ttf|otf)$/)?.[1]];
                 if (!type) return fetchPlain(input, init);
+                const n = parts[url.pathname.split("/").pop()];
                 url.pathname += ".gz";
                 // A subresource-integrity hash (the .NET plug-in host's loader sets one) is the plain
                 // file's, so the .gz is fetched without it; the plain-file fallback keeps it.
                 const { integrity, ...gz } = init ?? {};
-                const res = await fetchPlain(url, gz);
+                const res = await (n ? fetchParts(url, gz, n) : fetchPlain(url, gz));
                 if (!res.ok || /html/.test(res.headers.get("content-type"))) return fetchPlain(input, init);
                 const gunzipped = /gzip/.test(res.headers.get("content-encoding"));
                 const body = gunzipped ? res.body : res.body.pipeThrough(new DecompressionStream("gzip"));

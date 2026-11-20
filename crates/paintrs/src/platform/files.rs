@@ -5,7 +5,7 @@
 use pdn_core::{
     app::AppWorkspace,
     document::layer::LayerProperties,
-    io::{codecs, pdn::PdnDocument},
+    io::{codecs, encode::can_encode, pdn::PdnDocument},
     settings::AppSettings,
 };
 use std::{
@@ -392,19 +392,14 @@ impl Files {
         }
         #[cfg(target_arch = "wasm32")]
         {
+            // JPEG XR decodes in Rust here as on the desktop (its planar alpha included).
             let format = codecs::detect_format(&file.name, file.mime.as_deref(), &file.bytes);
-            if matches!(format, Some("heic" | "avif" | "jxr")) {
+            if let Some(format @ ("heic" | "avif")) = format {
                 Pending::future(async move {
-                    let format = format.unwrap();
                     let image = super::web::decode_async(format, &file.bytes)
                         .await
                         .map_err(|e| e.to_string())?;
-                    let dpi = if format == "jxr" {
-                        codecs::jxr_dpi(&file.bytes)
-                    } else {
-                        None
-                    };
-                    Ok(single_layer(image, dpi))
+                    Ok(single_layer(image, None))
                 })
             } else {
                 Pending::ready(decode_snapshot(&file, &answers))
@@ -869,18 +864,19 @@ pub fn show_drop_images(remaining: Vec<PickedFile>) -> DropImageChoice {
 pub fn chooser_formats(initial: &str) -> Vec<&'static crate::dialogs::save_image::FormatInfo> {
     let formats = crate::dialogs::save_image::formats;
     formats()
-        .filter(|f| f.id == initial && !matches!(f.id, "heic" | "jxr"))
-        .chain(formats().filter(|f| f.id != initial && !matches!(f.id, "heic" | "jxr")))
+        .filter(|f| f.id == initial && can_encode(f.id))
+        .chain(formats().filter(|f| f.id != initial && can_encode(f.id)))
         .collect()
 }
 pub fn accepted_format(name: &str) -> Result<&'static str, String> {
+    // Not a name of a format this build cannot write (HEIC; JPEG XR on the web).
     crate::dialogs::save_image::formats()
+        .filter(|f| can_encode(f.id))
         .find(|f| {
             f.extensions
                 .iter()
                 .any(|e| name.to_ascii_lowercase().ends_with(e))
         })
-        .filter(|f| !matches!(f.id, "heic" | "jxr"))
         .map(|f| f.id)
         .ok_or_else(|| "The selected extension cannot be saved.".into())
 }

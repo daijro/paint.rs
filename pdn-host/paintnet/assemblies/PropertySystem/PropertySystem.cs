@@ -297,6 +297,7 @@ namespace PaintDotNet.PropertySystem
 
         public int Count => properties.Count;
         public IEnumerable<string> PropertyNames => properties.Keys;
+        public IEnumerable<Property> Properties => properties.Values;
 
         public Property? this[object propertyName]
             => properties.TryGetValue(propertyName.ToString()!, out var p) ? p : null;

@@ -60,7 +60,11 @@ impl EffectConfigDialog {
             Some(DialogLayout::Chart) => (CHART_CLIENT.0 + 2.0 * DIALOG_BORDER, CHART_CLIENT.1),
             None => {
                 let ind = self.session.as_ref().and_then(|s| s.def.indirect);
-                let width = dialog_width(ind, screen.width());
+                let mut width = dialog_width(ind, screen.width());
+                // A plug-in window's canvas sets the width; `fit_canvas` keeps it on the screen.
+                if let Some(w) = self.canvas_shown.iter().map(|c| c.1.0).max() {
+                    width = width.max(w as f32 + 2.0 * (DIALOG_BORDER + EFFECT_CONTENT_PADDING.1));
+                }
                 let controls = self.controls();
                 let rows: Vec<f32> = match ind {
                     Some(u) => {
@@ -76,14 +80,104 @@ impl EffectConfigDialog {
                 let gaps = EFFECT_CONTENT_GAP * rows.len().saturating_sub(1) as f32;
                 // Past the max height a plugin's rows scroll (`indirect`); generic rows clip.
                 let (min, max, inset) = EFFECT_CONTENT_HEIGHT;
-                let content = (rows.iter().sum::<f32>() + gaps)
-                    .max(min)
-                    .min(max.min(screen.height() - inset));
+                let max = if !self.canvas_shown.is_empty() {
+                    screen.height() - inset
+                } else {
+                    max.min(screen.height() - inset)
+                };
+                let content = (rows.iter().sum::<f32>() + gaps).max(min).min(max);
                 let (t, _, b) = EFFECT_CONTENT_PADDING;
                 (width, t + b + content)
             }
         }
     }
+}
+
+impl EffectConfigDialog {
+    /// Opens a plug-in window with a canvas of its own and sizes the canvas as its window lays it out. The window's
+    /// owner is the room the screen leaves beside the window's other rows, so a window that sizes itself from its
+    /// owner (Liquify, as Paint.NET opens it over its main window) lays its canvas out to be shown 1:1.
+    pub(super) fn fit_canvas(&mut self, ui: &Ui) {
+        let controls = self.controls();
+        // Each canvas with the size it is shown at so far (the schema's before the first fit).
+        let canvases: Vec<(&'static str, (u32, u32))> = controls
+            .iter()
+            .filter_map(|c| match *c {
+                Control::PluginCanvas {
+                    key, width, height, ..
+                } => Some((key, (width, height))),
+                _ => None,
+            })
+            .collect();
+        let screen = ui.ctx().content_rect();
+        if canvases.is_empty() {
+            // A code editor's window (CodeLab) stays open too, its owner the screen.
+            if controls
+                .iter()
+                .any(|c| matches!(c, Control::PluginCode { .. }))
+            {
+                self.open_canvas(screen.size().max(Vec2::splat(1.0)));
+            }
+            return;
+        }
+        let width = screen.width()
+            - DIALOG_VIEWPORT_MARGIN
+            - 2.0 * (DIALOG_BORDER + EFFECT_CONTENT_PADDING.1);
+        // The content's rows as `size` measures them, less the canvases' own heights: the window's other rows.
+        let rows: Vec<f32> = match self.session.as_ref().and_then(|s| s.def.indirect) {
+            Some(u) => self
+                .laid_rows(ui.painter(), u, &controls, width)
+                .iter()
+                .map(|l| l.height)
+                .collect(),
+            None => {
+                let ppp = ui.ctx().pixels_per_point();
+                let line = FontSpec::new(DIALOG_FONT_SIZE).resolved_line_height(ppp);
+                controls
+                    .iter()
+                    .filter_map(|c| generic_row_height(c, line))
+                    .collect()
+            }
+        };
+        let gaps = EFFECT_CONTENT_GAP * rows.len().saturating_sub(1) as f32;
+        let others =
+            rows.iter().sum::<f32>() + gaps - canvases.iter().map(|c| c.1.1 as f32).sum::<f32>();
+        let avail = screen.height() - EFFECT_CONTENT_HEIGHT.2;
+        // Rows that overflow the screen scroll: shrinking the canvases below half their size to make room for them
+        // helps nobody, so then the canvases take what the whole screen gives.
+        let stacked: u32 = canvases.iter().map(|c| c.1.1).sum();
+        let room = Vec2::new(width, (avail - others).max(0.0));
+        let room = if room.y >= 0.5 * stacked as f32 {
+            room
+        } else {
+            Vec2::new(width, avail)
+        };
+        self.open_canvas(room.max(Vec2::splat(1.0)));
+        let sizes: Vec<(&'static str, (u32, u32))> = canvases
+            .iter()
+            .map(|&(key, now)| {
+                let live = self.live_canvas.as_ref().and_then(|l| l.canvas.layout(key));
+                (key, live.map_or(now, |l| l.size))
+            })
+            .collect();
+        // One scale for them all, stacked in the room, so they keep their sizes to each other.
+        let stack = (
+            sizes.iter().map(|s| s.1.0).max().unwrap_or(1),
+            sizes.iter().map(|s| s.1.1).sum(),
+        );
+        let scale = fit_scale(stack, room);
+        self.canvas_shown = sizes
+            .into_iter()
+            .map(|(key, (w, h))| (key, ((w as f32 * scale) as u32, (h as f32 * scale) as u32)))
+            .collect();
+    }
+}
+
+/// The scale that fits `size` into `room`: at most 1, never up.
+fn fit_scale((w, h): (u32, u32), room: Vec2) -> f32 {
+    (room.x / w.max(1) as f32)
+        .min(room.y / h.max(1) as f32)
+        .clamp(0.0, 1.0)
 }
 
 /// A generic control row's height: label line, gap, then its line (`Value` and `Curve` draw
@@ -98,10 +192,8 @@ fn generic_row_height(c: &Control, line: f32) -> Option<f32> {
         Control::Button { .. } => Some(EFFECT_SELECT_HEIGHT),
         Control::Checkbox { .. } => Some(EFFECT_CHECKBOX.2),
         Control::Color { .. } => Some(line + EFFECT_ROW_GAP + COLOR_INPUT.1),
-        Control::PluginGrid { .. } => Some(PLUGIN_GRID_HEIGHT),
-        // The editor, then its channels' check boxes.
-        Control::PluginCurve { .. } => {
-            Some(PLUGIN_CURVE_SIZE + EFFECT_ROW_GAP + CHECKBOX_SIZE + 2.0 * CHECKBOX_MARGIN.0)
+        Control::PluginCanvas { height, .. } | Control::PluginCode { height, .. } => {
+            Some(*height as f32)
         }
         // BB5 lays out the plugin kinds.
         Control::Curve { .. }
@@ -113,12 +205,6 @@ fn generic_row_height(c: &Control, line: f32) -> Option<f32> {
         | Control::Pan { .. } => None,
     }
 }
-
-/// A plug-in window's displacement grid over the image: at most this tall.
-const PLUGIN_GRID_HEIGHT: f32 = 300.0;
-
-/// A plug-in window's curve editor: one pixel per step of a 256-entry curve.
-const PLUGIN_CURVE_SIZE: f32 = 258.0;
 
 /// Chromium's `input[type=color]`: 50×27.
 const COLOR_INPUT: (f32, f32) = (50.0, 27.0);
@@ -264,8 +350,8 @@ fn header_label(c: &Control) -> &'static str {
         | Control::Pan { label, .. } => label,
         Control::Checkbox { .. }
         | Control::Curve { .. }
-        | Control::PluginCurve { .. }
-        | Control::PluginGrid { .. }
+        | Control::PluginCanvas { .. }
+        | Control::PluginCode { .. }
         | Control::Value { .. }
         | Control::Button { .. } => "",
     }
@@ -328,10 +414,7 @@ fn body_height(c: &Control, t: &RowText, line: f32, ppp: f32) -> f32 {
         Control::File { .. } if t.error.is_empty() => EFFECT_SELECT_HEIGHT,
         Control::File { .. } => EFFECT_SELECT_HEIGHT + EFFECT_ROW_GAP + t.error.len() as f32 * line,
         Control::Pan { .. } => EFFECT_PAN_SIZE.1 + 2.0,
-        Control::PluginCurve { .. } => {
-            PLUGIN_CURVE_SIZE + EFFECT_ROW_GAP + CHECKBOX_SIZE + 2.0 * CHECKBOX_MARGIN.0
-        }
-        Control::PluginGrid { .. } => PLUGIN_GRID_HEIGHT,
+        Control::PluginCanvas { height, .. } | Control::PluginCode { height, .. } => *height as f32,
         Control::Curve { .. } | Control::Value { .. } => 0.0,
     }
 }
@@ -693,10 +776,27 @@ impl EffectConfigDialog {
         let ppp = ui.ctx().pixels_per_point();
         let spec = FontSpec::new(DIALOG_FONT_SIZE);
         let line = spec.resolved_line_height(ppp);
-        let (pt, px_, _) = EFFECT_CONTENT_PADDING;
+        let (pt, px_, pb) = EFFECT_CONTENT_PADDING;
         let x0 = r.min.x + px_;
-        let w = r.width() - 2.0 * px_;
-        let mut y = r.min.y + pt;
+        let mut w = r.width() - 2.0 * px_;
+        // Rows taller than the dialog scroll, as a plugin's do (a plug-in window with canvases and many settings).
+        let rows: Vec<f32> = controls
+            .iter()
+            .filter_map(|c| generic_row_height(c, line))
+            .collect();
+        let content = pt
+            + pb
+            + rows.iter().sum::<f32>()
+            + EFFECT_CONTENT_GAP * rows.len().saturating_sub(1) as f32;
+        if content > r.height() + 0.5 {
+            w -= crate::kit::scroll::THICKNESS;
+            self.scroll_rows(ui, r, content);
+            let clip = ui.clip_rect();
+            ui.set_clip_rect(clip.intersect(r));
+        } else {
+            self.rows_scroll.0 = 0.0;
+        }
+        let mut y = r.min.y + pt - self.rows_scroll.0 as f32;
         let mut changed = None;
         let mut state = self.slider_state(now);
         for c in controls {
@@ -822,7 +922,7 @@ impl EffectConfigDialog {
                         changed = Some(true);
                     }
                 }
-                Control::PluginCurve { .. } | Control::PluginGrid { .. } => {
+                Control::PluginCanvas { .. } | Control::PluginCode { .. } => {
                     let c = self.window_control(ui, c, Pos2::new(x0, y), w);
                     changed = merge(changed, c);
                 }
@@ -912,21 +1012,13 @@ impl EffectConfigDialog {
                 let response = inputs::push_button(ui, ("button", *key), rect, label, true, false);
                 (inputs::button_activated(ui, &response) && self.press(key)).then_some(true)
             }
-            Control::PluginCurve {
-                key,
-                max,
-                own,
-                by,
-                sets,
-                ..
-            } => {
-                let chans = pdn_core::effect::curve_channels(own, *by, sets, &self.values);
-                self.plugin_curve(ui, (key, *max), chans, at, PLUGIN_CURVE_SIZE)
+            Control::PluginCanvas { key, height, .. } => {
+                let area = Rect::from_min_size(at, Vec2::new(w, *height as f32));
+                self.plugin_canvas(ui, key, area)
             }
-            Control::PluginGrid { key, .. } => {
-                let size = pdn_core::effect::grid_size(c, &self.controls(), &self.values);
-                let area = Rect::from_min_size(at, Vec2::new(w, PLUGIN_GRID_HEIGHT));
-                self.plugin_grid(ui, key, size, area)
+            Control::PluginCode { key, height, .. } => {
+                let area = Rect::from_min_size(at, Vec2::new(w, *height as f32));
+                self.plugin_code(ui, key, area)
             }
             _ => None,
         }
@@ -1031,6 +1123,38 @@ impl EffectConfigDialog {
         }
     }
 
+    /// Rows `content` tall that overflow `r` scroll: a scroll bar at the right, the wheel over them, and a newly
+    /// focused row (Tab) brought into view. Updates [`Self::rows_scroll`].
+    fn scroll_rows(&mut self, ui: &mut Ui, r: Rect, content: f32) {
+        let max = (content - r.height()).max(0.0) as f64;
+        let (offset, seen) = &mut self.rows_scroll;
+        let focus = ui.memory(|m| m.focused());
+        if focus != *seen {
+            *seen = focus;
+            if let Some(f) = focus.and_then(|id| ui.ctx().read_response(id)) {
+                let top = f.rect.min.y - r.min.y;
+                let bottom = f.rect.max.y - r.max.y;
+                if top < 0.0 {
+                    *offset += top as f64;
+                } else if bottom > 0.0 {
+                    *offset += bottom.min(top) as f64;
+                }
+            }
+        }
+        let popup = self.open_select.is_some() || self.color_popup.is_some();
+        if !popup && ui.rect_contains_pointer(r) {
+            *offset -= ui.input(|i| crate::kit::scroll::wheel_delta(i, r.height()).y) as f64;
+        }
+        *offset = offset.clamp(0.0, max);
+        let bar = Rect::from_min_size(
+            Pos2::new(r.max.x - crate::kit::scroll::THICKNESS, r.min.y),
+            Vec2::new(crate::kit::scroll::THICKNESS, r.height()),
+        );
+        crate::kit::scroll::Scrollbar::vertical(bar)
+            .id_salt("effect-rows")
+            .show(ui, content as f64, r.height() as f64, offset);
+    }
+
     /// The plugin rows in a column with 10-px gaps (the generic dialog's).
     pub(super) fn indirect(
         &mut self,
@@ -1057,33 +1181,7 @@ impl EffectConfigDialog {
             w -= crate::kit::scroll::THICKNESS;
             laid = self.laid_rows(ui.painter(), ind, controls, w);
             content = height(&laid);
-            let max = (content - r.height()).max(0.0) as f64;
-            let (offset, seen) = &mut self.rows_scroll;
-            let focus = ui.memory(|m| m.focused());
-            if focus != *seen {
-                *seen = focus;
-                if let Some(f) = focus.and_then(|id| ui.ctx().read_response(id)) {
-                    let top = f.rect.min.y - r.min.y;
-                    let bottom = f.rect.max.y - r.max.y;
-                    if top < 0.0 {
-                        *offset += top as f64;
-                    } else if bottom > 0.0 {
-                        *offset += bottom.min(top) as f64;
-                    }
-                }
-            }
-            let popup = self.open_select.is_some() || self.color_popup.is_some();
-            if !popup && ui.rect_contains_pointer(r) {
-                *offset -= ui.input(|i| crate::kit::scroll::wheel_delta(i, r.height()).y) as f64;
-            }
-            *offset = offset.clamp(0.0, max);
-            let bar = Rect::from_min_size(
-                Pos2::new(r.max.x - crate::kit::scroll::THICKNESS, r.min.y),
-                Vec2::new(crate::kit::scroll::THICKNESS, r.height()),
-            );
-            crate::kit::scroll::Scrollbar::vertical(bar)
-                .id_salt("effect-rows")
-                .show(ui, content as f64, r.height() as f64, offset);
+            self.scroll_rows(ui, r, content);
         } else {
             self.rows_scroll.0 = 0.0;
         }
@@ -1492,8 +1590,8 @@ impl EffectConfigDialog {
             // here).
             Control::Button { .. }
             | Control::List { .. }
-            | Control::PluginCurve { .. }
-            | Control::PluginGrid { .. } => {
+            | Control::PluginCanvas { .. }
+            | Control::PluginCode { .. } => {
                 changed = self.window_control(&mut row, c, Pos2::new(x0, y), w);
             }
             Control::Value { .. } | Control::Curve { .. } => {}
@@ -1653,6 +1751,15 @@ mod tests {
     use super::*;
     use pdn_core::effect::bb::ui::{ControlUi, IndirectUi, Note, Tab, TabStrip};
     use pdn_core::effect::session::EffectSession;
+
+    /// A plug-in window's canvases keep their size when the screen has room, else shrink to it, keeping their shape.
+    #[test]
+    fn a_canvas_fits_the_screen() {
+        assert_eq!(fit_scale((800, 600), Vec2::new(1000.0, 700.0)), 1.0);
+        assert_eq!(fit_scale((1600, 900), Vec2::new(800.0, 900.0)), 0.5);
+        assert_eq!(fit_scale((1600, 900), Vec2::new(1600.0, 300.0)), 1.0 / 3.0);
+        assert_eq!(fit_scale((100, 100), Vec2::new(-5.0, 50.0)), 0.0);
+    }
 
     fn ctrl(key: &'static str) -> Control {
         Control::Checkbox {

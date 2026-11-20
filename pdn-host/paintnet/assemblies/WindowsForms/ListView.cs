@@ -267,18 +267,59 @@ namespace System.Windows.Forms
         public bool ShowItemToolTips { get; set; }
         public ColumnHeaderStyle HeaderStyle { get; set; } = ColumnHeaderStyle.Clickable;
         public BorderStyle BorderStyle { get; set; } = BorderStyle.Fixed3D;
+        public ListViewAlignment Alignment { get; set; } = ListViewAlignment.Top;
+        public bool AutoArrange { get; set; } = true;
+        public bool ShowGroups { get; set; } = true;
+        public ImageList? SmallImageList { get; set; }
+        public bool UseCompatibleStateImageBehavior { get; set; } = true;
         public ColumnHeaderCollection Columns { get; }
         public ListViewItemCollection Items { get; }
 
-        public IReadOnlyList<int> SelectedIndices
+        /// Real WinForms returns this nested collection from SelectedItems; it also serves as an IReadOnlyList so
+        /// existing callers are unaffected.
+        public sealed class SelectedListViewItemCollection : IReadOnlyList<ListViewItem>
         {
-            get { var l = new List<int>(); for (int i = 0; i < Items.Count; i++) if (Items[i].Selected) l.Add(i); return l; }
+            private readonly List<ListViewItem> items;
+            internal SelectedListViewItemCollection(List<ListViewItem> items) => this.items = items;
+            public int Count => items.Count;
+            public ListViewItem this[int index] => items[index];
+            public IEnumerator<ListViewItem> GetEnumerator() => items.GetEnumerator();
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => items.GetEnumerator();
         }
-        public IReadOnlyList<ListViewItem> SelectedItems
+
+        /// Real WinForms returns this nested collection from SelectedIndices; it is also an IReadOnlyList&lt;int&gt;
+        /// so existing callers are unaffected.
+        public sealed class SelectedIndexCollection : IReadOnlyList<int>
         {
-            get { var l = new List<ListViewItem>(); foreach (ListViewItem item in Items) if (item.Selected) l.Add(item); return l; }
+            private readonly List<int> items;
+            internal SelectedIndexCollection(List<int> items) => this.items = items;
+            public int Count => items.Count;
+            public int this[int index] => items[index];
+            public bool Contains(int index) => items.Contains(index);
+            public IEnumerator<int> GetEnumerator() => items.GetEnumerator();
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => items.GetEnumerator();
+        }
+
+        public SelectedIndexCollection SelectedIndices
+        {
+            get { var l = new List<int>(); for (int i = 0; i < Items.Count; i++) if (Items[i].Selected) l.Add(i); return new SelectedIndexCollection(l); }
+        }
+        public SelectedListViewItemCollection SelectedItems
+        {
+            get { var l = new List<ListViewItem>(); foreach (ListViewItem item in Items) if (item.Selected) l.Add(item); return new SelectedListViewItemCollection(l); }
         }
         public ListViewItem? FocusedItem { get; set; }
+
+        // Virtual mode: the host does not request items on demand, so these are stored and honoured only as state a
+        // plug-in reads back. ponytail: the RetrieveVirtualItem/CacheVirtualItems callbacks never fire here.
+        public bool VirtualMode { get; set; }
+        public int VirtualListSize { get; set; }
+        public ItemActivation Activation { get; set; }
+        public System.Drawing.Size TileSize { get; set; }
+        public event RetrieveVirtualItemEventHandler? RetrieveVirtualItem;
+        public event CacheVirtualItemsEventHandler? CacheVirtualItems;
+        protected virtual void OnRetrieveVirtualItem(RetrieveVirtualItemEventArgs e) => RetrieveVirtualItem?.Invoke(this, e);
+        protected virtual void OnCacheVirtualItems(CacheVirtualItemsEventArgs e) => CacheVirtualItems?.Invoke(this, e);
 
         public void BeginUpdate() { }
         public void EndUpdate() { }
@@ -460,4 +501,24 @@ namespace System.Windows.Forms
         public event EventHandler? StartPageChanged;
         protected virtual void OnStartPageChanged(EventArgs e) => StartPageChanged?.Invoke(this, e);
     }
+
+    public enum ItemActivation { Standard, OneClick, TwoClick }
+
+    public class RetrieveVirtualItemEventArgs : EventArgs
+    {
+        public RetrieveVirtualItemEventArgs(int itemIndex) => ItemIndex = itemIndex;
+        public int ItemIndex { get; }
+        public ListViewItem? Item { get; set; }
+    }
+
+    public delegate void RetrieveVirtualItemEventHandler(object? sender, RetrieveVirtualItemEventArgs e);
+
+    public class CacheVirtualItemsEventArgs : EventArgs
+    {
+        public CacheVirtualItemsEventArgs(int startIndex, int endIndex) { StartIndex = startIndex; EndIndex = endIndex; }
+        public int StartIndex { get; }
+        public int EndIndex { get; }
+    }
+
+    public delegate void CacheVirtualItemsEventHandler(object? sender, CacheVirtualItemsEventArgs e);
 }

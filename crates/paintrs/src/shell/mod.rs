@@ -207,9 +207,40 @@ struct Menus {
     state: DropMenuState,
     /// Opened during this frame: this frame's press doesn't close it.
     opened_now: bool,
+    /// An entry picked from a menu (closed since) and the frame its command runs in.
+    picked: Option<(OpenMenu, &'static str, u64)>,
 }
 
+/// The frames a picked entry's command waits. The pick's frame still paints the menu, and a
+/// native file dialog blocks the event loop with the last presented frame under it: the command
+/// runs once a frame without the menu is on screen. The web's pickers do not block, and they want
+/// the click's user activation: there it runs at once.
+#[cfg(not(target_arch = "wasm32"))]
+const PICK_DELAY: u64 = 2;
+#[cfg(target_arch = "wasm32")]
+const PICK_DELAY: u64 = 0;
+
 impl Menus {
+    /// `DropEntry.onPress`: an entry of the open menu was picked. The whole menu closes now,
+    /// submenus with it; [`Menus::due`] hands its command over later.
+    fn pick(&mut self, ctx: &egui::Context, id: &'static str) {
+        if let Some(open) = self.open {
+            self.close(ctx);
+            self.picked = Some((open, id, ctx.cumulative_frame_nr() + PICK_DELAY));
+        }
+    }
+
+    /// The picked entry, once its frame has come (and a repaint until then).
+    fn due(&mut self, ctx: &egui::Context) -> Option<(OpenMenu, &'static str)> {
+        let (open, id, frame) = self.picked?;
+        if frame > ctx.cumulative_frame_nr() {
+            ctx.request_repaint();
+            return None;
+        }
+        self.picked = None;
+        Some((open, id))
+    }
+
     fn open(&mut self, ctx: &egui::Context, which: OpenMenu) {
         if self.open == Some(which) {
             return;
@@ -667,23 +698,40 @@ impl Shell {
             .is_some_and(|p| !self.menus.state.contains(p) && !anchor.contains(p));
         // Escape closes every drop menu, its submenu with it.
         let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if let Some(OpenMenu::DocumentContext { doc, previous, .. }) = self.menus.open {
-            // DocumentContextMenu: an entry closes the menu and runs; a `pointerdown` outside it
-            // or Escape closes it.
-            let state = self.menus.state;
-            if let Some(MenuPick::Action(id)) = pick {
-                self.menus.close(&ctx);
-                self.document_context_pick(&ctx, app, settings, doc, previous, id);
-            } else if escape || press.flatten().is_some_and(|p| !state.contains(p)) {
-                self.menus.close(&ctx);
+        match (pick, self.menus.open) {
+            // DropEntry.onPress (DocumentContextMenu's entries too): close, then run.
+            (Some(MenuPick::Action(id)), _) => self.menus.pick(&ctx, id),
+            (Some(MenuPick::Submenu), _) => {}
+            // DocumentContextMenu: a `pointerdown` outside it or Escape closes it.
+            (None, Some(OpenMenu::DocumentContext { .. })) => {
+                let state = self.menus.state;
+                if escape || press.flatten().is_some_and(|p| !state.contains(p)) {
+                    self.menus.close(&ctx);
+                }
             }
-            self.menus.opened_now = false;
-            return;
+            (None, _) if escape || (outside && !self.menus.opened_now) => self.menus.close(&ctx),
+            (None, _) => {}
         }
-        match pick {
-            // DropEntry.onPress: close the owner, then run the command.
-            Some(MenuPick::Action(id)) if self.menus.open == Some(OpenMenu::Palette) => {
-                self.menus.close(&ctx);
+        self.menus.opened_now = false;
+        if let Some((open, id)) = self.menus.due(&ctx) {
+            self.run_pick(&ctx, app, settings, open, id);
+        }
+    }
+
+    /// Runs entry `id`, picked from menu `open` (closed by now).
+    fn run_pick(
+        &mut self,
+        ctx: &egui::Context,
+        app: &mut AppWorkspace,
+        settings: &mut AppSettings,
+        open: OpenMenu,
+        id: &'static str,
+    ) {
+        match open {
+            OpenMenu::DocumentContext { doc, previous, .. } => {
+                self.document_context_pick(ctx, app, settings, doc, previous, id)
+            }
+            OpenMenu::Palette => {
                 #[cfg(target_arch = "wasm32")]
                 if id == "colors.palette.openFolder" {
                     crate::platform::files::pick_palette_folder(
@@ -694,21 +742,13 @@ impl Shell {
                 }
                 self.forms.colors.palette_pick(id);
             }
-            Some(MenuPick::Action(id)) => {
-                let chooser = self.menus.open == Some(OpenMenu::ToolChooser);
-                self.menus.close(&ctx);
-                match pdn_core::tool::types::ToolType::from_id(id) {
-                    // ToolSelector's entries: `setSelectedId` -> `setActiveToolFromType`, with or
-                    // without a document (not `runPerformAction`).
-                    Some(tool) if chooser => app.set_active_tool_from_type(tool),
-                    _ => self.run_action(&ctx, app, settings, id),
-                }
-            }
-            Some(MenuPick::Submenu) => {}
-            None if escape || (outside && !self.menus.opened_now) => self.menus.close(&ctx),
-            None => {}
+            _ => match pdn_core::tool::types::ToolType::from_id(id) {
+                // ToolSelector's entries: `setSelectedId` -> `setActiveToolFromType`, with or
+                // without a document (not `runPerformAction`).
+                Some(tool) if open == OpenMenu::ToolChooser => app.set_active_tool_from_type(tool),
+                _ => self.run_action(ctx, app, settings, id),
+            },
         }
-        self.menus.opened_now = false;
     }
 
     /// The document strip's request (DocumentStrip's ScrollList callbacks, DocumentItem's close
@@ -926,6 +966,19 @@ impl Shell {
                             dialog.attach_file_source(self.file_source.clone());
                             dialog.acquire_external(app, ctx, Some(&mut self.clipboard));
                         }));
+                }
+            }
+            // A settings-free Paint.NET plug-in effect: its defaults, rendered as its final.
+            UiRequest::EffectFinal(id) => {
+                let session = pdn_core::effect::find(&id)
+                    .and_then(|def| pdn_core::effect::session::EffectSession::begin(app, def));
+                if let Some(s) = session {
+                    let values = s.defaults();
+                    let mut dialog =
+                        crate::dialogs::effect_config::EffectConfigDialog::final_only(s, values);
+                    dialog.attach_file_source(self.file_source.clone());
+                    dialog.acquire_external(app, ctx, Some(&mut self.clipboard));
+                    self.dialogs.push(Box::new(dialog));
                 }
             }
             UiRequest::RepeatSeam | UiRequest::RepeatExternal | UiRequest::RepeatFonts => {
@@ -1813,6 +1866,44 @@ mod tests {
             assert_eq!(is_text(&h.state().app, 0), text_kept, "{button}");
         }
         assert_eq!(names(&h), [RASTERIZE_NAME, "Invert Colors"]);
+    }
+
+    /// A picked entry closes the whole menu in its own frame; its command (here File ▸ New's
+    /// dialog) runs only after a frame without the menu, so a blocking native dialog never opens
+    /// over a menu still on screen.
+    #[test]
+    fn a_picked_entry_closes_the_menu_before_its_command_runs() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_eframe(|cc| {
+                crate::PaintApp::new_with_policy(cc, pdn_core::fonts::FontPolicy::Bundled)
+            });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        h.state_mut().shell.menus.open(&ctx, OpenMenu::Main(0));
+        h.run_steps(1);
+        let popup = h.state().shell.menus.state.popup.expect("File menu shown");
+        // File ▸ New, the first entry.
+        let pos = popup.min + Vec2::new(40.0, 12.0);
+        h.event(egui::Event::PointerMoved(pos));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run_steps(1);
+        }
+        let shell = &h.state().shell;
+        assert_eq!(shell.menus.open, None);
+        assert_eq!(shell.menus.state, DropMenuState::default());
+        assert!(!shell.dialogs.is_open());
+        h.run_steps(1);
+        assert!(!h.state().shell.dialogs.is_open(), "the menu-less frame");
+        h.run_steps(1);
+        assert!(h.state().shell.dialogs.is_open());
     }
 }
 

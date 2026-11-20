@@ -254,6 +254,7 @@ impl EffectSession {
         )
         .ok()?;
         Some(PluginSlice {
+            id: self.def.id,
             job: Some(job),
             source: self.source.clone(),
             mask: self.mask.clone(),
@@ -381,6 +382,8 @@ pub enum PluginStatus {
 /// to clip the finished pixels to the selection, exactly as `apply` does for `EffectKind::Plugin`.
 #[cfg(target_arch = "wasm32")]
 pub struct PluginSlice {
+    /// The effect's id, for the notice a failure gives.
+    id: &'static str,
     job: Option<super::dotnet::PluginJob>,
     source: std::sync::Arc<ImageData>,
     mask: std::sync::Arc<Option<Mask>>,
@@ -388,6 +391,12 @@ pub struct PluginSlice {
 
 #[cfg(target_arch = "wasm32")]
 impl PluginSlice {
+    fn failed(&self, reason: &impl std::fmt::Display) -> PluginStatus {
+        let name = super::dotnet::name_of(self.id).unwrap_or(self.id);
+        let notice = super::dotnet::failed(name, &reason.to_string());
+        PluginStatus::Complete(self.source.as_ref().clone(), Some(notice))
+    }
+
     /// Total strips and strips rendered so far, for the progress bar.
     pub fn progress(&self) -> (usize, usize) {
         self.job.as_ref().map_or((0, 0), |j| (j.done(), j.strips()))
@@ -424,11 +433,12 @@ impl PluginSlice {
                         }
                         PluginStatus::Complete(out, None)
                     }
-                    // A render failure leaves the source unchanged, as the synchronous path does.
-                    Err(_) => PluginStatus::Complete(self.source.as_ref().clone(), None),
+                    // A render failure leaves the source unchanged and says why, as the synchronous path does (an
+                    // outside request it stopped at rides in the reason).
+                    Err(e) => self.failed(&e),
                 }
             }
-            Err(_) => PluginStatus::Complete(self.source.as_ref().clone(), None),
+            Err(e) => self.failed(&e),
         }
     }
 }

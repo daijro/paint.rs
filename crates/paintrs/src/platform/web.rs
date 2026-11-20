@@ -19,8 +19,8 @@ fn image_from_parts(width: u32, height: u32, data: Vec<u8>) -> Result<ImageData,
     })
 }
 
-/// Straight RGBA8 after browser decoding or the lazily loaded bundled decoder.
-/// This does not add file-open UI or change the existing HEIC/JXR save refusals.
+/// Straight RGBA8 after browser decoding or the lazily loaded bundled decoder (AVIF and HEIC;
+/// JPEG XR decodes in Rust).
 #[cfg(target_arch = "wasm32")]
 pub async fn decode_async(format: &str, bytes: &[u8]) -> Result<ImageData, CodecError> {
     use pdn_core::io::codecs::{MAX_DECODE_BYTES, MAX_DECODE_SIDE};

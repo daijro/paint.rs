@@ -2,6 +2,8 @@
   <PropertyGroup>
     <AssemblyName>PaintDotNet.Framework</AssemblyName>
     <NoWarn>$(NoWarn);CS0436</NoWarn>
+    <!-- Direct2DControl blits its rendered bitmap into the paint Graphics through a pixel buffer. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Primitives/Primitives.csproj" />
@@ -9,5 +11,7 @@
     <ProjectReference Include="../Windows/Windows.csproj" />
     <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
     <ProjectReference Include="../WindowsFramework/WindowsFramework.csproj" />
+    <!-- Direct2DControl is a self-painting WinForms control (its subclass is CodeLab's editor canvas). -->
+    <ProjectReference Include="../WindowsForms/WindowsForms.csproj" />
   </ItemGroup>
 </Project>

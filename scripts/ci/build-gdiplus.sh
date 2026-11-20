@@ -19,10 +19,9 @@ jpeg_version=3.1.4.1
 jpeg_sha256=ecae8008e2cc9ade2f2c1bb9d5e6d4fb73e7c433866a056bd82980741571a022
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 cd -- "$1"
-if command -v shasum >/dev/null; then sum='shasum -a 256'; else sum=sha256sum; fi
 
-curl --retry 3 -sSfLo libgdiplus.tar.gz "https://github.com/mono/libgdiplus/archive/$commit.tar.gz"
-echo "$sha256  libgdiplus.tar.gz" | $sum -c
+sh "$here/fetch.sh" libgdiplus.tar.gz "$sha256" "https://github.com/mono/libgdiplus/archive/$commit.tar.gz" \
+    "https://codeload.github.com/mono/libgdiplus/tar.gz/$commit"
 tar -xzf libgdiplus.tar.gz
 # libgdiplus.patch, what plug-ins need of GDI+ that 6.1 does otherwise:
 # - GraphicsPath.Widen left the path as it was, so a plug-in that outlines a selection by widening it (TechnoRobbo's
@@ -34,8 +33,9 @@ tar -xzf libgdiplus.tar.gz
 patch -d "libgdiplus-$commit" -p1 < "$here/libgdiplus.patch"
 # giflib (MIT) as a static library, linked into libgdiplus so GIFs load (some plugins keep their images
 # as GIF resources) with no runtime dependency.
-curl --retry 3 -sSfLo giflib.tar.gz "https://downloads.sourceforge.net/project/giflib/giflib-6.x/giflib-$giflib_version.tar.gz"
-echo "$giflib_sha256  giflib.tar.gz" | $sum -c
+sh "$here/fetch.sh" giflib.tar.gz "$giflib_sha256" \
+    "https://downloads.sourceforge.net/project/giflib/giflib-6.x/giflib-$giflib_version.tar.gz" \
+    "https://ftp.osuosl.org/pub/blfs/conglomeration/giflib/giflib-$giflib_version.tar.gz"
 tar -xzf giflib.tar.gz
 make -C "giflib-$giflib_version" libgif.a
 gif=$PWD/giflib
@@ -46,8 +46,9 @@ cp "giflib-$giflib_version/libgif.a" "$gif/lib/"
 # through GDI+ (the Paint Shop Pro FileType's thumbnail, Optimized JPEG) with no runtime dependency: the system
 # libjpeg's soname differs between distributions (Fedora's libjpeg.so.62, Debian's .so.8). Its SIMD code is left
 # out, so the build needs no assembler.
-curl --retry 3 -sSfLo libjpeg-turbo.tar.gz "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$jpeg_version/libjpeg-turbo-$jpeg_version.tar.gz"
-echo "$jpeg_sha256  libjpeg-turbo.tar.gz" | $sum -c
+sh "$here/fetch.sh" libjpeg-turbo.tar.gz "$jpeg_sha256" \
+    "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$jpeg_version/libjpeg-turbo-$jpeg_version.tar.gz" \
+    "https://ftp.osuosl.org/pub/blfs/conglomeration/libjpeg-turbo/libjpeg-turbo-$jpeg_version.tar.gz"
 tar -xzf libjpeg-turbo.tar.gz
 jpeg=$PWD/libjpeg
 cmake -S "libjpeg-turbo-$jpeg_version" -B libjpeg-build -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=OFF -DENABLE_STATIC=ON \
@@ -82,8 +83,9 @@ esac
   printf '\ngiflib %s, linked into libgdiplus:\n' "$giflib_version"; cat "giflib-$giflib_version/COPYING"
   printf '\nlibjpeg-turbo %s, linked into libgdiplus:\n' "$jpeg_version"; cat "libjpeg-turbo-$jpeg_version/LICENSE.md" "libjpeg-turbo-$jpeg_version/README.ijg"; } > gdiplus-notice
 
-curl --retry 3 -sSfLo sdc.nupkg "https://api.nuget.org/v3-flatcontainer/system.drawing.common/$sdc_version/system.drawing.common.$sdc_version.nupkg"
-echo "$sdc_sha256  sdc.nupkg" | $sum -c
+sh "$here/fetch.sh" sdc.nupkg "$sdc_sha256" \
+    "https://api.nuget.org/v3-flatcontainer/system.drawing.common/$sdc_version/system.drawing.common.$sdc_version.nupkg" \
+    "https://www.nuget.org/api/v2/package/System.Drawing.Common/$sdc_version"
 unzip -q -o -j sdc.nupkg runtimes/unix/lib/net6.0/System.Drawing.Common.dll -d .
 { printf '\nSystem.Drawing.Common %s (.NET):\n' "$sdc_version"; unzip -p sdc.nupkg LICENSE.TXT; } >> gdiplus-notice
 grep -q 'Permission is hereby granted' gdiplus-notice

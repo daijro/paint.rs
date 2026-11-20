@@ -54,7 +54,7 @@ namespace System.Drawing.Imaging
         public float Matrix44 { get => m[4, 4]; set => m[4, 4] = value; }
 
         /// The matrix applied to straight BGRA bytes in place.
-        internal void Apply(byte[] bgra)
+        internal void Apply(Span<byte> bgra)
         {
             Span<float> v = stackalloc float[4];
             for (int p = 0; p < bgra.Length; p += 4)
@@ -92,6 +92,48 @@ namespace System.Drawing.Imaging
             var copy = new Bitmap(bmp);
             Matrix.Apply(copy.bgra);
             return copy;
+        }
+    }
+}
+
+// GDI+'s bitmap effects (Bitmap.ApplyEffect). The colour matrix one is here, as ImageAttributes' matrix applies it;
+// the others (blur, sharpen, curves, lookup tables, red-eye) stay stubs.
+namespace System.Drawing.Imaging.Effects
+{
+    public abstract partial class Effect
+    {
+        public void Dispose() { Dispose(true); GC.SuppressFinalize(this); }
+        protected virtual void Dispose(bool disposing) { }
+
+        /// The effect over `area` of a straight BGRA image `width` pixels wide, in place.
+        internal virtual void Apply(byte[] bgra, int width, Rectangle area)
+            => throw Unsupported.Member(GetType().FullName + " in Bitmap.ApplyEffect");
+    }
+
+    public partial class ColorMatrixEffect
+    {
+        private readonly ColorMatrix matrix = null!;
+        public ColorMatrixEffect(ColorMatrix matrix) : base() => this.matrix = matrix;
+        public ColorMatrix Matrix => matrix;
+
+        internal override void Apply(byte[] bgra, int width, Rectangle area)
+        {
+            for (int y = area.Top; y < area.Bottom; y++)
+                matrix.Apply(bgra.AsSpan((y * width + area.Left) * 4, area.Width * 4));
+        }
+    }
+}
+
+namespace System.Drawing
+{
+    public sealed partial class Bitmap
+    {
+        /// The effect over `area` (the whole bitmap when it is empty), clipped to the bitmap.
+        public void ApplyEffect(Imaging.Effects.Effect effect, Rectangle area = default)
+        {
+            var bounds = new Rectangle(0, 0, Width, Height);
+            area = area.IsEmpty ? bounds : Rectangle.Intersect(area, bounds);
+            if (area.Width > 0 && area.Height > 0) effect.Apply(bgra, width, area);
         }
     }
 }

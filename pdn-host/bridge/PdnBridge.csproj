@@ -25,6 +25,7 @@
     <ProjectReference Include="../paintnet/assemblies/Primitives/Primitives.csproj" />
     <ProjectReference Include="../paintnet/assemblies/Fundamentals/Fundamentals.csproj" />
     <ProjectReference Include="../paintnet/assemblies/SystemLayer/SystemLayer.csproj" />
+    <ProjectReference Include="../paintnet/assemblies/PaintDotNetApp/PaintDotNetApp.csproj" />
     <ProjectReference Include="../paintnet/assemblies/ComponentModel/ComponentModel.csproj" />
     <ProjectReference Include="../paintnet/assemblies/PropertySystem/PropertySystem.csproj" />
     <ProjectReference Include="../paintnet/assemblies/Core/Core.csproj" />
@@ -40,6 +41,8 @@
     <ProjectReference Include="../paintnet/assemblies/Data/Data.csproj" Aliases="pdndata" />
     <ProjectReference Include="../paintnet/assemblies/WindowsForms/WindowsForms.csproj" />
     <ProjectReference Include="../paintnet/assemblies/WindowsFormsPrimitives/WindowsFormsPrimitives.csproj" />
+    <!-- System.Windows.Forms.Design designer base types a plug-in's control references (CodeLab's ScintillaDesigner). -->
+    <ProjectReference Include="../paintnet/assemblies/WindowsFormsDesign/WindowsFormsDesign.csproj" />
     <!-- Microsoft's MIT chart control over that stand-in, for plugins that draw a Chart (BoltBait's
          Chart or Graph). -->
     <ProjectReference Include="../paintnet/assemblies/WindowsFormsDataVisualization/WindowsFormsDataVisualization.csproj" />
@@ -47,6 +50,11 @@
          own them (PaintDotNet.Effects / PaintDotNet.Base -> Effects.Core / PropertySystem). -->
     <ProjectReference Include="../paintnet/assemblies/Effects/Effects.csproj" />
     <ProjectReference Include="../paintnet/assemblies/Base/Base.csproj" />
+    <!-- Inert WinRT.Runtime / Windows SDK projection stand-ins so CodeLab 6.x's editor UI (built on the Windows
+         Runtime projection) type-loads in the host; there is no Windows Runtime here. -->
+    <ProjectReference Include="../paintnet/assemblies/WinRTRuntime/WinRTRuntime.csproj" />
+    <!-- System.Media's sounds, which .NET has only on the Windows desktop: played as silence (eer's StickMan). -->
+    <ProjectReference Include="../paintnet/assemblies/WindowsExtensions/WindowsExtensions.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -68,6 +76,13 @@
          context (PluginHost enters it), so it reaches the bridge's copies. -->
     <PackageReference Include="System.Resources.Extensions" Version="11.0.0" />
     <PackageReference Include="System.Runtime.Serialization.Formatters" Version="11.0.0" />
+    <!-- A plug-in's user.config (ApplicationSettingsBase) needs System.Configuration.ConfigurationManager, which is
+         not in the shared framework. The browser host fetches it on demand; the desktop ships it (with its notice). -->
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="11.0.0" />
+    <!-- Mono.Cecil (MIT) rewrites CodeLab's embedded Scintilla to the managed HostScintilla as the plug-in loads
+         (ScintillaRewrite.cs), so paint.rs draws the editor and no native Scintilla is loaded. Bundled on the desktop
+         (unlike the browser, which fetches it on demand). -->
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
   <!-- Off Windows, publish.sh swaps in System.Drawing.Common 6.0's unix build over libgdiplus
        (pdn-host/README.md "GDI+"), which refuses to run without this switch. Windows ignores it. -->

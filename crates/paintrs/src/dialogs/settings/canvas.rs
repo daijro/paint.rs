@@ -647,6 +647,8 @@ pub(super) fn show(e: &mut EntryUi) {
             }
         });
     }
+    // The wheel over the slider steps it as its arrow keys do.
+    percent = (percent + 5. * inputs::value_wheel(e.ui, response.id, range, None)).clamp(25., 100.);
     let mut value = percent / 100.;
     inputs::number_input(
         e.ui,

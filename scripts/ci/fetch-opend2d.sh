@@ -10,15 +10,14 @@
 set -eu
 [ "$#" -eq 1 ] || { echo 'usage: fetch-opend2d.sh <work dir>' >&2; exit 2; }
 release=v0.1.0-beta.1   # the OpenD2D release the snapshot is attached to
-commit=f699e0378c30988bb31d65e5c771a464a6d7fe4b
-sha256=e28186161f8c377d8cd4a7c0230c4143366f069d3bae2096801af9e8176178ca
+commit=92aa6f6c313cac6aa7c716527d2d438ac89250bf
+sha256=c02bfdc576eb463bb70432ad86beef93e9dcc289c7f73c057b53f224d48974ef
 url="${OPEND2D_SNAPSHOT_URL:-https://github.com/daijro/opend2d/releases/download/$release/opend2d-$commit.tar.gz}"
 dest="$(cd "$(dirname "$0")/../.." && pwd)/../../../opend2d"
 [ ! -e "$dest" ] || { echo "error: $dest already exists; not replacing it" >&2; exit 1; }
+here=$(cd -- "$(dirname -- "$0")" && pwd)
 cd -- "$1"
-curl --retry 3 -sSfLo opend2d.tar.gz "$url"
-if command -v shasum >/dev/null; then sum='shasum -a 256'; else sum=sha256sum; fi
-echo "$sha256  opend2d.tar.gz" | $sum -c
+sh "$here/fetch.sh" opend2d.tar.gz "$sha256" "$url"
 mkdir -p "$dest" && dest="$(cd "$dest" && pwd)"
 tar -xzf opend2d.tar.gz -C "$dest" --strip-components=1
 echo "opend2d $commit -> $dest"

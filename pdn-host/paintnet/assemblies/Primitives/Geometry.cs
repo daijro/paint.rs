@@ -156,6 +156,7 @@ public struct Matrix3x2Float
     public void Rotate(float angle) => this *= Rotation(angle);
     public void Translate(float dx, float dy) => this *= Translation(dx, dy);
     public void Scale(float sx, float sy) => this *= Scaling(sx, sy);
+    public void ScaleAt(float sx, float sy, float cx, float cy) => this *= ScalingAt(sx, sy, cx, cy);
 
     public static Matrix3x2Float operator *(in Matrix3x2Float a, in Matrix3x2Float b) => new(
         a.M11 * b.M11 + a.M12 * b.M21, a.M11 * b.M12 + a.M12 * b.M22,

@@ -197,6 +197,29 @@ fn opaque_path_keys(rgba: &[u8]) -> Vec<u32> {
     }
 }
 
+/// Paint.NET's Median Cut: WIC's palette from a bitmap (`IWICPalette::InitializeFromBitmap`), here
+/// OpenD2D's byte-exact port. WIC cuts the pixels' RGB (its 24bpp copy drops alpha) to
+/// `max_colors` colours, or to one fewer with #00000000 appended when `transparent`.
+// ponytail: an image whose 24bpp copy passes 4 GiB, where WIC overflows and Paint.NET retries on
+// nearest-neighbour shrunk copies, is cut whole here.
+pub fn median_cut_palette(rgba: &[u8], max_colors: usize, transparent: bool) -> Vec<Px> {
+    let bgr: Vec<u8> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, _]| [b, g, r])
+        .collect();
+    let mut palette: Vec<Px> =
+        d2d::wic::quantize::median_cut(&bgr, max_colors - transparent as usize)
+            .into_iter()
+            .map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255])
+            .collect();
+    if transparent {
+        palette.push([0; 4]);
+    }
+    palette
+}
+
 /// §2.9 steps 1-4. `max_colors` is K (callers reserving a transparent slot pass max - 1).
 pub fn octree_palette(rgba: &[u8], max_colors: usize) -> Vec<[u8; 3]> {
     octree_palette_in_chunks(rgba, max_colors, 1 << 24)

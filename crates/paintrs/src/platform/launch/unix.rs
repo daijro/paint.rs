@@ -85,5 +85,11 @@ pub fn remove_stale(dir: &Path) -> io::Result<()> {
     }
 }
 pub fn secure_listener(options: ListenerOptions<'_>) -> io::Result<ListenerOptions<'_>> {
+    // macOS cannot give a socket its mode before bind (fchmod fails there, and the listener with
+    // it), so every launch ran standalone (#8). Its socket keeps the umask's mode: the 0700
+    // private directory it sits in already keeps other users from reaching it.
+    if cfg!(target_os = "macos") {
+        return Ok(options);
+    }
     Ok(options.mode(0o600))
 }

@@ -144,9 +144,10 @@ fn magic(bytes: &[u8]) -> Option<&'static str> {
 /// Decodes one image to straight RGBA8: frame 0, EXIF orientation applied (Paint.NET's
 /// flip-rotator, paintdotjs `autoOrient`); metadata is not carried, so the tag is gone too.
 /// The WIC types sniff the content (§2.1): a PNG/JPEG/GIF/BMP/TIFF file whose bytes are another
-/// of those formats, or WebP, decodes as what it is. AVIF, HEIC and JPEG XR decode natively only
-/// (`native`; the web build gets them from the browser, Task 48w); `.pdn` is layered
-/// (`io::pdn::decode`), and so is PSD (`io::psd::decode`), which comes here as one picture.
+/// of those formats, or WebP, decodes as what it is. AVIF and HEIC decode natively only (`native`;
+/// the web build gets them from the browser, Task 48w); JPEG XR decodes everywhere (`jxr`).
+/// `.pdn` is layered (`io::pdn::decode`), and so is PSD (`io::psd::decode`), which comes here as
+/// one picture.
 pub fn decode(format: &str, bytes: &[u8]) -> Result<Decoded, CodecError> {
     decode_within(format, bytes, MAX_DECODE_BYTES)
 }
@@ -195,10 +196,14 @@ pub(crate) fn decode_within(
             });
         }
         "jxl" => return decode_jxl(bytes).map(|image| Decoded { image, dpi: None }),
-        #[cfg(not(target_arch = "wasm32"))]
-        "avif" | "heic" | "jxr" => {
-            let (image, dpi) = native::decode(format, bytes, budget)?;
+        "jxr" => {
+            let (image, dpi) = guarded(format, || jxr::decode(bytes, budget))?;
             return Ok(Decoded { image, dpi });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        "avif" | "heic" => {
+            let image = native::decode(format, bytes, budget)?;
+            return Ok(Decoded { image, dpi: None });
         }
         _ => return Err(unsupported(format)),
     };
@@ -501,13 +506,25 @@ fn decode_dds(bytes: &[u8]) -> Result<ImageData, CodecError> {
     })
 }
 
+mod jxr;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 
-/// Bounded JPEG XR metadata, shared with the async browser decoder.
-pub fn jxr_dpi(bytes: &[u8]) -> Option<f64> {
-    jxr_container(bytes)?.dpi
+/// A decoder crate's picture: a panic inside it (a hostile file must not take the app down) is a
+/// corrupt file, and so is a buffer that does not match its size.
+fn guarded(
+    format: &str,
+    decode: impl FnOnce() -> Result<(ImageData, Option<f64>), CodecError>,
+) -> Result<(ImageData, Option<f64>), CodecError> {
+    let corrupt = || invalid(format!("corrupt {format} file"));
+    let (image, dpi) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode))
+        .unwrap_or_else(|_| Err(corrupt()))?;
+    if image.data.len() as u64 != image.width as u64 * image.height as u64 * 4 {
+        return Err(corrupt());
+    }
+    Ok((image, dpi))
 }
+
 /// The container fields of a JPEG XR file (T.832 Annex A) that `jxr` needs.
 struct JxrContainer {
     guid: Option<[u8; 16]>,
@@ -519,7 +536,6 @@ struct JxrContainer {
     dpi: Option<f64>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl JxrContainer {
     fn plane(bytes: &[u8], (at, len): (usize, usize)) -> &[u8] {
         let rest = &bytes[at.min(bytes.len())..];

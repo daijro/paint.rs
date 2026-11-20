@@ -126,6 +126,15 @@ public abstract class ClassicEffectBase : PaintDotNet.ComponentModel.RefTrackedO
     protected ClassicEffectBase(string name, Image? image, string? submenuName, EffectFlags flags)
         : this(name, image, submenuName, new EffectOptions { Flags = flags }) { }
 
+    // Paint.NET 2.x/3.x classic ctor: the fourth argument is "effect is configurable" (it owns a
+    // config dialog). Render-neutral metadata; map it to the Configurable flag.
+    protected ClassicEffectBase(string name, Image? image, string? submenuName, bool configurable)
+        : this(name, image, submenuName, new EffectOptions { Flags = configurable ? EffectFlags.Configurable : EffectFlags.None }) { }
+
+    // Paint.NET classic ctor without a submenu name.
+    protected ClassicEffectBase(string name, Image? image, EffectFlags flags)
+        : this(name, image, null, new EffectOptions { Flags = flags }) { }
+
     protected sealed override void Dispose(bool disposing) => OnDispose(disposing);
 
     protected virtual void OnDispose(bool disposing) { }
@@ -135,11 +144,28 @@ public abstract class ClassicEffectBase : PaintDotNet.ComponentModel.RefTrackedO
 /// render/set-render-info virtual slots that the typed layer seals.
 public abstract class Effect : ClassicEffectBase
 {
+    /// Whether the effect declares the given flags (Options.Flags), as Paint.NET's Effect.CheckForEffectFlags does.
+    public bool CheckForEffectFlags(EffectFlags flags) => (Options.Flags & flags) == flags;
+
+    /// The effect's category (its [EffectCategory] attribute, else Effect), as Paint.NET groups effects vs adjustments.
+    public EffectCategory Category => Attribute.GetCustomAttribute(GetType(), typeof(EffectCategoryAttribute)) is EffectCategoryAttribute a ? a.Category : EffectCategory.Effect;
+
     protected Effect(string name, Image? image, string? submenuName, EffectOptions options)
         : base(name, image, submenuName, options) { }
 
     protected Effect(string name, Image? image, string? submenuName, EffectFlags flags)
         : base(name, image, submenuName, flags) { }
+
+    protected Effect(string name, Image? image, string? submenuName, bool configurable)
+        : base(name, image, submenuName, configurable) { }
+
+    protected Effect(string name, Image? image, EffectFlags flags)
+        : base(name, image, flags) { }
+
+    /// Paint.NET 3's two-argument form, which code a plug-in compiles while it runs still uses (CurtisBlack's
+    /// Equations): no flags.
+    protected Effect(string name, Image? image)
+        : base(name, image, EffectFlags.None) { }
 
     public void SetRenderInfo(EffectConfigToken? newToken, RenderArgs dstArgs, RenderArgs srcArgs)
         => OnSetRenderInfo(newToken, dstArgs, srcArgs);
@@ -147,6 +173,10 @@ public abstract class Effect : ClassicEffectBase
     protected virtual void OnSetRenderInfo(EffectConfigToken? newToken, RenderArgs dstArgs, RenderArgs srcArgs) { }
 
     public abstract void Render(EffectConfigToken? token, RenderArgs dstArgs, RenderArgs srcArgs, Rectangle[] rois, int startIndex, int length);
+
+    /// Render every ROI (the convenience overload classic plug-ins call when they drive a built-in or sub-effect).
+    public void Render(EffectConfigToken? token, RenderArgs dstArgs, RenderArgs srcArgs, Rectangle[] rois)
+        => Render(token, dstArgs, srcArgs, rois, 0, rois.Length);
 
     /// The plugin's own settings dialog, for an effect that has one (none by default).
     public virtual EffectConfigDialog? CreateConfigDialog() => null;
@@ -169,6 +199,12 @@ public abstract class Effect<TToken> : Effect where TToken : EffectConfigToken
 
     protected Effect(string name, Image? image, string? submenuName, EffectFlags flags)
         : base(name, image, submenuName, flags) { }
+
+    protected Effect(string name, Image? image, string? submenuName, bool configurable)
+        : base(name, image, submenuName, configurable) { }
+
+    protected Effect(string name, Image? image, EffectFlags flags)
+        : base(name, image, flags) { }
 
     protected sealed override void OnSetRenderInfo(EffectConfigToken? newToken, RenderArgs dstArgs, RenderArgs srcArgs)
     {
@@ -194,6 +230,13 @@ public abstract class Effect<TToken> : Effect where TToken : EffectConfigToken
 
 /// Classic property-driven effect. Only the headless-relevant members are kept; the IndirectUI
 /// description (OnCreateConfigUI) is built so the host can label its own dialog.
+/// PDN's internal base for its own property-based effects; a few classic plug-ins (Simon Brown's Bullet) name it.
+public abstract class InternalPropertyBasedEffect : PropertyBasedEffect
+{
+    protected InternalPropertyBasedEffect(string name, Image? image, string? submenuName, EffectFlags flags)
+        : base(name, image, submenuName, flags) { }
+}
+
 public abstract class PropertyBasedEffect : Effect<PropertyBasedEffectConfigToken>
 {
     protected PropertyBasedEffect(string name, Image? image, string? submenuName, EffectOptions options)

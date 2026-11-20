@@ -98,5 +98,11 @@ namespace PaintDotNet.Diagnostics
             => value >= 0 ? validation : Fail(validation, new ArgumentOutOfRangeException(paramName, value, "must not be negative"));
         public static Validation? IsPositive(this Validation? validation, double value, string paramName)
             => value > 0 ? validation : Fail(validation, new ArgumentOutOfRangeException(paramName, value, "must be positive"));
+
+        // CurtisBlack.Common binds these. Real bounds check, returns the validation for chaining.
+        public static Validation? IsIndexInBounds<T>(this Validation? validation, System.Collections.Generic.IList<T> list, int index, string paramName)
+            => list != null && index >= 0 && index < list.Count ? validation : Fail(validation, new ArgumentOutOfRangeException(paramName, index, "index out of range"));
+        public static Validation? IsIndexInBounds<T>(this Validation? validation, T[] array, int index, string paramName)
+            => array != null && index >= 0 && index < array.Length ? validation : Fail(validation, new ArgumentOutOfRangeException(paramName, index, "index out of range"));
     }
 }

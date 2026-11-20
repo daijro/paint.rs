@@ -10,5 +10,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../WindowsBase/WindowsBase.csproj" />
+    <!-- WPF-Media (WpfMediaRender.cs) renders through the host Direct2D/DirectWrite reached via WindowsCore.
+         WindowsCore pulls the host's PaintDotNet.* and System.Windows.Forms in transitively; publish.sh strips
+         those from plugin-shims, since the plugin load context resolves them to the host's own copies. A second
+         System.Windows.Forms in plugin-shims would split assembly identity and crash a WinForms/GDI+ paint. -->
+    <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
   </ItemGroup>
 </Project>

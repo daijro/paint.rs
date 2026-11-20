@@ -78,12 +78,15 @@ pub struct DropMenuState {
     pub popup: Option<Rect>,
     /// The open submenu's border box as last shown.
     pub sub_popup: Option<Rect>,
+    /// A submenu open inside that submenu (Effects ▸ Plugins ▸ a submenu a plug-in declares), and its border box.
+    pub nested: Option<usize>,
+    pub nested_popup: Option<Rect>,
 }
 
 impl DropMenuState {
-    /// Whether `p` is on the popup or its open submenu.
+    /// Whether `p` is on the popup or one of its open submenus.
     pub fn contains(&self, p: Pos2) -> bool {
-        [self.popup, self.sub_popup]
+        [self.popup, self.sub_popup, self.nested_popup]
             .into_iter()
             .flatten()
             .any(|r| r.contains(p))
@@ -891,24 +894,54 @@ pub fn show_drop_menu(
     });
     state.submenu = submenu.map(|(i, ..)| i);
     let (main_shadow, sub_shadow) = shadow_ids(menu.owner);
+    let nested_shadow = Id::unique(("drop-menu-shadow", menu.owner, "nested"));
     let (pick, hovered, rects) = show_popup(ui, &popup, main_shadow, state.submenu, cx);
     let mut sub_pick = None;
+    let mut nested_shown = false;
     if let Some((i, key, entries)) = submenu {
         let mut sub = Popup::layout(&painter, cx, key, MenuStyle::EffectSubmenu, entries);
         sub.position_beside(rects[i], screen);
         state.sub_popup = Some(px::snap_rect(sub.rect, painter.pixels_per_point()));
-        let (p, ..) = show_popup(ui, &sub, sub_shadow, None, cx);
+        let nested = state.nested.and_then(|j| match &sub.rows.get(j)?.1 {
+            Row::Entry(v) if v.enabled => Some((j, v.id, v.submenu?)),
+            _ => None,
+        });
+        state.nested = nested.map(|(j, ..)| j);
+        let (p, sub_hovered, sub_rects) = show_popup(ui, &sub, sub_shadow, state.nested, cx);
         sub_pick = p;
+        if let Some((j, key, entries)) = nested {
+            let mut inner = Popup::layout(&painter, cx, key, MenuStyle::EffectSubmenu, entries);
+            inner.position_beside(sub_rects[j], screen);
+            state.nested_popup = Some(px::snap_rect(inner.rect, painter.pixels_per_point()));
+            let (p, ..) = show_popup(ui, &inner, nested_shadow, None, cx);
+            sub_pick = p.or(sub_pick);
+            nested_shown = true;
+        }
+        if let Some(j) = sub_hovered {
+            state.nested = match &sub.rows[j].1 {
+                Row::Entry(v) if v.submenu.is_some() && v.enabled => Some(j),
+                Row::Entry(v) if v.submenu.is_some() => state.nested,
+                _ => None,
+            };
+        }
     } else {
         state.sub_popup = None;
         shadow::forget(ui.ctx(), sub_shadow);
     }
+    if !nested_shown {
+        state.nested_popup = None;
+        shadow::forget(ui.ctx(), nested_shadow);
+    }
     if let Some(i) = hovered {
+        let was = state.submenu;
         state.submenu = match &popup.rows[i].1 {
             Row::Entry(v) if v.submenu.is_some() && v.enabled => Some(i),
             Row::Entry(v) if v.submenu.is_some() => state.submenu,
             _ => None,
         };
+        if state.submenu != was {
+            state.nested = None;
+        }
     }
     sub_pick.or(pick)
 }
@@ -926,6 +959,7 @@ pub fn forget(ctx: &egui::Context, owner: &'static str) {
     let (main, sub) = shadow_ids(owner);
     shadow::forget(ctx, main);
     shadow::forget(ctx, sub);
+    shadow::forget(ctx, Id::unique(("drop-menu-shadow", owner, "nested")));
 }
 
 /// `compareNames`: `localeCompare(..., {sensitivity: "base"})` ignoring a trailing "...".

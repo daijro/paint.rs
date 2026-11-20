@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Headless stand-in for System.Windows.Forms.Design (Windows-only, absent here): just the designer base types a
+       plug-in's control references at load. CodeLab's embedded ScintillaNET defines ScintillaDesigner : ControlDesigner.
+       Designers never run in the host; the types only need to resolve and be inert. Matches the WindowsForms stand-in. -->
+  <PropertyGroup>
+    <AssemblyName>System.Windows.Forms.Design</AssemblyName>
+    <RootNamespace>System.Windows.Forms.Design</RootNamespace>
+    <Version>10.0.0.0</Version>
+    <AssemblyVersion>10.0.0.0</AssemblyVersion>
+    <FileVersion>10.0.0.0</FileVersion>
+  </PropertyGroup>
+</Project>

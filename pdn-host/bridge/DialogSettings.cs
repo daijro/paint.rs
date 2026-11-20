@@ -37,21 +37,12 @@ internal static class DialogSettings
         public Func<JsonElement, bool>? Same;
         public Func<double>? Read;
         public bool IsTrackBar;
-        /// A curve's points (per channel, each point [x, y] from 0 to Max), its channels' names and colours, and, when
-        /// a choice swaps the curve's channels (Curves+'s mode), that choice's key and each of its values' channels.
-        public int[][][] Curve = [];
-        public string[] Channels = [], Colors = [];
-        public string? By;
-        public List<(string[] Names, string[] Colors, int[][][] Points)> Sets = [];
-        /// A displacement grid's size in cells, its moved nodes ([x, y, dx, dy] each, in cells), and the choices that
-        /// set its columns and rows (Grid Warp's grid size drop-downs), whose labels are the sizes.
-        public int Columns, Rows;
-        public float[][] Moved = [];
-        public string? ColumnsBy, RowsBy;
         /// Its label is a caption the window shows (not made from the control's name).
         public bool Named;
         /// Where its control sits in the window, to number settings that end up with the same name.
         public Point At;
+        /// The plug-in control a setting came from, when the paint.rs side needs it (a canvas reads its size).
+        public Control? Control;
     }
 
     /// The window's settings as paint.rs shows them, from a window `load` builds and loads: one window to find the
@@ -71,10 +62,6 @@ internal static class DialogSettings
             if (byKey.TryGetValue(gone, out Setting? g) && byKey.TryGetValue(kept, out Setting? k) && g.Named && !k.Named)
                 (k.Label, k.Named) = (g.Label, true);
         List<Setting> shown = all.Where(s => !linked.ContainsKey(s.Key)).ToList();
-        foreach (Setting curve in shown.Where(s => s.Type == "curve"))
-            ChannelsByChoice(load, shown, curve);
-        foreach (Setting grid in shown.Where(s => s.Type == "grid"))
-            GridSizeByChoice(load, shown, grid);
         return Finish(shown);
     }
 
@@ -84,9 +71,6 @@ internal static class DialogSettings
 
     private static List<Setting> Finish(List<Setting> shown)
     {
-        // Check boxes named for a curve's channels pick the ones a drag edits, which paint.rs's curve editor does.
-        shown.RemoveAll(s => s.Type == "bool" && shown.Any(c => c.Type == "curve"
-            && (c.Channels.Contains(s.Label) || c.Sets.Any(set => set.Names.Contains(s.Label)))));
         // Settings still sharing a name (a table's rows under one column header, swatches in one box) are numbered
         // in the window's reading order.
         foreach (var same in shown.GroupBy(s => s.Label).Where(g => g.Count() > 1))
@@ -105,12 +89,25 @@ internal static class DialogSettings
     {
         var changed = new List<(Setting, JsonElement)>();
         foreach (Setting s in Collect(root, false))
-            if (s.Type != "button" && props.TryGetProperty(s.Key, out JsonElement v) && s.Same?.Invoke(v) != true)
+            if (s.Type != "button" && props.TryGetProperty(s.Key, out JsonElement v) && !IsSame(s, v))
                 changed.Add((s, v));
         foreach ((Setting s, JsonElement v) in changed.Where(c => c.Item1.Type == "choice").Concat(changed.Where(c => c.Item1.Type != "choice")))
             try { s.Apply(v); }
             catch (Exception) { }   // a value the window refuses leaves it as it was
     }
+
+    // Whether `v` is what the setting shows already. A value it cannot read is not the same: Apply then tries it and
+    // leaves the setting as it was, and the settings after it are still applied.
+    private static bool IsSame(Setting s, JsonElement v)
+    {
+        try { return s.Same?.Invoke(v) == true; }
+        catch (Exception) { return false; }
+    }
+
+    // A whole number paint.rs sent, as a number or as its digits (a choice row the window gained after it opened
+    // comes back as a string).
+    private static int Whole(JsonElement v)
+        => v.ValueKind == JsonValueKind.String ? int.Parse(v.GetString()!, System.Globalization.CultureInfo.InvariantCulture) : v.GetInt32();
 
     /// Presses the button `key` of the loaded window `root`; false when it has none.
     public static bool Press(Control root, string key)
@@ -122,6 +119,22 @@ internal static class DialogSettings
 
     /// The loaded window's settings with the values it shows now (as their defaults).
     public static List<Setting> Current(Control root) => Collect(root, false);
+
+    /// The loaded window's current settings shaped exactly as the open-time schema (Of): each slider/spinner pair
+    /// collapsed to the one kept key (taking its partner's label), then repeated labels numbered. So paint.rs, re-
+    /// reading a live window, sees the same keys it got at open plus only the rows the window genuinely gained -- not
+    /// the partner keys Of had linked away (which raw Current still lists).
+    public static List<Setting> CurrentShaped(Control root)
+    {
+        List<Setting> all = Collect(root, false);
+        Dictionary<string, string> linked = Linked(all);
+        var byKey = all.ToDictionary(s => s.Key);
+        foreach ((string gone, string kept) in linked)
+            if (byKey.TryGetValue(gone, out Setting? g) && byKey.TryGetValue(kept, out Setting? k) && g.Named && !k.Named)
+                (k.Label, k.Named) = (g.Label, true);
+        List<Setting> shown = all.Where(s => !linked.ContainsKey(s.Key)).ToList();
+        return Finish(shown);
+    }
 
     /// The schema's properties for `settings` (docs/pdn-bridge.md "effect schema").
     public static void WriteProperties(Utf8JsonWriter jw, List<Setting> settings)
@@ -144,39 +157,14 @@ internal static class DialogSettings
                 case "bool": jw.WriteBoolean("default", s.Default != 0); break;
                 case "string": jw.WriteString("default", s.Text); jw.WriteNumber("maxLength", s.Max); break;
                 case "color": jw.WriteNumber("default", s.Color.ToArgb() & 0xFFFFFF); break;
+                case "canvas": DialogCanvas.Write(jw, s); break;
+                case "code": ScintillaBox.Write(jw, s); break;
+                case "file": jw.WriteString("filter", s.Text); break;
                 case "list":
                     jw.WriteNumber("default", s.Default);
                     jw.WriteStartArray("items");
                     foreach (string item in s.Choices) jw.WriteStringValue(item);
                     jw.WriteEndArray();
-                    break;
-                case "grid":
-                    jw.WriteNumber("columns", s.Columns);
-                    jw.WriteNumber("rows", s.Rows);
-                    jw.WritePropertyName("default");
-                    JsonSerializer.Serialize(jw, s.Moved);
-                    if (s.ColumnsBy is not null) jw.WriteString("columnsBy", s.ColumnsBy);
-                    if (s.RowsBy is not null) jw.WriteString("rowsBy", s.RowsBy);
-                    break;
-                case "curve":
-                    jw.WriteNumber("max", s.Max);
-                    jw.WritePropertyName("default");
-                    JsonSerializer.Serialize(jw, s.Curve);
-                    WriteChannels(jw, s.Channels, s.Colors);
-                    if (s.By is not null)
-                    {
-                        jw.WriteString("by", s.By);
-                        jw.WriteStartArray("sets");
-                        foreach ((string[] names, string[] colors, int[][][] points) in s.Sets)
-                        {
-                            jw.WriteStartObject();
-                            jw.WritePropertyName("default");
-                            JsonSerializer.Serialize(jw, points);
-                            WriteChannels(jw, names, colors);
-                            jw.WriteEndObject();
-                        }
-                        jw.WriteEndArray();
-                    }
                     break;
                 case "choice":
                     jw.WriteNumber("default", s.Default);
@@ -194,221 +182,6 @@ internal static class DialogSettings
             jw.WriteEndObject();
         }
         jw.WriteEndArray();
-    }
-
-    private static void WriteChannels(Utf8JsonWriter jw, string[] names, string[] colors)
-    {
-        jw.WriteStartArray("channels");
-        foreach (string n in names) jw.WriteStringValue(n);
-        jw.WriteEndArray();
-        jw.WriteStartArray("colors");
-        foreach (string c in colors) jw.WriteStringValue(c);
-        jw.WriteEndArray();
-    }
-
-    /// A curve whose channels change with a choice before it (Curves+'s mode swaps its curve for one with other
-    /// channels): each of that choice's values is picked in a window of its own, and the curve's channels and points read.
-    private static void ChannelsByChoice(Func<Control> load, List<Setting> shown, Setting curve)
-    {
-        foreach (Setting choice in shown.TakeWhile(s => s != curve).Where(s => s.Type == "choice"))
-        {
-            var sets = new List<(string[], string[], int[][][])>();
-            for (int i = 0; i < choice.Choices.Length; i++)
-            {
-                Control w = load();
-                try
-                {
-                    Collect(w, false).First(s => s.Key == choice.Key).Apply(JsonDocument.Parse(i.ToString(CultureInfo.InvariantCulture)).RootElement);
-                    Setting? now = Collect(w, false).FirstOrDefault(s => s.Key == curve.Key);
-                    sets.Add(now is null ? ([], [], []) : (now.Channels, now.Colors, now.Curve));
-                }
-                catch (Exception e)
-                {
-                    if (PluginHost.Trace) Console.Error.WriteLine($"dialog settings: {curve.Key} with {choice.Key} = {i}: {e}");
-                    sets.Add(([], [], []));
-                }
-                finally { (w as IDisposable)?.Dispose(); }
-            }
-            if (sets.Any(set => !set.Item1.SequenceEqual(curve.Channels)))
-            {
-                (curve.By, curve.Sets) = (choice.Key, sets);
-                return;
-            }
-        }
-    }
-
-    /// A plug-in's curve editor (pyrochild's Curves+): a control with points per channel (`SortedList<int, int>[]
-    /// ControlPoints`), the number of entries along each axis (`Entries`) and its channels' names (`GetChannelName`).
-    /// Setting it sets the points and raises the control's value-changed event, as a drag in it does, so the window
-    /// makes its token from them. It is keyed by the panel holding it, and set in whichever curve that panel shows
-    /// then: Curves+'s mode adds another curve there and hides the one before.
-    private static Setting? Curve(Control c, string path, string label)
-    {
-        if (!IsCurve(c)) return null;
-        Control root = c;
-        while (root.Parent is { } parent) root = parent;
-        string host = path[..(path[..^1].LastIndexOfAny(['.', ':']) + 1)];
-        Control Now() => Resolve(root, host)?.Controls.Cast<Control>().FirstOrDefault(x => x.Visible && IsCurve(x)) ?? c;
-        int max = (int)c.GetType().GetProperty("Entries")!.GetValue(c)! - 1;
-        (string[] names, string[] colors) = ChannelsOf(c);
-        return new Setting
-        {
-            Key = host + "curve", Type = "curve", Label = label, Max = max, Curve = PointsOf(c), Channels = names, Colors = colors,
-            Apply = v => SetPoints(Now(), v, max),
-            Same = v => JsonSerializer.Serialize(PointsOf(Now())) == v.GetRawText().Replace(" ", ""),
-        };
-    }
-
-    private static bool IsCurve(Control c)
-    {
-        const BindingFlags Public = BindingFlags.Instance | BindingFlags.Public;
-        Type t = c.GetType();
-        return t.GetProperty("ControlPoints", Public) is { CanRead: true, CanWrite: true } points && points.PropertyType == typeof(SortedList<int, int>[])
-            && t.GetProperty("Entries", Public) is { CanRead: true } entries && entries.PropertyType == typeof(int);
-    }
-
-    private static int[][][] PointsOf(Control c)
-        => ((SortedList<int, int>[])c.GetType().GetProperty("ControlPoints")!.GetValue(c)!)
-            .Select(ch => ch.Select(p => new[] { p.Key, p.Value }).ToArray()).ToArray();
-
-    private static (string[] Names, string[] Colors) ChannelsOf(Control c)
-    {
-        Type t = c.GetType();
-        int n = ((SortedList<int, int>[])t.GetProperty("ControlPoints")!.GetValue(c)!).Length;
-        MethodInfo? name = t.GetMethod("GetChannelName", [typeof(int)]), colour = t.GetMethod("GetVisualColor", [typeof(int)]);
-        // ColorBgra's channels are fields.
-        int Channel(object bgra, string n) => Convert.ToInt32(bgra.GetType().GetField(n)?.GetValue(bgra) ?? bgra.GetType().GetProperty(n)?.GetValue(bgra), CultureInfo.InvariantCulture);
-        string Hex(object? bgra) => bgra is null ? "" : $"#{Channel(bgra, "R"):x2}{Channel(bgra, "G"):x2}{Channel(bgra, "B"):x2}";
-        string[] names = Enumerable.Range(0, n).Select(i => name?.Invoke(c, [i]) as string ?? $"{i + 1}").ToArray();
-        string[] colors = Enumerable.Range(0, n).Select(i => { try { return Hex(colour?.Invoke(c, [i])); } catch (Exception) { return ""; } }).ToArray();
-        return (names, colors);
-    }
-
-    /// The points `v` gives (a list per channel of [x, y]) into the curve `c`: each channel given, clamped to the
-    /// axes, its x values once each; a channel not given keeps its points.
-    private static void SetPoints(Control c, JsonElement v, int max)
-    {
-        PropertyInfo prop = c.GetType().GetProperty("ControlPoints")!;
-        var points = (SortedList<int, int>[])prop.GetValue(c)!;
-        var next = new SortedList<int, int>[points.Length];
-        for (int ch = 0; ch < points.Length; ch++)
-        {
-            if (ch >= v.GetArrayLength()) { next[ch] = points[ch]; continue; }
-            var list = new SortedList<int, int>();
-            foreach (JsonElement p in v[ch].EnumerateArray())
-                list[Math.Clamp(p[0].GetInt32(), 0, max)] = Math.Clamp(p[1].GetInt32(), 0, max);
-            next[ch] = list;
-        }
-        prop.SetValue(c, next);
-        for (Type? t = c.GetType(); t is not null; t = t.BaseType)
-            if (t.GetMethod("OnValueChanged", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly, Type.EmptyTypes) is { } raise)
-            {
-                raise.Invoke(c, null);
-                return;
-            }
-    }
-
-    /// A window's displacement grid (pyrochild's Grid Warp): a field of the window whose type sets and reads a node's
-    /// displacement (`SetPoint(x, y, dx, dy)`, `GetPoint(x, y)`, a vector with `X` and `Y`) and has a `Width` and
-    /// `Height` in cells. Its nodes are (Width + 1) × (Height + 1), each displaced in cells, as a drag in the window
-    /// moves them. The value is the nodes moved; setting it moves them in a freshly loaded window, where none is.
-    private static Setting? Grid(Control window)
-    {
-        if (GridOf(window) is not { } found) return null;
-        (int columns, int rows) = GridSize(found);
-        return new Setting
-        {
-            Key = "w:grid", Type = "grid", Label = "Grid", Columns = columns, Rows = rows, Moved = Moved(found),
-            Apply = v => MoveGrid(GridOf(window)!, v),
-            Same = v => JsonSerializer.Serialize(Moved(GridOf(window)!)) == JsonSerializer.Serialize(Nodes(v)),
-        };
-    }
-
-    private static object? GridOf(Control window)
-    {
-        for (Type? t = window.GetType(); t is not null && t != typeof(Form); t = t.BaseType)
-            foreach (FieldInfo f in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
-                if (IsGrid(f.FieldType) && f.GetValue(window) is { } grid)
-                    return grid;
-        return null;
-    }
-
-    private static bool IsGrid(Type t)
-        => t.GetMethod("SetPoint", [typeof(int), typeof(int), typeof(float), typeof(float)]) is not null
-           && t.GetMethod("GetPoint", [typeof(int), typeof(int)]) is { } get && get.ReturnType.GetField("X") is not null
-           && t.GetProperty("Width")?.PropertyType == typeof(int) && t.GetProperty("Height")?.PropertyType == typeof(int);
-
-    private static (int Columns, int Rows) GridSize(object grid)
-        => ((int)grid.GetType().GetProperty("Width")!.GetValue(grid)!, (int)grid.GetType().GetProperty("Height")!.GetValue(grid)!);
-
-    /// The grid's moved nodes, [x, y, dx, dy] each, the displacements to 1/1000 of a cell.
-    private static float[][] Moved(object grid)
-    {
-        (int columns, int rows) = GridSize(grid);
-        MethodInfo get = grid.GetType().GetMethod("GetPoint", [typeof(int), typeof(int)])!;
-        var moved = new List<float[]>();
-        for (int y = 0; y <= rows; y++)
-            for (int x = 0; x <= columns; x++)
-            {
-                object v = get.Invoke(grid, [x, y])!;
-                float dx = Round((float)v.GetType().GetField("X")!.GetValue(v)!), dy = Round((float)v.GetType().GetField("Y")!.GetValue(v)!);
-                if (dx != 0 || dy != 0) moved.Add([x, y, dx, dy]);
-            }
-        return moved.ToArray();
-    }
-
-    private static float Round(float v) => MathF.Round(v * 1000) / 1000;
-
-    private static float[][] Nodes(JsonElement v)
-        => v.EnumerateArray().Select(n => n.EnumerateArray().Select(e => Round(e.GetSingle())).ToArray()).Where(n => n.Length == 4).ToArray();
-
-    /// Moves the grid's nodes `v` gives, then waits for the window to bring its mesh up to date (it does on a thread
-    /// of its own), as it has after a drag.
-    private static void MoveGrid(object grid, JsonElement v)
-    {
-        (int columns, int rows) = GridSize(grid);
-        MethodInfo set = grid.GetType().GetMethod("SetPoint", [typeof(int), typeof(int), typeof(float), typeof(float)])!;
-        foreach (float[] n in Nodes(v))
-            if (n[0] >= 0 && n[0] <= columns && n[1] >= 0 && n[1] <= rows)
-                set.Invoke(grid, [(int)n[0], (int)n[1], n[2], n[3]]);
-        foreach (FieldInfo f in grid.GetType().GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-            if (f.FieldType == typeof(Thread) && f.GetValue(grid) is Thread worker)
-                Join(worker);
-    }
-
-    /// Waits for a plug-in's thread to finish its work: in the browser, where a plug-in's threads are rewritten to run
-    /// on the one thread there is (PluginThreads), by running it; elsewhere by joining it once started.
-    private static void Join(Thread worker)
-    {
-        if (Type.GetType("PaintDotNet.Bridge.PluginThreads")?.GetMethod("Join", [typeof(Thread)]) is { } join)
-            join.Invoke(null, [worker]);
-        else if ((worker.ThreadState & ThreadState.Unstarted) == 0)
-            worker.Join(TimeSpan.FromSeconds(30));
-    }
-
-    /// The choices that set a grid's columns and rows: each choice before it, picked to another value in a window of
-    /// its own, that changes the grid's width or height to that value's label.
-    private static void GridSizeByChoice(Func<Control> load, List<Setting> shown, Setting grid)
-    {
-        foreach (Setting choice in shown.Where(s => s.Type == "choice" && s.Choices.Length > 1))
-        {
-            int other = choice.Default == 0 ? 1 : 0;
-            if (!int.TryParse(choice.Choices[other], NumberStyles.None, CultureInfo.InvariantCulture, out int size)) continue;
-            Control w = load();
-            try
-            {
-                Collect(w, false).First(s => s.Key == choice.Key).Apply(JsonDocument.Parse(other.ToString(CultureInfo.InvariantCulture)).RootElement);
-                if (GridOf(w) is not { } now) continue;
-                (int columns, int rows) = GridSize(now);
-                if (columns == size && columns != grid.Columns) grid.ColumnsBy ??= choice.Key;
-                else if (rows == size && rows != grid.Rows) grid.RowsBy ??= choice.Key;
-            }
-            catch (Exception e)
-            {
-                if (PluginHost.Trace) Console.Error.WriteLine($"dialog settings: {grid.Key} with {choice.Key} = {other}: {e}");
-            }
-            finally { (w as IDisposable)?.Dispose(); }
-        }
     }
 
     /// The control at `key` ("w:" then each child's index) under `root`.
@@ -502,7 +275,12 @@ internal static class DialogSettings
     /// The settings of `c` itself; true when it is a value control whose children are none of the window's.
     private static bool Own(Control c, string path, string label, List<Setting> list, bool probe)
     {
-        if (c is Form && Grid(c) is { } grid) list.Add(grid);
+        // A Scintilla editor (CodeLab's script box): its text as paint.rs's code editor shows it.
+        if (ScintillaBox.Setting(c, path, label) is { } code)
+        {
+            list.Add(code);
+            return true;
+        }
         switch (c)
         {
             case TrackBar tb:
@@ -534,8 +312,8 @@ internal static class DialogSettings
                 list.Add(new Setting
                 {
                     Key = path, Type = "list", Label = label, Choices = Texts(lb.Items, i => Describe(lb, i)), Default = lb.SelectedIndex,
-                    Apply = v => { int i = v.GetInt32(); if (i >= -1 && i < lb.Items.Count) lb.SelectedIndex = i; },
-                    Same = v => v.GetInt32() == lb.SelectedIndex,
+                    Apply = v => { int i = Whole(v); if (i >= -1 && i < lb.Items.Count) lb.SelectedIndex = i; },
+                    Same = v => Whole(v) == lb.SelectedIndex,
                 });
                 return true;
             case TextBoxBase tx when !tx.ReadOnly:
@@ -555,6 +333,14 @@ internal static class DialogSettings
             list.Add(ColourPicker(path, label, c, handlers, probe));
             return false;
         }
+        // A button that opens a file chooser (ScriptLab loads/saves a script, a preset loader): paint.rs offers
+        // its own file picker and replays the chosen file into the plug-in's OpenFileDialog, rather than the
+        // button being dropped as unanswerable.
+        if (c is Button fb && fb.DialogResult == DialogResult.None && OpensFile(fb) is { } fileHandlers)
+        {
+            list.Add(FilePicker(path, label, fb, fileHandlers, probe));
+            return true;
+        }
         // A button that does something in the window: not the window's own OK and Cancel, nor a swatch (above).
         if (c is Button b && b.DialogResult == DialogResult.None && b.FindForm() is var form
             && (form is null || (form.AcceptButton != b && form.CancelButton != b)) && Pressable(b))
@@ -565,18 +351,43 @@ internal static class DialogSettings
             list.Add(new Setting { Key = path, Type = "button", Label = name, Named = true, Apply = _ => Click(b) });
             return true;
         }
-        if (c is not Form && IsPluginControl(c) && Curve(c, path, label) is { } curve)
-        {
-            list.Add(curve);
-            return true;
-        }
-        if (c is not Form && IsPluginControl(c) && OwnValue(c, path, label) is { } own)
+        // A plug-in container that holds plug-in child controls of its own (CurtisBlack's ColorPicker: a colour
+        // wheel, R/G/B/H/S/V/A sliders, a swatch, buttons) is not one value or one canvas. Descend into it so each
+        // child maps on its own, as the user sees them in Paint.NET; only a leaf (no plug-in children) collapses to
+        // its Color/Value or becomes a canvas.
+        bool container = HasPluginChildren(c);
+        if (c is not Form && !container && IsPluginControl(c) && OwnValue(c, path, label) is { } own)
         {
             list.Add(own);
             return true;
         }
+        // A custom-drawn control that is none of the above (Liquify's warp brush): paint.rs shows its OnPaint
+        // and replays the user's input events into it (DialogCanvas, dj8's live canvas).
+        if (c is not Form && !container && IsPluginControl(c) && DialogCanvas.Canvas(c, path, label) is { } canvas)
+        {
+            list.Add(canvas);
+            return true;
+        }
+        // A plug-in container whose children ALL map to canvases (CurtisBlack's DocumentView: a GdiPaintControl
+        // shadow, the document box and the rulers -- one pan/zoom view, not four stacked) is itself one canvas.
+        // Collect the children's settings for their types only (probe off, so no swatch side effects); if every one
+        // is a canvas, collapse to the container's own canvas instead of descending. A value child (ColorPicker's
+        // sliders) leaves a non-canvas in the scratch, so it descends as before.
+        if (container && c is not Form && IsPluginControl(c))
+        {
+            var scratch = new List<Setting>();
+            foreach (Control child in c.Controls.Cast<Control>()) Walk(child, path, scratch, false);
+            if (scratch.Count > 0 && scratch.TrueForAll(s => s.Type == "canvas") && DialogCanvas.Canvas(c, path, label) is { } one)
+            {
+                list.Add(one);
+                return true;
+            }
+        }
         return false;
     }
+
+    /// Whether `c` holds plug-in child controls of its own (so it is a container to descend into, not a leaf value).
+    private static bool HasPluginChildren(Control c) => c.Controls.Cast<Control>().Any(IsPluginControl);
 
     private static void ToolStripItems(ToolStripItemCollection items, string path, List<Setting> list, bool probe)
     {
@@ -635,8 +446,8 @@ internal static class DialogSettings
         return new()
         {
             Key = key, Type = "choice", Label = label, Choices = kept.Select(i => items[i]).ToArray(), Default = Position(),
-            Apply = v => { int i = v.GetInt32(); if (i >= 0 && i < kept.Length && kept[i] != selected()) pick(kept[i]); },
-            Same = v => v.GetInt32() == Position(),
+            Apply = v => { int i = Whole(v); if (i >= 0 && i < kept.Length && kept[i] != selected()) pick(kept[i]); },
+            Same = v => Whole(v) == Position(),
         };
     }
 
@@ -710,6 +521,43 @@ internal static class DialogSettings
                 foreach (Delegate d in h.List.Where(d => Calls(d.Method, callee => callee.DeclaringType == typeof(ColorDialog), 0)))
                     found.Add((ev, d));
         return found.Count > 0 ? found : null;
+    }
+
+    /// The handlers on `c`'s click events that open a file-open dialog (null when none do).
+    private static List<(EventInfo, Delegate)>? OpensFile(Control c)
+    {
+        var found = new List<(EventInfo, Delegate)>();
+        foreach (string name in ClickEvents)
+            if (Handlers(c, name) is { } h && h.Event is { } ev)
+                foreach (Delegate d in h.List.Where(d => Calls(d.Method, callee => callee.DeclaringType == typeof(OpenFileDialog) || callee.DeclaringType == typeof(FileDialog), 0)))
+                    found.Add((ev, d));
+        return found.Count > 0 ? found : null;
+    }
+
+    /// A button that opens a file chooser: the user's chosen file (its name and bytes, which paint.rs sends as
+    /// { "name", "bytes" (base64) }) is replayed into the plug-in's OpenFileDialog, as ColourPicker replays a
+    /// colour. The probe runs the handler unanswered, so its dialog cancels and we learn its filter and title.
+    private static Setting FilePicker(string key, string label, Control c, List<(EventInfo, Delegate)> handlers, bool probe)
+    {
+        FileDialog.ClearHostAnswer();
+        FileDialog.HostLastOffered = null;
+        if (probe) try { Raise(c, handlers); } catch (Exception) { }   // its dialog cancels; just learns the filter
+        FileDialog? offered = FileDialog.HostLastOffered;
+        string title = Plain(c.Text) is { Length: > 1 } t ? t
+                     : offered is not null && offered.Title.Length > 0 ? offered.Title
+                     : label;
+        return new Setting
+        {
+            Key = key, Type = "file", Label = title, Text = offered?.Filter ?? "", Named = true,
+            Apply = v =>
+            {
+                if (v.ValueKind != JsonValueKind.Object) return;
+                byte[] bytes = v.TryGetProperty("bytes", out JsonElement b) && b.GetString() is { } s64 ? Convert.FromBase64String(s64) : [];
+                string name = v.TryGetProperty("name", out JsonElement n) ? n.GetString() ?? "" : "";
+                FileDialog.SetHostAnswer(bytes, name);
+                try { Raise(c, handlers); } finally { FileDialog.ClearHostAnswer(); }
+            },
+        };
     }
 
     private static (EventInfo? Event, Delegate[] List)? Handlers(Control c, string eventName)
@@ -867,6 +715,15 @@ internal static class DialogSettings
     }
 
     /// A user's click on a check box or radio button: it changes, then Click is raised.
-    private static void Click(ButtonBase b) => OnClick.Invoke(b, [EventArgs.Empty]);
+    // The click as Windows Forms raises it: the plug-in's own exception (not the reflection call's wrapper), so its
+    // message is the one the user reads.
+    private static void Click(ButtonBase b)
+    {
+        try { OnClick.Invoke(b, [EventArgs.Empty]); }
+        catch (TargetInvocationException ex) when (ex.InnerException is { } inner)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(inner).Throw();
+        }
+    }
     private static readonly MethodInfo OnClick = typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)!;
 }

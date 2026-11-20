@@ -599,6 +599,8 @@ impl Footer {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_secs_f64(ms / 1000.0));
         }
+        // The wheel over the slider steps one preset a notch, as a press off the thumb does.
+        value += inputs::value_wheel(ui, response.id, input, None);
         let value = value.clamp(0.0, SLIDER_MAX);
         if value != self.slider_value {
             self.slider_value = value;

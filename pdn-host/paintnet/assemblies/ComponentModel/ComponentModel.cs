@@ -30,6 +30,12 @@ namespace PaintDotNet.ComponentModel
 {
     // A ref-counted handle to a shared object. AVIF/DDS reference it; on the save
     // path they only need the type to resolve and expose the wrapped value.
+    /// Marker that many Paint.NET 5 public interfaces carry (its one real member is internal, so a plug-in cannot
+    /// see or implement it). Present only so those interfaces' base lists resolve when a plug-in loads.
+    public interface IInternalImpl
+    {
+    }
+
     public interface IObjectRef : IDisposable
     {
         object Value { get; }

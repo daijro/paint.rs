@@ -39,6 +39,7 @@ namespace PaintDotNet
         public static void ThrowArgumentNullException(string paramName, string message) => throw new ArgumentNullException(paramName, message);
         public static void ThrowObjectDisposedException(string objectName) => throw new ObjectDisposedException(objectName);
         public static void ThrowInvalidOperationException(string message) => throw new InvalidOperationException(message);
+        public static void ThrowArgumentException(string message, string paramName) => throw new ArgumentException(message, paramName);
     }
 
     // 1D pointer+length view. The JPEG XL save write-callback wraps its native buffer in

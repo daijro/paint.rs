@@ -6795,13 +6795,16 @@ fn gradient_move_click_preserves_constrained_endpoint() {
     assert_eq!(undo_names(&app), history);
     assert_eq!(wand_handles(&app), handles);
     assert_eq!(layer_bytes(&app, None), pixels);
+    // The first release committed the constrained end: Shift released now changes nothing.
     app.set_modifier_keys(false, false, false);
-    assert_eq!(&wand_handles(&app)[..2], &[[10.0, 10.0], [90.0, 30.0]]);
+    assert_eq!(wand_handles(&app), handles);
+    assert_eq!(layer_bytes(&app, None), pixels);
 }
 
-/// pt2 §2.3/§7.7: Shift released before a stationary Move mouse-up stays released.
+/// The release commits the constrained end (as in Paint.NET): Shift still held into a stationary
+/// Move and released there changes nothing and adds no entry.
 #[test]
-fn gradient_stationary_move_keeps_live_shift_release() {
+fn gradient_stationary_move_after_a_shift_release_keeps_the_committed_end() {
     let mut app = fresh_doc(100, 100, None);
     app.seed_override = Some(0);
     drive_tool(
@@ -6817,18 +6820,19 @@ fn gradient_stationary_move_keeps_live_shift_release() {
     };
     app.on_mouse_up(90.0, 30.0, Left, &i);
     let history = undo_names(&app);
-    let [x, y] = wand_handles(&app)[2];
+    let handles = wand_handles(&app);
+    let pixels = layer_bytes(&app, None);
+    assert_ne!(pixels, unconstrained_pixels);
+    let [x, y] = handles[2];
     app.on_mouse_down(x, y, Left, &i);
     app.set_modifier_keys(false, false, false);
-    assert_eq!(undo_names(&app), history, "modifier event has no entry");
-    assert_eq!(&wand_handles(&app)[..2], &[[10.0, 10.0], [90.0, 30.0]]);
-    assert_eq!(layer_bytes(&app, None), unconstrained_pixels);
+    assert_eq!(wand_handles(&app), handles);
+    assert_eq!(layer_bytes(&app, None), pixels);
     app.on_mouse_up(x, y, Left, &i);
     assert!(!app.shift_key_down);
-    assert_eq!(undo_names(&app).len(), history.len() + 1);
-    assert_eq!(undo_names(&app).last().unwrap(), "Move Gradient");
-    assert_eq!(&wand_handles(&app)[..2], &[[10.0, 10.0], [90.0, 30.0]]);
-    assert_eq!(layer_bytes(&app, None), unconstrained_pixels);
+    assert_eq!(undo_names(&app), history);
+    assert_eq!(wand_handles(&app), handles);
+    assert_eq!(layer_bytes(&app, None), pixels);
 }
 
 /// Live Shift presses during stationary Move use the same constraint as presses outside a gesture.
@@ -6921,8 +6925,58 @@ fn gradient_shift_constraint_is_live() {
     let h = wand_handles(&app);
     assert!((h[1][0] - 49.826142083018446).abs() < 1e-6);
     assert!((h[1][1] - 20.671382608791944).abs() < 1e-6);
+    // The release committed the constrained end: Shift released afterwards keeps it.
     app.set_modifier_keys(false, false, false);
-    assert_eq!(wand_handles(&app)[1], [50.0, 20.0]);
+    assert_eq!(wand_handles(&app), h);
+}
+
+/// The owner's order: release the button with Shift held, then Shift. Each tool keeps what Shift
+/// made: the gradient's end no longer jumps back to the pointer, and Line/Curve, Shapes and the
+/// selection shapes keep theirs.
+#[test]
+fn shift_released_after_the_mouse_keeps_the_constraint() {
+    let i = pdn_core::tool::PointerInput {
+        pointer_type: pdn_core::tool::PointerType::Mouse,
+        samples: vec![],
+    };
+    for tool in [
+        ToolType::Gradient,
+        ToolType::Line,
+        ToolType::Shapes,
+        ToolType::RectangleSelect,
+        ToolType::EllipseSelect,
+    ] {
+        let result = |app: &pdn_core::app::AppWorkspace| {
+            (
+                wand_handles(app),
+                layer_bytes(app, None),
+                selection_mask(app, 100, 100),
+            )
+        };
+        let draw = |shift: bool| {
+            let mut app = fresh_doc(100, 100, None);
+            app.seed_override = Some(0);
+            let mods = if shift { "Shift" } else { "" };
+            drive_tool(
+                &mut app,
+                tool,
+                &[
+                    Ev::DownMods(10.0, 10.0, Left, mods),
+                    Ev::Move(90.0, 30.0),
+                    Ev::Wait(60.0),
+                ],
+            );
+            app.on_mouse_up(90.0, 30.0, Left, &i);
+            app
+        };
+        let free = result(&draw(false));
+        let mut app = draw(true);
+        let constrained = result(&app);
+        assert_ne!(constrained, free, "{tool:?}: Shift constrains");
+        app.set_modifier_keys(false, false, false);
+        app.on_frame(app.now_ms + 16.0);
+        assert_eq!(result(&app), constrained, "{tool:?}");
+    }
 }
 
 /// pt2 §2.2: Shift override survives release, toolbar mode drops it, and handles re-flood originals.

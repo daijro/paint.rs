@@ -140,6 +140,55 @@ pub fn paint_arrow(
     paint(painter, centred_device(dir, rect, ppp), color, backdrop);
 }
 
+/// A menu path ("Effects", "Plugins", "Distort", "Swirl") from `top_left`: its segments with the menus' submenu arrow
+/// between them, at the text's height and in `color`, cut short with an ellipsis past `max_width`.
+pub fn draw_path(
+    painter: &Painter,
+    top_left: Pos2,
+    segments: &[String],
+    spec: text::FontSpec,
+    color: Color32,
+    backdrop: Color32,
+    max_width: f32,
+) {
+    // The arrow's box keeps the menus' 4x8 proportions, its height about the text's capitals.
+    let h = (spec.size * 0.62).round();
+    let arrow = Vec2::new(h / 2.0, h);
+    let gap = (spec.size * 0.4).round();
+    let line = spec.size * 1.2;
+    let mut x = top_left.x;
+    let end = top_left.x + max_width;
+    for (i, segment) in segments.iter().enumerate() {
+        if i > 0 {
+            if x + gap * 2.0 + arrow.x > end {
+                return;
+            }
+            let at = Pos2::new(x + gap, top_left.y + (line - arrow.y) / 2.0);
+            paint_arrow(
+                painter,
+                ArrowDir::Right,
+                Rect::from_min_size(at, arrow),
+                color,
+                backdrop,
+            );
+            x += gap * 2.0 + arrow.x;
+        }
+        let width = text::measure(painter, segment, spec);
+        if x + width > end {
+            text::draw_ellipsized(
+                painter,
+                Rect::from_min_size(Pos2::new(x, top_left.y), Vec2::new(end - x, line)),
+                segment,
+                spec,
+                color,
+            );
+            return;
+        }
+        text::draw(painter, Pos2::new(x, top_left.y), segment, spec, color);
+        x += width;
+    }
+}
+
 /// Paints the arrow placed in the CSS triangle's box `css_box` (see [`arrow_box_vertices`]).
 pub fn paint_arrow_in_box(
     painter: &Painter,

@@ -316,7 +316,7 @@ impl EffectConfigDialog {
                         if pdn_core::io::plugins::PluginWindow::from_error(&e).is_some() =>
                     {
                         break Err(
-                            "This file's format asks for its options in a window of its own: open it with File ▸ Open."
+                            "This file's format asks for its options in a window of its own: open it with Open in the File menu."
                                 .into(),
                         );
                     }

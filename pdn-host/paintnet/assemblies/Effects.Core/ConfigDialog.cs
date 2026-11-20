@@ -50,7 +50,7 @@ public class EffectConfigDialog : PdnBaseForm
     public Surface? EffectSourceSurface { get; set; }
     public PdnRegion? Selection { get; set; }
     public EffectEnvironmentParameters? EnvironmentParameters => effect?.EnvironmentParameters;
-    public IServiceProvider? Services => null;
+    public IServiceProvider? Services => effect?.Services;
 
     public event EventHandler? EffectTokenChanged;
 

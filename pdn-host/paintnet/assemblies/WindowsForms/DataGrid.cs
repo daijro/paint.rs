@@ -299,6 +299,7 @@ namespace System.Windows.Forms
         public DataGridViewEditMode EditMode { get; set; } = DataGridViewEditMode.EditOnKeystrokeOrF2;
         public DataGridViewAutoSizeColumnMode AutoSizeColumnsMode { get; set; }
         public DataGridViewCellStyle DefaultCellStyle { get; set; } = new();
+        public DataGridViewCellStyle RowsDefaultCellStyle { get; set; } = new();
         public DataGridViewCellStyle ColumnHeadersDefaultCellStyle { get; set; } = new();
         public DataGridViewCellStyle RowHeadersDefaultCellStyle { get; set; } = new();
         public DataGridViewCellStyle AlternatingRowsDefaultCellStyle { get; set; } = new();

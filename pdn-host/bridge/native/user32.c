@@ -11,6 +11,7 @@
 #endif
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -28,6 +29,13 @@ void *CreateIconIndirect(void *info) { return 0; }
 int SetWindowTheme(void *hwnd, const uint16_t *app, const uint16_t *idlist) { return 0; }
 void OutputDebugStringW(const uint16_t *message) { }
 void OutputDebugStringA(const char *message) { }
+/* ole32's COM task allocator entrypoints, which opend2d's imaging drop-in imports but nothing provides off Windows:
+   NativeResolver loads this library into the global scope before the drop-in so its load-time relocations resolve.
+   The image save paths never call these (they are the metadata path), so malloc/free and a no-op clear satisfy the
+   link. */
+void *CoTaskMemAlloc(size_t cb) { return malloc(cb); }
+void CoTaskMemFree(void *p) { free(p); }
+int32_t PropVariantClear(void *pvar) { (void)pvar; return 0; }
 /* kernel32's page allocator, which a plug-in may use for its own buffers (Midora's animated WebP FileType): zeroed
    pages, as Windows gives. Committing pages already reserved returns them. Windows releases a whole reservation
    with MEM_RELEASE (0x8000) and size 0, so each mapping keeps its length in a page in front of what it hands out. */

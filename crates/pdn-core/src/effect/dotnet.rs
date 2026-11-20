@@ -7,7 +7,7 @@
 
 use super::{EffectDef, EffectEnv, Values};
 use crate::canvas::ImageData;
-use crate::effect::{ColorDefault, Control, CurveChannels, range};
+use crate::effect::{ColorDefault, Control, range};
 use serde_json::Value;
 
 /// The Effects submenu key installed plugins land under.
@@ -68,6 +68,69 @@ pub fn remember_menu(id: &'static str, name: &'static str, submenu: Option<&str>
             menu.submenus.remove(id);
         }
     }
+}
+
+/// What an installed plug-in file provided when it loaded, for Settings ▸ Plugins: its effects (their registry
+/// keys) and its file types (each one's name and the extensions it opens and saves).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Provided {
+    pub effects: Vec<&'static str>,
+    pub file_types: Vec<(String, Vec<String>, Vec<String>)>,
+}
+
+static PROVIDED: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::HashMap<String, Provided>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Records what plug-in file `file` (its name) provided: `effects`, and the file types its enumeration lists.
+pub fn remember_provided(file: &str, effects: Vec<&'static str>, enumerated: &Value) {
+    let names = |ft: &Value, key: &str| -> Vec<String> {
+        ft.get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    };
+    let file_types = enumerated
+        .get("fileTypes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|ft| {
+            let name = ft
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            (
+                name,
+                names(ft, "loadExtensions"),
+                names(ft, "saveExtensions"),
+            )
+        })
+        .collect();
+    PROVIDED.write().unwrap_or_else(|e| e.into_inner()).insert(
+        file.to_owned(),
+        Provided {
+            effects,
+            file_types,
+        },
+    );
+}
+
+/// What installed plug-in file `file` provided, or `None` when it did not load (or is not a .NET plug-in).
+pub fn provided(file: &str) -> Option<Provided> {
+    PROVIDED
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(file)
+        .cloned()
+}
+
+fn forget_provided() {
+    PROVIDED.write().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 /// A registered effect's or declared submenu's menu action.
@@ -170,18 +233,140 @@ fn render_props(
     props.to_string()
 }
 
-/// Where an effect's values keep the token a press of one of its window's buttons made (`press`).
-const TOKEN: &str = "$token";
+/// Where an effect's values keep the token a press of one of its window's buttons made (`press`), or its live
+/// canvas's window (`Canvas::token`).
+pub const TOKEN: &str = "$token";
+
+/// Where a live canvas sits in its plug-in window ([`Canvas::layout`]): the window's client size, and the canvas's
+/// place and size in it, in the window's pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanvasLayout {
+    pub window: (u32, u32),
+    pub at: (i32, i32),
+    pub size: (u32, u32),
+}
+
+impl CanvasLayout {
+    /// The host's "formW,formH,x,y,w,h".
+    fn parse(text: &str) -> Option<CanvasLayout> {
+        let n: Vec<i64> = text
+            .split(',')
+            .map(|v| v.trim().parse().ok())
+            .collect::<Option<_>>()?;
+        let &[fw, fh, x, y, w, h] = &n[..] else {
+            return None;
+        };
+        let size = |v: i64| u32::try_from(v).ok().filter(|&v| v > 0);
+        Some(CanvasLayout {
+            window: (size(fw)?, size(fh)?),
+            at: (x as i32, y as i32),
+            size: (size(w)?, size(h)?),
+        })
+    }
+}
+
+/// Each live canvas of `controls` with its layout in the open window: as the host gives it, else the schema's size.
+fn canvas_layouts(
+    controls: &[Control],
+    layout_of: impl Fn(&str) -> Option<String>,
+) -> Vec<(&'static str, CanvasLayout)> {
+    controls
+        .iter()
+        .filter_map(|c| match *c {
+            Control::PluginCanvas {
+                key, width, height, ..
+            } => {
+                let schema = CanvasLayout {
+                    window: (width, height),
+                    at: (0, 0),
+                    size: (width, height),
+                };
+                let live = layout_of(key).as_deref().and_then(CanvasLayout::parse);
+                Some((key, live.unwrap_or(schema)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// `props` (a render's, `render_props`) with the size of the window the plug-in's window opens over
+/// (`$environment.window`), as Paint.NET gives a settings window its main window as its owner.
+fn with_window(props: String, window: [u32; 2]) -> String {
+    let mut v: Value = serde_json::from_str(&props).unwrap_or_else(|_| serde_json::json!({}));
+    v["$environment"]["window"] = serde_json::json!(window);
+    v.to_string()
+}
+
+/// What the live canvas `key` drew, as straight RGBA8 from the host, at its size in `layouts`.
+fn canvas_image(
+    layouts: &[(&'static str, CanvasLayout)],
+    key: &str,
+    rgba: Vec<u8>,
+) -> Result<ImageData, String> {
+    let (width, height) = layouts
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, l)| l.size)
+        .ok_or("the window has no such canvas")?;
+    if rgba.len() != width as usize * height as usize * 4 {
+        return Err(format!(
+            "the canvas drew {} bytes, not {width}×{height}",
+            rgba.len()
+        ));
+    }
+    Ok(ImageData {
+        width,
+        height,
+        data: rgba,
+    })
+}
+
+/// A file a press asked the user for (the window's own file prompt, e.g. Blur Map's Open): the prompt's title and
+/// the file extensions it accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilePick {
+    pub title: String,
+    pub extensions: Vec<String>,
+}
 
 /// After a press of one of a plug-in window's buttons: keep the token it made and take the window's settings as
 /// it now shows them (`{"token": ..., "properties": [...]}`, the schema's form, each value as its default), in the
-/// value forms of `controls`.
-fn take_press(result: &str, controls: &[Control], values: &mut Values) -> Result<(), String> {
+/// value forms of `controls`. The file the press asked for, if it prompted for one (`"pick"`).
+fn take_press(
+    result: &str,
+    controls: &[Control],
+    values: &mut Values,
+) -> Result<Option<FilePick>, String> {
     let parsed: Value = serde_json::from_str(result).map_err(|e| e.to_string())?;
     match parsed.get("token").and_then(Value::as_str) {
         Some(token) => values.insert(TOKEN.into(), Value::from(token)),
         None => values.remove(TOKEN),
     };
+    take_properties(&parsed, controls, values);
+    let pick = parsed
+        .get("pick")
+        .filter(|p| p.get("kind").and_then(Value::as_str) == Some("open"));
+    Ok(pick.map(|p| FilePick {
+        title: p
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Open")
+            .to_owned(),
+        extensions: p
+            .get("extensions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| {
+                e.as_str()
+                    .map(|e| e.trim_start_matches('.').to_ascii_lowercase())
+            })
+            .collect(),
+    }))
+}
+
+/// The settings a plug-in window shows (`parsed["properties"]`, as [`take_press`] reads them) into `values`.
+fn take_properties(parsed: &Value, controls: &[Control], values: &mut Values) {
     for p in parsed
         .get("properties")
         .and_then(Value::as_array)
@@ -202,9 +387,7 @@ fn take_press(result: &str, controls: &[Control], values: &mut Values) -> Result
             Control::Color { .. } => {
                 Value::from(format!("#{:06x}", shown.as_u64().unwrap_or(0) & 0xff_ffff))
             }
-            Control::Text { .. } | Control::PluginCurve { .. } | Control::PluginGrid { .. } => {
-                shown
-            }
+            Control::Text { .. } | Control::PluginCode { .. } => shown,
             Control::List { .. } => {
                 let items = p
                     .get("items")
@@ -217,7 +400,6 @@ fn take_press(result: &str, controls: &[Control], values: &mut Values) -> Result
         };
         values.insert(name.into(), value);
     }
-    Ok(())
 }
 
 /// Turn the effect-schema JSON into paint.rs controls (and the names of choice props).
@@ -225,6 +407,26 @@ fn controls_from_schema(schema: &str) -> (Vec<Control>, Vec<&'static str>) {
     serde_json::from_str::<Value>(schema)
         .map(|parsed| controls_from_properties(&parsed))
         .unwrap_or_default()
+}
+
+/// A live window's controls from its settings (`parsed`) when they list one it did not have (a row a load brought:
+/// Blur Map's file and layer lists after Open), with their choice keys. Only from settings the host shaped as the
+/// dialog's rows (`"shape": "dialog"`: linked pairs as one row, repeated labels numbered); a raw list names every
+/// control, which would read as new rows.
+fn grown_controls(
+    parsed: &Value,
+    controls: &[Control],
+) -> Option<(Vec<Control>, Vec<&'static str>)> {
+    if parsed.get("shape").and_then(Value::as_str) != Some("dialog") {
+        return None;
+    }
+    let grown = parsed
+        .get("properties")?
+        .as_array()?
+        .iter()
+        .filter_map(|p| p.get("name")?.as_str())
+        .any(|n| controls.iter().all(|c| c.key() != n));
+    grown.then(|| controls_from_properties(parsed))
 }
 
 /// The controls of a schema's (an effect's or a FileType's save options) `properties` array, and
@@ -336,57 +538,22 @@ pub(crate) fn controls_from_properties(parsed: &Value) -> (Vec<Control>, Vec<&'s
                     default: p.get("default").and_then(Value::as_i64).unwrap_or(-1),
                 });
             }
-            "grid" => controls.push(Control::PluginGrid {
+            "canvas" => controls.push(Control::PluginCanvas {
                 key,
                 label,
-                columns: p.get("columns").and_then(Value::as_u64).unwrap_or(1) as u32,
-                rows: p.get("rows").and_then(Value::as_u64).unwrap_or(1) as u32,
-                columns_by: p.get("columnsBy").and_then(Value::as_str).map(leak),
-                rows_by: p.get("rowsBy").and_then(Value::as_str).map(leak),
+                width: p.get("width").and_then(Value::as_u64).unwrap_or(0) as u32,
+                height: p.get("height").and_then(Value::as_u64).unwrap_or(0) as u32,
             }),
-            "curve" => {
-                let sets: Vec<CurveChannels> = p
-                    .get("sets")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .map(curve_channels_of)
-                    .collect();
-                controls.push(Control::PluginCurve {
-                    key,
-                    label,
-                    max: p.get("max").and_then(Value::as_i64).unwrap_or(255),
-                    own: curve_channels_of(p),
-                    by: p.get("by").and_then(Value::as_str).map(leak),
-                    sets: Box::leak(sets.into_boxed_slice()),
-                });
-            }
+            "code" => controls.push(Control::PluginCode {
+                key,
+                label,
+                width: p.get("width").and_then(Value::as_u64).unwrap_or(640) as u32,
+                height: p.get("height").and_then(Value::as_u64).unwrap_or(400) as u32,
+            }),
             _ => {}
         }
     }
     (controls, choice_keys)
-}
-
-/// A schema curve's (or one of its sets') `channels`, `colors` (`"#rrggbb"`, empty: none) and `default` points.
-fn curve_channels_of(p: &Value) -> CurveChannels {
-    let strings = |k: &str| p.get(k).and_then(Value::as_array).into_iter().flatten();
-    let names: Vec<&'static str> = strings("channels")
-        .map(|n| leak(n.as_str().unwrap_or("")))
-        .collect();
-    let colors: Vec<Option<[u8; 3]>> = strings("colors")
-        .map(|c| {
-            let hex = c.as_str()?.strip_prefix('#')?;
-            let v = u32::from_str_radix(hex, 16).ok()?;
-            Some([(v >> 16) as u8, (v >> 8) as u8, v as u8])
-        })
-        .collect();
-    CurveChannels {
-        names: Box::leak(names.into_boxed_slice()),
-        colors: Box::leak(colors.into_boxed_slice()),
-        default: Box::leak(Box::new(
-            p.get("default").cloned().unwrap_or(Value::Array(vec![])),
-        )),
-    }
 }
 
 /// Build a plugin effect's leaked id and display name, its [`EffectDef`] and its choice-property
@@ -442,8 +609,17 @@ static CLIPBOARD_UI: crate::effect::bb::ui::IndirectUi = crate::effect::bb::ui::
     ..crate::effect::bb::ui::IndirectUi::DEFAULT
 };
 
-/// What the user reads when a plug-in effect throws: the effect left the image as it was.
-fn failed(name: &str, reason: &str) -> String {
+/// When a live window's next running timer is due: its read-back's `due` (ms; -1 for none).
+fn due(parsed: &Value) -> Option<u32> {
+    parsed
+        .get("due")
+        .and_then(Value::as_i64)
+        .and_then(|d| u32::try_from(d).ok())
+}
+
+/// What the user reads when a plug-in effect throws (rendering, or a press of its window's button): the effect left
+/// the image as it was.
+pub fn failed(name: &str, reason: &str) -> String {
     format!(
         "The plug-in effect “{name}” stopped with an error and left the image unchanged:\n{reason}"
     )
@@ -557,16 +733,44 @@ pub fn decode_image(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// An image the browser host's managed System.Drawing saves in a format it does not write itself, written with
+/// paint.rs's encoder: `image` as `decode_image` gives one (a little-endian width and height, then straight
+/// BGRA8), `format` the System.Drawing format's name, `quality` 1 to 100. JPEG only, with GDI+'s 4:2:0 chroma
+/// (its quality when the caller sets none, 75, is the caller's to pass); alpha is dropped, as GDI+ drops it.
+/// `None` for another format or a size JPEG cannot hold.
+pub fn encode_image(image: &[u8], format: &str, quality: u8) -> Option<Vec<u8>> {
+    let (head, bgra) = image.split_at_checked(8)?;
+    let w = u32::from_le_bytes(head[..4].try_into().ok()?);
+    let h = u32::from_le_bytes(head[4..].try_into().ok()?);
+    if !format.eq_ignore_ascii_case("jpeg") || bgra.len() as u64 != u64::from(w) * u64::from(h) * 4
+    {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut out, quality.clamp(1, 100));
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_0);
+    encoder
+        .encode(
+            bgra,
+            u16::try_from(w).ok()?,
+            u16::try_from(h).ok()?,
+            jpeg_encoder::ColorType::Bgra,
+        )
+        .ok()?;
+    Some(out)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{
-    effects, init, is_configurable_action, is_plugin, load, name_of, press, render, revision,
-    unload_all,
+    Canvas, effects, init, is_configurable_action, is_plugin, load, name_of, press, render,
+    revision, set_permissions, store_network_response, unload_all,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::{
-        EffectDef, EffectEnv, ImageData, Values, problems, register, render_props, unique_key,
+        CanvasLayout, EffectDef, EffectEnv, ImageData, Values, canvas_image, canvas_layouts,
+        problems, register, render_props, unique_key, with_window,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -607,7 +811,23 @@ mod native {
         })
         .as_ref()
         .map(|_| ())
-        .map_err(Clone::clone)
+        .map_err(Clone::clone)?;
+        crate::effect::permission::send();
+        Ok(())
+    }
+
+    /// The outside requests plug-ins may make (`effect::permission`'s answers), for the host to check against.
+    pub fn set_permissions(json: &str) {
+        if let Some(Ok(host)) = HOST.get() {
+            let _ = host.set_permissions(json);
+        }
+    }
+
+    /// The response to a network request the host left to paint.rs (`effect::permission::Request::key`).
+    pub fn store_network_response(key: &str, json: &str) {
+        if let Some(Ok(host)) = HOST.get() {
+            let _ = host.store_network_response(key, json);
+        }
     }
 
     /// `text_outline` over the bridge's C ABI (`PdnSetDrawingHost`): UTF-16 text, a UTF-8 family, a float buffer
@@ -696,6 +916,7 @@ mod native {
 
         let mut reg = registry().write().unwrap();
         let mut nm = names().write().unwrap();
+        let mut keys = Vec::new();
         for eff in parsed
             .get("effects")
             .and_then(Value::as_array)
@@ -715,6 +936,7 @@ mod native {
                 def.id = key;
                 nm.insert(key, name);
                 super::remember_menu(key, name, eff.get("submenu").and_then(Value::as_str));
+                keys.push(key);
                 reg.insert(
                     key,
                     Entry {
@@ -727,6 +949,11 @@ mod native {
                 );
             }
         }
+        let file = plugin_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        super::remember_provided(&file, keys, &parsed);
         REVISION.fetch_add(1, Ordering::Relaxed);
         Ok(skipped)
     }
@@ -735,6 +962,7 @@ mod native {
     pub fn unload_all() {
         registry().write().unwrap().clear();
         names().write().unwrap().clear();
+        super::forget_provided();
         crate::io::plugins::clear();
         REVISION.fetch_add(1, Ordering::Relaxed);
     }
@@ -822,7 +1050,198 @@ mod native {
                 src.height,
             )
             .map_err(|e| e.to_string())?;
-        super::take_press(&result, &entry.def.controls, values)
+        super::take_press(&result, &entry.def.controls, values).map(drop)
+    }
+
+    /// Plug-in effect `id`'s own settings window kept open over `src` while its dialog shows the window's live
+    /// canvas (`Control::PluginCanvas`): input reaches the window as it happens, and the effect renders with the
+    /// window's token (`token`). The host keeps one open; dropping this closes it.
+    pub struct Canvas {
+        session: pdn_bridge::CanvasSession,
+        /// When the window's next running timer is due (ms after its last read) and whether it may take a while
+        /// (it has not ticked yet, or its last tick was slow), as the host reads it back.
+        due: Option<(u32, bool)>,
+        /// How often the window has said its token changed, as of its last read.
+        revision: Option<u64>,
+        choice_keys: Vec<&'static str>,
+        controls: Vec<super::Control>,
+        layouts: Vec<(&'static str, CanvasLayout)>,
+    }
+
+    impl Canvas {
+        /// Opens the window as `values` leave it, over an owner window `window` big (the room paint.rs gives it).
+        pub fn open(
+            id: &str,
+            src: &ImageData,
+            values: &Values,
+            env: &EffectEnv,
+            window: [u32; 2],
+        ) -> Result<Canvas, String> {
+            let reg = registry().read().unwrap();
+            let entry = reg.get(id).ok_or("the plug-in is not loaded")?;
+            let props = with_window(
+                render_props(values, &entry.choice_keys, &entry.def.controls, env),
+                window,
+            );
+            let session = entry
+                .plugin
+                .canvas_open(
+                    entry.dotnet_id,
+                    Some(&props),
+                    &src.data,
+                    src.width,
+                    src.height,
+                )
+                .map_err(|e| e.to_string())?;
+            let layouts = canvas_layouts(&entry.def.controls, |key| {
+                session.layout(key).ok().flatten()
+            });
+            Ok(Canvas {
+                session,
+                due: None,
+                revision: None,
+                choice_keys: entry.choice_keys.clone(),
+                controls: entry.def.controls.clone(),
+                layouts,
+            })
+        }
+
+        /// Where the canvas `key` sits in the open window.
+        pub fn layout(&self, key: &str) -> Option<CanvasLayout> {
+            self.layouts
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, l)| *l)
+        }
+
+        /// Press the open window's button `key` as `values` leave its settings, taking its token and settings after
+        /// it into `values` (as [`press`] does for a closed window), and the file it asked for. `None` from a host
+        /// that cannot.
+        pub fn press(
+            &mut self,
+            key: &str,
+            values: &mut Values,
+            env: &EffectEnv,
+        ) -> Result<Option<Option<super::FilePick>>, String> {
+            let props = render_props(values, &self.choice_keys, &self.controls, env);
+            match self
+                .session
+                .press(Some(&props), key)
+                .map_err(|e| e.to_string())?
+            {
+                Some(result) => {
+                    self.grow(&result);
+                    super::take_press(&result, &self.controls, values).map(Some)
+                }
+                None => Ok(None),
+            }
+        }
+
+        /// Give the open window the file (`name`, `bytes`) its last press asked for. `false` from a host that cannot.
+        pub fn provide_file(&self, name: &str, bytes: &[u8]) -> Result<bool, String> {
+            self.session
+                .provide_file(name, bytes)
+                .map_err(|e| e.to_string())
+        }
+
+        /// The open window's settings now, which input to it can change, into `values`. `false` from a host that
+        /// cannot.
+        pub fn values(&mut self, values: &mut Values) -> Result<bool, String> {
+            match self.session.values().map_err(|e| e.to_string())? {
+                Some(result) => {
+                    self.grow(&result);
+                    let parsed: Value = serde_json::from_str(&result).map_err(|e| e.to_string())?;
+                    super::take_properties(&parsed, &self.controls, values);
+                    self.due = super::due(&parsed).map(|d| {
+                        (
+                            d,
+                            parsed
+                                .get("dueSlow")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true),
+                        )
+                    });
+                    self.revision = parsed.get("revision").and_then(Value::as_u64);
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        /// The window's controls now: the schema's, grown by rows its own input brought.
+        pub fn controls(&self) -> &[super::Control] {
+            &self.controls
+        }
+
+        /// When the window's next running timer is due, in ms from its last read ([`Self::values`]), and whether it
+        /// may take a while; taken, so it is acted on once.
+        pub fn take_due(&mut self) -> Option<(u32, bool)> {
+            self.due.take()
+        }
+
+        /// How often the window has said its token changed, as of its last read ([`Self::values`]).
+        pub fn revision(&self) -> Option<u64> {
+            self.revision
+        }
+
+        /// Take the rows a press or a read-back (`result`) lists that the window did not have.
+        fn grow(&mut self, result: &str) {
+            if let Some((controls, choice_keys)) = serde_json::from_str(result)
+                .ok()
+                .and_then(|p| super::grown_controls(&p, &self.controls))
+            {
+                (self.controls, self.choice_keys) = (controls, choice_keys);
+            }
+        }
+
+        /// The window's other settings as `values` leave them, then `events` (a JSON array) on the canvas `key`:
+        /// what it draws after.
+        pub fn input(
+            &self,
+            key: &str,
+            events: &Value,
+            values: &Values,
+            env: &EffectEnv,
+        ) -> Result<ImageData, String> {
+            let props = render_props(values, &self.choice_keys, &self.controls, env);
+            let rgba = self
+                .session
+                .input(Some(&props), key, &events.to_string())
+                .map_err(|e| e.to_string())?;
+            canvas_image(&self.layouts, key, rgba)
+        }
+
+        /// `events` (a JSON array) on the window's control `key` that is not a canvas (a code editor), as
+        /// [`Self::input`] sends them, its drawing left aside.
+        pub fn send(
+            &self,
+            key: &str,
+            events: &Value,
+            values: &Values,
+            env: &EffectEnv,
+        ) -> Result<(), String> {
+            let props = render_props(values, &self.choice_keys, &self.controls, env);
+            self.session
+                .input(Some(&props), key, &events.to_string())
+                .map(drop)
+                .map_err(|e| e.to_string())
+        }
+
+        /// What the canvas `key` draws now.
+        pub fn paint(&self, key: &str) -> Result<ImageData, String> {
+            let rgba = self.session.paint(key).map_err(|e| e.to_string())?;
+            canvas_image(&self.layouts, key, rgba)
+        }
+
+        /// The window's token now: the effect's `$token` value ([`super::TOKEN`]).
+        pub fn token(&self) -> Result<String, String> {
+            self.session.token().map_err(|e| e.to_string())
+        }
+
+        /// The dialog's OK: the token outlives the window, so Repeat renders with it.
+        pub fn keep(&self) -> Result<(), String> {
+            self.session.keep().map_err(|e| e.to_string())
+        }
     }
 
     pub fn render(id: &str, src: &ImageData, values: &Values, env: &EffectEnv) -> ImageData {
@@ -863,14 +1282,16 @@ mod native {
 // --- web: the Mono browser host (pdn-host/paintnet-web), reached over a small JS bridge. ---
 #[cfg(target_arch = "wasm32")]
 pub use web::{
-    PluginJob, effects, filetype_open, filetype_save, install, is_configurable_action, is_plugin,
-    name_of, press, render, render_begin, revision, unload_all,
+    Canvas, PluginJob, effects, filetype_open, filetype_save, install, is_configurable_action,
+    is_plugin, name_of, press, render, render_begin, revision, set_permissions,
+    store_network_response, unload_all,
 };
 
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::{
-        EffectDef, EffectEnv, ImageData, Values, problems, register, render_props, unique_key,
+        CanvasLayout, Control, EffectDef, EffectEnv, ImageData, Values, canvas_image,
+        canvas_layouts, problems, register, render_props, unique_key, with_window,
     };
     use serde_json::Value;
     use std::cell::{Cell, RefCell};
@@ -886,8 +1307,10 @@ mod web {
         async fn pdn_boot(
             text_outline: &JsValue,
             decode_image: &JsValue,
+            encode_image: &JsValue,
             font_names: Vec<String>,
             font_files: Vec<js_sys::Uint8Array>,
+            font_urls: Vec<String>,
         ) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(catch, js_name = pdnSetInstalled)]
         async fn pdn_set_installed(
@@ -896,10 +1319,50 @@ mod web {
         ) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(catch, js_name = pdnLoadInstalled)]
         fn pdn_load_installed(file_name: &str) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnSetPermissions)]
+        fn pdn_set_permissions(json: &str) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnStoreNetworkResponse)]
+        fn pdn_store_network_response(key: &str, json: &str) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(catch, js_name = pdnEnumerate)]
         fn pdn_enumerate(handle: i32) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(catch, js_name = pdnEffectSchema)]
         fn pdn_effect_schema(handle: i32, id: &str) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasOpen)]
+        fn pdn_canvas_open(
+            handle: i32,
+            id: &str,
+            props: Option<String>,
+            bgra: &[u8],
+            width: i32,
+            height: i32,
+        ) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasInput)]
+        fn pdn_canvas_input(
+            session: i32,
+            props: Option<String>,
+            key: &str,
+            events: &str,
+        ) -> Result<Vec<u8>, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasPaint)]
+        fn pdn_canvas_paint(session: i32, key: &str) -> Result<Vec<u8>, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasToken)]
+        fn pdn_canvas_token(session: i32) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasLayout)]
+        fn pdn_canvas_layout(session: i32, key: &str) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasPress)]
+        fn pdn_canvas_press(session: i32, props: &str, key: &str) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasValues)]
+        fn pdn_canvas_values(session: i32) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasProvideFile)]
+        fn pdn_canvas_provide_file(
+            session: i32,
+            name: &str,
+            bytes: &[u8],
+        ) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasKeep)]
+        fn pdn_canvas_keep(session: i32) -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = pdnCanvasClose)]
+        fn pdn_canvas_close(session: i32) -> Result<JsValue, JsValue>;
         #[wasm_bindgen(catch, js_name = pdnDialogPress)]
         fn pdn_dialog_press(
             handle: i32,
@@ -1040,15 +1503,23 @@ mod web {
             Ok(remaining == 0)
         }
         /// Finish and return the raw plugin output as RGBA8 (the caller clips to the selection).
-        pub fn finish(self) -> Result<Vec<u8>, String> {
-            let mut rgba =
-                js_sys::Uint8Array::new(&pdn_render_finish(self.job).map_err(msg)?).to_vec();
+        pub fn finish(mut self) -> Result<Vec<u8>, String> {
+            let job = std::mem::take(&mut self.job);
+            let mut rgba = js_sys::Uint8Array::new(&pdn_render_finish(job).map_err(msg)?).to_vec();
             swap_rb(&mut rgba);
             Ok(rgba)
         }
         /// Abandon the job without finishing.
-        pub fn cancel(self) {
-            let _ = pdn_render_cancel_job(self.job);
+        pub fn cancel(self) {}
+    }
+
+    /// A job dropped unfinished (Cancel, its dialog closed, its preview superseded) is cancelled, so a render running
+    /// in the host's worker stops at once instead of finishing for nobody.
+    impl Drop for PluginJob {
+        fn drop(&mut self) {
+            if self.job != 0 {
+                let _ = pdn_render_cancel_job(self.job);
+            }
         }
     }
 
@@ -1085,32 +1556,46 @@ mod web {
         static DECODE_IMAGE: JsValue =
             Closure::<dyn Fn(Vec<u8>) -> Option<Vec<u8>>>::new(|bytes: Vec<u8>| super::decode_image(&bytes))
                 .into_js_value();
+        static ENCODE_IMAGE: JsValue = Closure::<dyn Fn(Vec<u8>, String, u8) -> Option<Vec<u8>>>::new(
+            |image: Vec<u8>, format: String, quality: u8| super::encode_image(&image, &format, quality),
+        )
+        .into_js_value();
     }
 
-    /// paint.rs's own faces, which the host's DirectWrite (OpenD2D, for GPU plug-ins' text) finds in its font folder:
-    /// the text tool's bundled families, and the interface's Selawik and Carlito.
-    fn font_files() -> (Vec<String>, Vec<js_sys::Uint8Array>) {
+    /// paint.rs's own faces, which the host's DirectWrite (OpenD2D, for GPU plug-ins' text) finds in its font
+    /// folder: every bundled family, plus the interface's Selawik and Carlito. Each face is handed over as either
+    /// the bytes paint.rs already holds or, for the rest, the address of the shipped `font/<path>` asset for the
+    /// host to fetch as it boots (so a session that never opens a plug-in downloads none of them, and the browser
+    /// cache — shared with the interface's own font list — serves repeat loads). Returns parallel (file name, bytes,
+    /// address) lists: an empty address means the bytes are supplied, an empty byte array means fetch the address.
+    fn font_files() -> (Vec<String>, Vec<js_sys::Uint8Array>, Vec<String>) {
         use crate::fonts::{CARLITO_REGULAR, FaceStyle, SELAWIK_BOLD, SELAWIK_REGULAR};
-        let mut faces: Vec<(String, std::sync::Arc<[u8]>)> = crate::fonts::bundled_families()
-            .iter()
-            .filter_map(|f| {
-                Some((
-                    format!("{f}.ttf"),
-                    crate::fonts::registered_face(f, FaceStyle::Regular)?,
-                ))
-            })
-            .collect();
+        let mut names = Vec::new();
+        let mut files = Vec::new();
+        let mut urls = Vec::new();
+        for (family, path) in crate::fonts::BUNDLED {
+            names.push(format!("{family}.ttf"));
+            match crate::fonts::registered_face(family, FaceStyle::Regular) {
+                Some(bytes) => {
+                    files.push(js_sys::Uint8Array::from(&bytes[..]));
+                    urls.push(String::new());
+                }
+                None => {
+                    files.push(js_sys::Uint8Array::new_with_length(0));
+                    urls.push(format!("font/{path}"));
+                }
+            }
+        }
         for (name, bytes) in [
             ("Selawik.ttf", SELAWIK_REGULAR),
             ("Selawik Bold.ttf", SELAWIK_BOLD),
             ("Carlito.ttf", CARLITO_REGULAR),
         ] {
-            faces.push((name.into(), bytes.into()));
+            names.push(name.into());
+            files.push(js_sys::Uint8Array::from(bytes));
+            urls.push(String::new());
         }
-        faces
-            .into_iter()
-            .map(|(name, bytes)| (name, js_sys::Uint8Array::from(&bytes[..])))
-            .unzip()
+        (names, files, urls)
     }
 
     /// Boot the runtime (lazily, once), then (re)load the given plugins and register their
@@ -1122,15 +1607,18 @@ mod web {
     pub async fn install(
         plugins: Vec<(String, Vec<u8>)>,
     ) -> Result<(f64, Vec<(String, String)>), String> {
-        let (font_names, font_files) = font_files();
+        let (font_names, font_files, font_urls) = font_files();
         pdn_boot(
             &TEXT_OUTLINE.with(Clone::clone),
             &DECODE_IMAGE.with(Clone::clone),
+            &ENCODE_IMAGE.with(Clone::clone),
             font_names,
             font_files,
+            font_urls,
         )
         .await
         .map_err(msg)?;
+        crate::effect::permission::send();
         unload_all();
         // Every installed file, for the plug-ins' private libraries (AForge, MathNet, a shared option
         // library) and the files they read beside themselves.
@@ -1171,6 +1659,7 @@ mod web {
         let skipped = problems(&parsed)?;
         // Register the plugin's FileTypes so its formats open/save through io::codecs.
         crate::io::plugins::register_web(handle, &parsed);
+        let mut keys = Vec::new();
         for eff in parsed
             .get("effects")
             .and_then(Value::as_array)
@@ -1193,6 +1682,7 @@ mod web {
                 def.id = key;
                 NAMES.with(|n| n.borrow_mut().insert(key, name));
                 super::remember_menu(key, name, eff.get("submenu").and_then(Value::as_str));
+                keys.push(key);
                 REGISTRY.with(|r| {
                     r.borrow_mut().insert(
                         key,
@@ -1206,12 +1696,25 @@ mod web {
                 });
             }
         }
+        super::remember_provided(file_name, keys, &parsed);
         Ok(skipped)
+    }
+
+    /// The outside requests plug-ins may make (`effect::permission`'s answers), for the host to check against: sent
+    /// once it has booted (install sends them again right after the boot).
+    pub fn set_permissions(json: &str) {
+        let _ = pdn_set_permissions(json);
+    }
+
+    /// The response to a network request the host left to paint.rs (`effect::permission::Request::key`).
+    pub fn store_network_response(key: &str, json: &str) {
+        let _ = pdn_store_network_response(key, json);
     }
 
     pub fn unload_all() {
         REGISTRY.with(|r| r.borrow_mut().clear());
         NAMES.with(|n| n.borrow_mut().clear());
+        super::forget_provided();
         crate::io::plugins::clear();
         REVISION.with(|r| r.set(r.get() + 1));
     }
@@ -1328,7 +1831,217 @@ mod web {
         .map_err(msg)?
         .as_string()
         .ok_or("the press returned no JSON")?;
-        super::take_press(&result, &controls, values)
+        super::take_press(&result, &controls, values).map(drop)
+    }
+
+    /// Plug-in effect `id`'s own settings window kept open over `src` while its dialog shows the window's live
+    /// canvas (`Control::PluginCanvas`): input reaches the window as it happens, and the effect renders with the
+    /// window's token (`token`). The host keeps one open; dropping this closes it.
+    pub struct Canvas {
+        session: i32,
+        /// When the window's next running timer is due (ms after its last read) and whether it may take a while
+        /// (it has not ticked yet, or its last tick was slow), as the host reads it back.
+        due: Option<(u32, bool)>,
+        /// How often the window has said its token changed, as of its last read.
+        revision: Option<u64>,
+        choice_keys: Vec<&'static str>,
+        controls: Vec<Control>,
+        layouts: Vec<(&'static str, CanvasLayout)>,
+    }
+
+    impl Canvas {
+        /// Opens the window as `values` leave it, over an owner window `window` big (the room paint.rs gives it).
+        pub fn open(
+            id: &str,
+            src: &ImageData,
+            values: &Values,
+            env: &EffectEnv,
+            window: [u32; 2],
+        ) -> Result<Canvas, String> {
+            let (handle, dotnet_id, choice_keys, controls) = REGISTRY
+                .with(|r| {
+                    r.borrow().get(id).map(|e| {
+                        (
+                            e.handle,
+                            e.dotnet_id,
+                            e.choice_keys.clone(),
+                            e.def.controls.clone(),
+                        )
+                    })
+                })
+                .ok_or("the plug-in is not loaded")?;
+            let props = with_window(render_props(values, &choice_keys, &controls, env), window);
+            let mut bgra = src.data.clone();
+            swap_rb(&mut bgra);
+            let session = pdn_canvas_open(
+                handle,
+                dotnet_id,
+                Some(props),
+                &bgra,
+                src.width as i32,
+                src.height as i32,
+            )
+            .map_err(msg)?
+            .as_f64()
+            .filter(|&s| s > 0.0)
+            .ok_or("the settings window did not open")? as i32;
+            let layouts = canvas_layouts(&controls, |key| {
+                pdn_canvas_layout(session, key)
+                    .ok()
+                    .and_then(|v| v.as_string())
+            });
+            Ok(Canvas {
+                session,
+                due: None,
+                revision: None,
+                choice_keys,
+                controls,
+                layouts,
+            })
+        }
+
+        /// Where the canvas `key` sits in the open window.
+        pub fn layout(&self, key: &str) -> Option<CanvasLayout> {
+            self.layouts
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, l)| *l)
+        }
+
+        /// Press the open window's button `key` as `values` leave its settings, taking its token and settings after
+        /// it into `values` (as [`press`] does for a closed window). `false` from a host that cannot.
+        pub fn press(
+            &mut self,
+            key: &str,
+            values: &mut Values,
+            env: &EffectEnv,
+        ) -> Result<Option<Option<super::FilePick>>, String> {
+            let props = render_props(values, &self.choice_keys, &self.controls, env);
+            let result = pdn_canvas_press(self.session, &props, key).map_err(msg)?;
+            match result.as_string() {
+                Some(result) => {
+                    self.grow(&result);
+                    super::take_press(&result, &self.controls, values).map(Some)
+                }
+                None => Ok(None),
+            }
+        }
+
+        /// Give the open window the file (`name`, `bytes`) its last press asked for. `false` from a host that cannot.
+        pub fn provide_file(&self, name: &str, bytes: &[u8]) -> Result<bool, String> {
+            Ok(pdn_canvas_provide_file(self.session, name, bytes)
+                .map_err(msg)?
+                .as_bool()
+                == Some(true))
+        }
+
+        /// The open window's settings now, which input to it can change, into `values`. `false` from a host that
+        /// cannot.
+        pub fn values(&mut self, values: &mut Values) -> Result<bool, String> {
+            let result = pdn_canvas_values(self.session).map_err(msg)?;
+            match result.as_string() {
+                Some(result) => {
+                    self.grow(&result);
+                    let parsed: Value = serde_json::from_str(&result).map_err(|e| e.to_string())?;
+                    super::take_properties(&parsed, &self.controls, values);
+                    self.due = super::due(&parsed).map(|d| {
+                        (
+                            d,
+                            parsed
+                                .get("dueSlow")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(true),
+                        )
+                    });
+                    self.revision = parsed.get("revision").and_then(Value::as_u64);
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        /// The window's controls now: the schema's, grown by rows its own input brought.
+        pub fn controls(&self) -> &[Control] {
+            &self.controls
+        }
+
+        /// When the window's next running timer is due, in ms from its last read ([`Self::values`]), and whether it
+        /// may take a while; taken, so it is acted on once.
+        pub fn take_due(&mut self) -> Option<(u32, bool)> {
+            self.due.take()
+        }
+
+        /// How often the window has said its token changed, as of its last read ([`Self::values`]).
+        pub fn revision(&self) -> Option<u64> {
+            self.revision
+        }
+
+        /// Take the rows a press or a read-back (`result`) lists that the window did not have.
+        fn grow(&mut self, result: &str) {
+            if let Some((controls, choice_keys)) = serde_json::from_str(result)
+                .ok()
+                .and_then(|p| super::grown_controls(&p, &self.controls))
+            {
+                (self.controls, self.choice_keys) = (controls, choice_keys);
+            }
+        }
+
+        /// The window's other settings as `values` leave them, then `events` (a JSON array) on the canvas `key`:
+        /// what it draws after.
+        pub fn input(
+            &self,
+            key: &str,
+            events: &Value,
+            values: &Values,
+            env: &EffectEnv,
+        ) -> Result<ImageData, String> {
+            let props = render_props(values, &self.choice_keys, &self.controls, env);
+            let mut rgba = pdn_canvas_input(self.session, Some(props), key, &events.to_string())
+                .map_err(msg)?;
+            swap_rb(&mut rgba);
+            canvas_image(&self.layouts, key, rgba)
+        }
+
+        /// `events` (a JSON array) on the window's control `key` that is not a canvas (a code editor), as
+        /// [`Self::input`] sends them, its drawing left aside.
+        pub fn send(
+            &self,
+            key: &str,
+            events: &Value,
+            values: &Values,
+            env: &EffectEnv,
+        ) -> Result<(), String> {
+            let props = render_props(values, &self.choice_keys, &self.controls, env);
+            pdn_canvas_input(self.session, Some(props), key, &events.to_string())
+                .map(drop)
+                .map_err(msg)
+        }
+
+        /// What the canvas `key` draws now.
+        pub fn paint(&self, key: &str) -> Result<ImageData, String> {
+            let mut rgba = pdn_canvas_paint(self.session, key).map_err(msg)?;
+            swap_rb(&mut rgba);
+            canvas_image(&self.layouts, key, rgba)
+        }
+
+        /// The window's token now: the effect's `$token` value ([`super::TOKEN`]).
+        pub fn token(&self) -> Result<String, String> {
+            pdn_canvas_token(self.session)
+                .map_err(msg)?
+                .as_string()
+                .ok_or_else(|| "the window gave no token".into())
+        }
+
+        /// The dialog's OK: the token outlives the window, so Repeat renders with it.
+        pub fn keep(&self) -> Result<(), String> {
+            pdn_canvas_keep(self.session).map(|_| ()).map_err(msg)
+        }
+    }
+
+    impl Drop for Canvas {
+        fn drop(&mut self) {
+            let _ = pdn_canvas_close(self.session);
+        }
     }
 
     pub fn render(id: &str, src: &ImageData, values: &Values, env: &EffectEnv) -> ImageData {
@@ -1447,74 +2160,99 @@ mod tests {
         assert!(props.get("w:1.").is_none());
     }
 
-    /// A plug-in window's curve is a curve control whose channels follow the choice that swaps them, its own
-    /// channels when the choice's set is unknown, and a press takes the points the window shows.
+    /// A live window's settings, shaped as the dialog's rows, that list a row it did not have (a list a loaded file
+    /// filled) give its new controls; the same rows again, or a raw list, give none.
     #[test]
-    fn a_windows_curve_follows_its_mode() {
-        let schema = serde_json::json!({ "properties": [
-            { "name": "w:0.", "type": "choice", "label": "Mode", "default": 0,
-              "choices": [{ "value": 0, "label": "Gray" }, { "value": 1, "label": "Colour" }, { "value": 2, "label": "Odd" }] },
-            { "name": "w:1.curve", "type": "curve", "label": "Curve", "max": 255,
-              "default": [[[0, 0], [255, 255]]], "channels": ["Gray"], "colors": [""], "by": "w:0.",
-              "sets": [{ "default": [[[0, 0], [255, 255]]], "channels": ["Gray"], "colors": [""] },
-                       { "default": [[[0, 0], [255, 255]], [[0, 0], [255, 255]]], "channels": ["Red", "Green"],
-                         "colors": ["#ff0000", "#00ff00"] },
-                       { "default": [], "channels": [], "colors": [] }] },
+    fn a_window_grows_the_rows_its_input_brought() {
+        let at_open = serde_json::json!({ "properties": [
+            { "name": "w:0.1.", "type": "button", "label": "Open" },
         ]});
-        let (controls, _) = super::controls_from_properties(&schema);
-        let super::Control::PluginCurve {
-            max, own, by, sets, ..
-        } = &controls[1]
-        else {
-            panic!("{controls:?}")
-        };
-        assert_eq!((*max, *by), (255, Some("w:0.")));
-        let mut values = crate::effect::Values::new();
-        let pick =
-            |values: &super::Values| crate::effect::curve_channels(own, *by, sets, values).names;
-        assert_eq!(pick(&values), ["Gray"]);
-        values.insert("w:0.".into(), Value::from("1"));
-        assert_eq!(pick(&values), ["Red", "Green"]);
+        let (controls, _) = super::controls_from_properties(&at_open);
+        assert!(super::grown_controls(&at_open, &controls).is_none());
+        let rows = serde_json::json!([
+            { "name": "w:0.0.", "type": "choice", "label": "Map File", "choices": ["a.png"], "default": 0 },
+            { "name": "w:0.1.", "type": "button", "label": "Open" },
+        ]);
+        let raw = serde_json::json!({ "properties": rows });
+        assert!(super::grown_controls(&raw, &controls).is_none());
+        let loaded = serde_json::json!({ "shape": "dialog", "properties": rows });
+        let (grown, choice_keys) = super::grown_controls(&loaded, &controls).unwrap();
         assert_eq!(
-            crate::effect::curve_channels(own, *by, sets, &values).colors,
-            [Some([255, 0, 0]), Some([0, 255, 0])]
+            grown.iter().map(|c| c.key()).collect::<Vec<_>>(),
+            ["w:0.0.", "w:0.1."]
         );
-        values.insert("w:0.".into(), Value::from("2"));
-        assert_eq!(pick(&values), ["Gray"], "a set the window gave no channels");
+        assert_eq!(choice_keys, ["w:0.0."]);
+    }
 
-        let pressed = r#"{"properties":[{"name":"w:1.curve","type":"curve","default":[[[0,0],[100,90],[255,255]]]}]}"#;
-        super::take_press(pressed, &controls, &mut values).unwrap();
+    /// A press that opened the window's own file prompt says which files it wants; one that did not, nothing.
+    #[test]
+    fn a_press_that_prompts_for_a_file_says_which() {
+        let mut values = super::Values::new();
+        let pressed = r#"{"token":"mem:1","properties":[],"pick":{"kind":"open","title":"Open","extensions":[".PNG","jpg"]}}"#;
+        let pick = super::take_press(pressed, &[], &mut values).unwrap();
         assert_eq!(
-            values["w:1.curve"],
-            serde_json::json!([[[0, 0], [100, 90], [255, 255]]])
+            pick,
+            Some(super::FilePick {
+                title: "Open".into(),
+                extensions: vec!["png".into(), "jpg".into()]
+            })
+        );
+        assert_eq!(values[super::TOKEN], "mem:1");
+        assert_eq!(
+            super::take_press(r#"{"token":"mem:2","properties":[]}"#, &[], &mut values).unwrap(),
+            None
         );
     }
 
-    /// A plug-in window's displacement grid is a grid control, none of its nodes moved at first, its columns the label
-    /// of the choice that sets them; a press takes the nodes the window shows.
+    /// A plug-in window's custom-drawn control is a live canvas of its size with no value of its own, and what the
+    /// host draws for it is taken only at that size.
     #[test]
-    fn a_windows_grid_takes_its_size_from_its_choice() {
+    fn a_windows_canvas_is_a_live_canvas_of_its_size() {
         let schema = serde_json::json!({ "properties": [
-            { "name": "w:0.", "type": "choice", "label": "Columns", "default": 0,
-              "choices": [{ "value": 0, "label": "2" }, { "value": 1, "label": "5" }] },
-            { "name": "w:grid", "type": "grid", "label": "Grid", "columns": 2, "rows": 3,
-              "default": [], "columnsBy": "w:0." },
+            { "name": "w:3.canvas", "type": "canvas", "label": "Canvas", "width": 3, "height": 2, "default": [] },
         ]});
         let (controls, _) = super::controls_from_properties(&schema);
-        let grid = &controls[1];
-        assert_eq!(grid.default_value(), serde_json::json!([]));
-        let mut values: super::Values = controls
-            .iter()
-            .map(|c| (c.key().to_owned(), c.default_value()))
-            .collect();
-        assert_eq!(crate::effect::grid_size(grid, &controls, &values), (2, 3));
-        values.insert("w:0.".into(), Value::from("1"));
-        assert_eq!(crate::effect::grid_size(grid, &controls, &values), (5, 3));
-
-        let pressed =
-            r#"{"properties":[{"name":"w:grid","type":"grid","default":[[1,1,0.5,-0.25]]}]}"#;
-        super::take_press(pressed, &controls, &mut values).unwrap();
-        assert_eq!(values["w:grid"], serde_json::json!([[1, 1, 0.5, -0.25]]));
+        assert!(matches!(
+            controls[0],
+            super::Control::PluginCanvas {
+                key: "w:3.canvas",
+                width: 3,
+                height: 2,
+                ..
+            }
+        ));
+        assert_eq!(controls[0].default_value(), serde_json::json!([]));
+        // Without the host's layout the schema's size; with it, the canvas's size in the open window.
+        let layouts = super::canvas_layouts(&controls, |_| None);
+        let image = super::canvas_image(&layouts, "w:3.canvas", vec![7; 24]).unwrap();
+        assert_eq!((image.width, image.height, image.data.len()), (3, 2, 24));
+        assert!(super::canvas_image(&layouts, "w:3.canvas", vec![7; 20]).is_err());
+        assert!(super::canvas_image(&layouts, "w:9.canvas", vec![7; 24]).is_err());
+        let live = super::canvas_layouts(&controls, |_| Some("800,600,30,25,5,4".into()));
+        let expected = super::CanvasLayout {
+            window: (800, 600),
+            at: (30, 25),
+            size: (5, 4),
+        };
+        assert_eq!(live, [("w:3.canvas", expected)]);
+        assert_eq!(
+            super::canvas_image(&live, "w:3.canvas", vec![7; 80])
+                .unwrap()
+                .width,
+            5
+        );
+        assert!(
+            super::canvas_layouts(&controls, |_| Some("800,600,1,2".into()))[0]
+                .1
+                .size
+                == (3, 2)
+        );
+        let props = super::with_window(r#"{"$environment":{"primary":1}}"#.into(), [640, 480]);
+        let props: Value = serde_json::from_str(&props).unwrap();
+        assert_eq!(
+            props["$environment"],
+            serde_json::json!({"primary": 1, "window": [640, 480]})
+        );
     }
 
     /// A plug-in's string comes back as outlines a line wide and tall, and a missing Windows family still draws.
@@ -1559,6 +2297,30 @@ mod tests {
             (b, g, r, a)
         );
         assert!(super::decode_image(b"not an image").is_none());
+    }
+
+    /// The host's System.Drawing saving a JPEG: what `encode_image` writes is a JPEG of the same size that reads
+    /// back close to the original; other formats and short buffers give nothing.
+    #[test]
+    fn encode_image_writes_a_jpeg_that_reads_back() {
+        let (w, h) = (16u32, 8u32);
+        let mut image = [w.to_le_bytes(), h.to_le_bytes()].concat();
+        for i in 0..w * h {
+            image.extend([40, 120, (100 + i % 16 * 4) as u8, 255]);
+        }
+        let jpeg = super::encode_image(&image, "Jpeg", 75).unwrap();
+        assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+        let back = super::decode_image(&jpeg).unwrap();
+        assert_eq!(&back[..8], &image[..8]);
+        let worst = back[8..]
+            .iter()
+            .zip(&image[8..])
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(worst < 24, "{worst}");
+        assert!(super::encode_image(&image, "Gif", 75).is_none());
+        assert!(super::encode_image(&image[..20], "Jpeg", 75).is_none());
     }
 
     /// Two plug-ins defining one .NET type name each get an entry; the first keeps the plain name.
