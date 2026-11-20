@@ -5,6 +5,7 @@
 // built-in type decodes through GDI+ (libgdiplus off Windows). Written from the public metadata of
 // PaintDotNet.Data; only what the plugins use. Save configuration widgets are WinForms controls, which this
 // host does not show: the save options come from a PropertyBasedFileType's property collection.
+extern alias core;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -175,7 +176,7 @@ public sealed class Document : IDisposable
     // an invalidated event.
     public event System.Windows.Forms.InvalidateEventHandler? Invalidated;
     public double PixelToPhysicalY(double pixels, MeasurementUnit unit) => pixels;
-    public PaintDotNet.Rendering.IRenderer<ColorBgra> CreateRenderer() => new DocumentRendererBgra(this);
+    public core::PaintDotNet.Rendering.IRenderer<ColorBgra> CreateRenderer() => new DocumentRendererBgra(this);
     public static double DefaultDpi => Resolution.DefaultDpi;
     public static double DefaultDpcm => Resolution.DefaultDpi / 2.54;
     public static double DotsPerInchToDotsPerCm(double dpi) => dpi / 2.54;

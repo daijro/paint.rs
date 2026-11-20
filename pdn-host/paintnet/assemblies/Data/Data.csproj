@@ -5,7 +5,8 @@
     <RootNamespace>PaintDotNet</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Core/Core.csproj" />
+    <!-- core:: names Core's IRenderer apart from Primitives' (Document.CreateRenderer). -->
+    <ProjectReference Include="../Core/Core.csproj" Aliases="global,core" />
     <!-- LayerBlendModeExtensions maps a blend mode to Paint.NET 5's MixMode. -->
     <ProjectReference Include="../WindowsFramework/WindowsFramework.csproj" />
   </ItemGroup>

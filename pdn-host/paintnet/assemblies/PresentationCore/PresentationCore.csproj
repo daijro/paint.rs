@@ -15,5 +15,7 @@
          those from plugin-shims, since the plugin load context resolves them to the host's own copies. A second
          System.Windows.Forms in plugin-shims would split assembly identity and crash a WinForms/GDI+ paint. -->
     <ProjectReference Include="../WindowsCore/WindowsCore.csproj" />
+    <!-- Direct2DFactoryExtensions.CreateGeometryFromWpfGeometry builds through Geometry.BuildHost. -->
+    <InternalsVisibleTo Include="PaintDotNet.Windows.Framework" />
   </ItemGroup>
 </Project>

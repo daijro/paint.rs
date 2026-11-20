@@ -362,7 +362,7 @@ internal static class GpuDriver
             bgra.CopyTo(sourceBitmap.Pixels, 0);
             IImagingFactory imaging = ImagingFactory.CreateRef();
             var environment = new GpuEnvironment(
-                () => { (bool linear, bool straight) = workingSpace(); return SourceImage(linear, straight); },
+                pixels => { (bool linear, bool straight) = workingSpace(); return SourceImage(pixels, linear, straight); },
                 () => Own(Upload(Mask())),
                 // The document colour context is the working space's, as Paint.NET's: linear for a linear effect.
                 () => Own(Dc.CreateColorContext(workingSpace().Linear ? DeviceColorSpace.ScRgb : DeviceColorSpace.Srgb)),
@@ -383,12 +383,12 @@ internal static class GpuDriver
         /// reinterpreted as Pbgra32, colour-managed from the document's sRGB into a linear working space
         /// (ColorManagement, straight, Best), then premultiplied unless the effect takes straight alpha. The
         /// device does the conversion, as on Paint.NET; the context renders effects at Float32.
-        private IDeviceImage SourceImage(bool linear, bool straight)
+        private IDeviceImage SourceImage(byte[] pixels, bool linear, bool straight)
         {
             // Paint.NET builds the source image at the render info's input precision (Float32): every node of its graph
             // carries D2D1_PROPERTY_PRECISION, the bitmap itself through a PrecisionEffect.
             const BufferPrecision precision = BufferPrecision.Float32;
-            IDeviceImage image = Own(new PrecisionEffect(Dc, Own(Upload(bgra)), precision));
+            IDeviceImage image = Own(new PrecisionEffect(Dc, Own(Upload(pixels)), precision));
             if (linear)
             {
                 // Paint.NET converts sRGB into its linear working space with its own SrgbToLinear shader (the precise

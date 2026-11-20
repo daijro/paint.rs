@@ -188,11 +188,11 @@ namespace PaintDotNet.Direct2D1
 
     public static class Direct2DFactoryExtensions
     {
-        // A Direct2D geometry from a WPF geometry, and a bitmap source rendered from a device image. The host has no WPF
-        // and renders device images through its own path, not these, so they are inert here (a plug-in that names them
-        // binds; the conversion is not available). The survey references them but does not reach them at dialog load.
+        /// A Direct2D geometry from a WPF geometry: the WPF stand-in's own host path (what its DrawingContext fills and
+        /// strokes). ponytail: curves are flattened at the stand-in's tolerance, not `flatteningTolerance`.
         public static IGeometry CreateGeometryFromWpfGeometry(this IDirect2DFactory factory, System.Windows.Media.Geometry geometry, float? flatteningTolerance = null)
-            => throw new System.NotSupportedException("WPF geometry conversion is not available on this host");
+            => geometry.BuildHost(factory)
+               ?? throw new System.NotSupportedException($"a {geometry.GetType().Name} carries no path on this host");
         /// A CPU bitmap of what `render` draws on a device context of this factory, over `size`. ponytail: rendered as
         /// 8-bit BGRA (the context-based overload), whatever `pixelFormat` asks; a float format would need a float read-back.
         public static PaintDotNet.Imaging.IBitmapSource<TPixel> CreateBitmapSourceFromImage<TPixel>(this IDirect2DFactory factory, PaintDotNet.Rendering.SizeInt32 size, DevicePixelFormat pixelFormat, System.Func<IDeviceContext, IDeviceImage> render)

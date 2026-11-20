@@ -1,10 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <AssemblyName>PaintDotNet.Core</AssemblyName>
+    <!-- Core's IRenderer (the older shape) hides Primitives' by name, on purpose: see RendererExtensions.Primitives.cs. -->
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
     <RootNamespace>PaintDotNet</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Windows/Windows.csproj" />
+    <!-- prim:: names Primitives' IRenderer, which Core's own (older) IRenderer hides (RendererExtensions.Primitives.cs). -->
+    <ProjectReference Include="../Primitives/Primitives.csproj" Aliases="global,prim" />
     <!-- IndirectUI describes controls per Property. -->
     <ProjectReference Include="../PropertySystem/PropertySystem.csproj" />
     <!-- IClipboardService extends Base's IClipboard. -->

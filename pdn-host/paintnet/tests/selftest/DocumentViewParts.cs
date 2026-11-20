@@ -4,6 +4,7 @@
 // its own pixels, a drop-down cleared and refilled with no selection event in between, and a scrolling panel whose
 // content fits, so it cannot scroll and the view can centre the image in it. Green when every check holds; red, with
 // the failed checks as bits of blue, otherwise. Our own code.
+extern alias core;
 using System;
 using System.Drawing;
 using System.Windows.Forms;
@@ -46,7 +47,7 @@ public sealed class DocumentViewPartsEffect : PropertyBasedEffect
         // The surface renders its own pixels: the two by two at (3, 1).
         renderer.Render(surface, new Int32Point(0, 0));
         using var copy = new Surface(2, 2);
-        ((IRenderer<ColorBgra>)surface).Render(copy, new Int32Point(3, 1));
+        ((core::PaintDotNet.Rendering.IRenderer<ColorBgra>)surface).Render(copy, new Int32Point(3, 1));
         if (copy[1, 1] != At(4, 2)) failed |= 4;
 
         var combo = new ComboBox();
@@ -75,7 +76,7 @@ public sealed class DocumentViewPartsEffect : PropertyBasedEffect
     {
         protected override unsafe void OnRender(ISurface<ColorBgra> dst, Int32Point renderOffset)
         {
-            var size = (IRenderer<ColorBgra>)dst;
+            var size = (core::PaintDotNet.Rendering.IRenderer<ColorBgra>)dst;
             for (int y = 0; y < size.Height; y++)
             {
                 var row = (ColorBgra*)dst.GetRowPointer(y);

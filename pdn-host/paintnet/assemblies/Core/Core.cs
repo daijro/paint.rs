@@ -1128,7 +1128,7 @@ namespace PaintDotNet.Rendering
     }
 
     /// Extension points over IRenderer that plug-ins reference by name.
-    public static class RendererExtensions
+    public static partial class RendererExtensions
     {
         /// The renderer's whole image, at (0, 0).
         public static System.Windows.Int32Rect Bounds<T>(this IRenderer<T> renderer) where T : unmanaged => new(0, 0, renderer.Width, renderer.Height);

@@ -12,7 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../assemblies/Primitives/Primitives.csproj" />
-    <ProjectReference Include="../../assemblies/Core/Core.csproj" />
+    <ProjectReference Include="../../assemblies/Core/Core.csproj" Aliases="global,core" />
     <ProjectReference Include="../../assemblies/Effects.Core/Effects.Core.csproj" />
     <!-- BuiltinsEffect drives the classic built-ins. -->
     <ProjectReference Include="../../assemblies/Effects.Legacy/Effects.Legacy.csproj" />

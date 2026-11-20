@@ -2,6 +2,15 @@ using System;
 
 namespace PaintDotNet.Rendering
 {
+    /// A renderer of TPixel pixels, as Paint.NET 5.1 declares it here. PaintDotNet.Core keeps its own, older
+    /// IRenderer for plug-ins built against that one; RendererExtensions takes both.
+    public interface IRenderer<TPixel> where TPixel : unmanaged
+    {
+        int Width { get; }
+        int Height { get; }
+        void Render(RegionPtr<TPixel> dst, Point2Int32 renderOffset);
+    }
+
     /// Pixels in memory, row by row. Classic Surface is an ISurface<ColorBgra>.
     public interface ISurface<TPixel> where TPixel : unmanaged
     {

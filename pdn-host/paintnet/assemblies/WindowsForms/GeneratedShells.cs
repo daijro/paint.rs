@@ -21,6 +21,25 @@ namespace System.Windows.Forms {
       public ConnectionPointCookie(object source, object sink, global::System.Type eventInterface) { }
       public void Disconnect() { }
     }
+    // An ActiveX interop assembly's wrapper names these (no ActiveX control runs on this host).
+    public enum ActiveXInvokeKind { MethodInvoke, PropertyGet, PropertySet }
+    [global::System.AttributeUsage(global::System.AttributeTargets.Class, Inherited = false)]
+    public sealed class ClsidAttribute : global::System.Attribute {
+      public ClsidAttribute(string clsid) { Value = clsid; }
+      public string Value { get; }
+    }
+    public class InvalidActiveXStateException : global::System.Exception {
+      private readonly string? name;
+      private readonly ActiveXInvokeKind kind;
+      public InvalidActiveXStateException() { }
+      public InvalidActiveXStateException(string? name, ActiveXInvokeKind kind) { this.name = name; this.kind = kind; }
+      public override string ToString() => kind switch {
+        ActiveXInvokeKind.MethodInvoke => $"Method '{name}' cannot be invoked at this time.",
+        ActiveXInvokeKind.PropertyGet => $"Value of '{name}' cannot be retrieved at this time.",
+        ActiveXInvokeKind.PropertySet => $"Value of '{name}' cannot be set at this time.",
+        _ => base.ToString(),
+      };
+    }
     public sealed class TypeLibraryTimeStampAttribute : global::System.Attribute {
       private readonly string timestamp;
       public TypeLibraryTimeStampAttribute(string timestamp) { this.timestamp = timestamp; }

@@ -141,11 +141,18 @@ namespace PaintDotNet.Effects
 
     public static class EffectEnvironment2Extensions
     {
-        // CodeLab calls these to re-point the preview environment at its own source bitmap / aliased selection. The
-        // host supplies the real IEffectEnvironment2 and implements the clone on the producer side.
-        // ponytail: producer-side clone, wired with the host's IEffectEnvironment2 once v6.15 loads.
-        public static IEffectEnvironment2 CloneWithNewSource(this IEffectEnvironment2 environment, IBitmapSource newSourceBitmap)
-            => throw new NotImplementedException("EffectEnvironment2Extensions.CloneWithNewSource: wired on the producer side");
+        /// The environment over another source bitmap, which the caller disposes: the bitmap in BGRA32 (through WIC
+        /// when it is in another format) as the source image and pixels, the rest as before.
+        public static unsafe IEffectEnvironment2 CloneWithNewSource(this IEffectEnvironment2 environment, IBitmapSource newSourceBitmap)
+        {
+            var host = (Gpu.GpuEnvironment)environment;
+            SizeInt32 size = newSourceBitmap.Size;
+            if (size != host.Size) throw new ArgumentException("the new source is not the size of the environment's", nameof(newSourceBitmap));
+            IBitmapSource bgra = newSourceBitmap as IBitmapSource<ColorBgra32> ?? newSourceBitmap.CreateFormatConverter<ColorBgra32>();
+            var bitmap = new ManagedBitmap<ColorBgra32>(size.Width, size.Height);
+            fixed (byte* p = bitmap.Pixels) bgra.CopyPixels(p, size.Width * 4, (uint)bitmap.Pixels.Length, null);
+            return host.WithSource(bitmap);
+        }
 
         // The environment with its selection unsmoothed. The host's selection mask bitmap is built from the
         // selection's scans, so it is hard-edged already: another reference to the same environment, which the

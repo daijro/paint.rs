@@ -21,12 +21,13 @@ namespace PaintDotNet.Effects.Gpu
 
         /// `sourceImage`, `maskImage` and `colorContext` run on first use: the host uploads the source in the
         /// working space the effect's render info chose, which is only known after the environment is set.
-        internal GpuEnvironment(Func<IDeviceImage> sourceImage, Func<IDeviceImage> maskImage, Func<IDeviceColorContext> colorContext,
+        internal GpuEnvironment(Func<byte[], IDeviceImage> sourceImage, Func<IDeviceImage> maskImage, Func<IDeviceColorContext> colorContext,
                                 ManagedBitmap<ColorBgra32> sourceBitmap, RectInt32 selection, IReadOnlyList<RectInt32> selectionScans, IGeometry selectionGeometry,
                                 ColorBgra32 primaryColor, ColorBgra32 secondaryColor, IImagingFactory imagingFactory,
                                 IDirect2DFactory direct2DFactory, IDirectWriteFactory directWriteFactory)
         {
-            source = new InputImage(sourceImage);
+            (this.sourceImage, this.maskImage, this.colorContextFactory) = (sourceImage, maskImage, colorContext);
+            source = new InputImage(() => sourceImage(sourceBitmap.Pixels));
             mask = new InputImage(maskImage);
             this.colorContext = new Lazy<IDeviceColorContext>(colorContext);
             sourcePixels = sourceBitmap;
@@ -40,6 +41,15 @@ namespace PaintDotNet.Effects.Gpu
             ImagingFactory = imagingFactory;
             DirectWriteFactory = directWriteFactory;
         }
+
+        private readonly Func<byte[], IDeviceImage> sourceImage;
+        private readonly Func<IDeviceImage> maskImage;
+        private readonly Func<IDeviceColorContext> colorContextFactory;
+
+        /// This environment over another source bitmap of the same size (EffectEnvironment2Extensions.CloneWithNewSource).
+        internal GpuEnvironment WithSource(ManagedBitmap<ColorBgra32> sourceBitmap)
+            => new(sourceImage, maskImage, colorContextFactory, sourceBitmap, RenderBounds, RenderScans, Geometry,
+                   PrimaryColor, SecondaryColor, ImagingFactory, Direct2DFactory, DirectWriteFactory);
 
         internal IEffectInputBitmap<ColorBgra32> SourceBitmap { get; }
         /// The source's straight BGRA8 bytes, rows of Size.Width.
