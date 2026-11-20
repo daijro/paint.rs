@@ -88,9 +88,11 @@ def supplemental_notices(package, supplement_root):
 
 
 def workspace_root_notices(package, root):
-    """For a path dependency (no registry source) whose licence file sits at the root of the Cargo
-    workspace it belongs to, as OpenD2D's crates do, return that root's licence and notice files."""
-    if package.get('source') is not None:
+    """For a path or git dependency (not a registry crate) whose licence file sits at the root of the Cargo
+    workspace it belongs to, as OpenD2D's crates do, return that root's licence and notice files. A git
+    checkout holds the whole repository, so the workspace root is inside it."""
+    source = package.get('source')
+    if source is not None and not source.startswith('git+'):
         return []
     for parent in root.parents:
         manifest = parent / 'Cargo.toml'

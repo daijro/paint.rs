@@ -51,6 +51,24 @@ class NoticesTests(unittest.TestCase):
             self.assertEqual((tmp / 'output/rust/example-1/vendor/COPYING').read_text(),
                              'Bundled third-party BSD terms')
 
+    def test_git_and_path_dependencies_take_their_workspace_root_license(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            checkout = tmp / 'checkout'
+            (checkout / 'crates/d2d').mkdir(parents=True)
+            (checkout / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/*"]\n')
+            (checkout / 'LICENSE').write_text('Workspace terms')
+            for source in ('git+https://github.com/daijro/opend2d?rev=ad88739e#ad88739e', None):
+                package = dict(id='d2d', name='d2d', version='0.1.0', source=source,
+                               manifest_path=str(checkout / 'crates/d2d/Cargo.toml'), license='MIT', license_file=None)
+                output = tmp / ('output-' + str(source is None))
+                notices.collect_dependencies(dict(packages=[package], workspace_members=[]), output)
+                self.assertEqual((output / 'rust/d2d-0.1.0/workspace/LICENSE').read_text(), 'Workspace terms')
+            package = dict(id='d2d', name='d2d', version='0.1.0', source='test-registry',
+                           manifest_path=str(checkout / 'crates/d2d/Cargo.toml'), license='MIT', license_file=None)
+            with self.assertRaises(ValueError):
+                notices.collect_dependencies(dict(packages=[package], workspace_members=[]), tmp / 'registry')
+
     def test_missing_native_licenses_fail_packaging(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
