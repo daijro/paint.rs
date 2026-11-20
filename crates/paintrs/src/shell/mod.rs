@@ -1828,7 +1828,8 @@ mod tests {
             .build_eframe(|cc| {
                 crate::PaintApp::new_with_policy(cc, pdn_core::fonts::FontPolicy::Bundled)
             });
-        h.run();
+        // Bounded settle: the thumbnail worker's repaint can land after max_steps under load.
+        h.run_ok();
         let app = &mut h.state_mut().app;
         let settings = pdn_core::tool::text::TextSettings::from_tool_settings(
             &app.tool_settings,

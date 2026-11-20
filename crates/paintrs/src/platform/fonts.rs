@@ -889,14 +889,16 @@ mod color_retry_tests {
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
             .build_eframe(|cc| crate::PaintApp::new_with_policy(cc, FontPolicy::Bundled));
-        h.run();
+        // Bounded settles: the thumbnail worker requests a repaint whenever it finishes a job, which
+        // under load can land after max_steps; the checks here only need the frames to have run.
+        h.run_ok();
         let key = ("noto color emoji".to_string(), FaceStyle::Regular);
         assert!(
             !h.state().fonts.tried.contains(&key),
             "startup does not request color font"
         );
         h.state_mut().app.set_active_tool_from_type(ToolType::Text);
-        h.run();
+        h.run_ok();
         assert!(
             !h.state().fonts.tried.contains(&key),
             "empty Text does not request color font"
