@@ -34,6 +34,11 @@ public partial class PdnWebHost
     internal static partial byte[] DecodeImage(byte[] encoded);
     [JSImport("encodeImage", "pdn")]
     internal static partial byte[] EncodeImage(byte[] image, string format, int quality);
+    // paint.rs's .pdn reader and writer, for the managed Document's FromStream and SaveToStream.
+    [JSImport("decodeDocument", "pdn")]
+    internal static partial byte[] DecodeDocument(byte[] bytes);
+    [JSImport("encodeDocument", "pdn")]
+    internal static partial byte[] EncodeDocument(byte[] blob);
     [JSImport("printPages", "pdn")]
     internal static partial void PrintPages(string[] pagesBase64);
 
@@ -43,6 +48,8 @@ public partial class PdnWebHost
             new Func<string, string, float, int, float[]>((t, f, px, s) => Array.ConvertAll(TextOutline(t, f, px, s), d => (float)d)));
         AppContext.SetData("System.Drawing.DecodeImage", new Func<byte[], byte[]>(DecodeImage));
         AppContext.SetData("System.Drawing.EncodeImage", new Func<byte[], string, int, byte[]>(EncodeImage));
+        AppContext.SetData("PaintDotNet.Document.Decode", new Func<byte[], byte[]>(DecodeDocument));
+        AppContext.SetData("PaintDotNet.Document.Encode", new Func<byte[], byte[]>(EncodeDocument));
         // The managed PrintDocument renders each page to a PNG and hands the pages here; the page prints them.
         AppContext.SetData("System.Drawing.Printing.PrintPages",
             new Action<byte[][]>(pages => PrintPages(Array.ConvertAll(pages, p => System.Convert.ToBase64String(p)))));

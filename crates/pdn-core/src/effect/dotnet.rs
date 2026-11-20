@@ -733,6 +733,89 @@ pub fn decode_image(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// A `.pdn` file for the managed `Document.FromStream`, read with paint.rs's own reader: little-endian width and
+/// height (i32), dots per inch (f64) and layer count (i32), then bottom layer first: the name (i32 UTF-8 length, the
+/// bytes), visible, background, opacity and Paint.NET's blend mode (one byte each), and straight BGRA8 pixels.
+/// `None` when it is not a document paint.rs reads.
+pub fn decode_document(bytes: &[u8]) -> Option<Vec<u8>> {
+    let doc = crate::io::pdn::decode(bytes).ok()?;
+    let mut out = Vec::new();
+    out.extend((doc.width as i32).to_le_bytes());
+    out.extend((doc.height as i32).to_le_bytes());
+    out.extend(doc.resolution.to_le_bytes());
+    out.extend((doc.layers.len() as i32).to_le_bytes());
+    for (props, image) in &doc.layers {
+        out.extend((props.name.len() as i32).to_le_bytes());
+        out.extend(props.name.as_bytes());
+        out.extend([
+            props.visible as u8,
+            props.is_background as u8,
+            props.opacity,
+            props.blend_mode.pdn_value(),
+        ]);
+        out.extend(
+            image
+                .data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|&[r, g, b, a]| [b, g, r, a]),
+        );
+    }
+    Some(out)
+}
+
+/// The `.pdn` file for the managed `Document.SaveToStream`: `blob` as `decode_document` gives one, written with
+/// paint.rs's writer. `None` when the blob is malformed or has no layers.
+pub fn encode_document(blob: &[u8]) -> Option<Vec<u8>> {
+    use crate::document::layer::{BlendMode, LayerProperties};
+    let mut at = 0usize;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        let s = blob.get(at..at.checked_add(n)?)?;
+        at += n;
+        Some(s)
+    };
+    let i32_at = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
+    let width = u32::try_from(i32_at(take(4)?)).ok().filter(|&w| w > 0)?;
+    let height = u32::try_from(i32_at(take(4)?)).ok().filter(|&h| h > 0)?;
+    let resolution = f64::from_le_bytes(take(8)?.try_into().unwrap());
+    let count = usize::try_from(i32_at(take(4)?)).ok()?;
+    let pixels = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    let mut layers = Vec::new();
+    for _ in 0..count {
+        let name_len = usize::try_from(i32_at(take(4)?)).ok()?;
+        let name = String::from_utf8_lossy(take(name_len)?).into_owned();
+        let &[visible, background, opacity, blend] = take(4)? else {
+            return None;
+        };
+        let mut props = LayerProperties::new(&name, visible != 0, background != 0, opacity);
+        props.blend_mode = BlendMode::from_pdn_value(blend);
+        let src = take(pixels)?;
+        let mut image = ImageData::new(width, height);
+        for (d, &[b, g, r, a]) in image
+            .data
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<4>().0)
+        {
+            *d = [r, g, b, a];
+        }
+        layers.push((props, image));
+    }
+    let doc = crate::io::pdn::PdnDocument {
+        width,
+        height,
+        resolution,
+        layers,
+        texts: Vec::new(),
+        header_xml: String::new(),
+    };
+    crate::io::pdn::encode(&doc.to_document()).ok()
+}
+
 /// An image the browser host's managed System.Drawing saves in a format it does not write itself, written with
 /// paint.rs's encoder: `image` as `decode_image` gives one (a little-endian width and height, then straight
 /// BGRA8), `format` the System.Drawing format's name, `quality` 1 to 100. JPEG only, with GDI+'s 4:2:0 chroma
@@ -807,6 +890,7 @@ mod native {
         HOST.get_or_init(|| {
             let host = pdn_bridge::Host::start(bridge_dir).map_err(|e| e.to_string())?;
             host.set_drawing_host(text_outline_c, free_floats_c, decode_image_c, free_bytes_c);
+            host.set_document_host(decode_document_c, encode_document_c, free_bytes_c);
             Ok(host)
         })
         .as_ref()
@@ -865,27 +949,55 @@ mod native {
         }
     }
 
-    /// `decode_image` over the bridge's C ABI: a byte buffer out that `free_bytes_c` releases; null when nothing
-    /// reads the bytes (or it panics).
-    unsafe extern "C" fn decode_image_c(
+    /// `f` over the bridge's C ABI: a byte buffer out that `free_bytes_c` releases; null when `f` gives none (or
+    /// panics).
+    unsafe fn bytes_c(
         bytes: *const u8,
         len: std::ffi::c_int,
         out_len: *mut std::ffi::c_int,
+        f: fn(&[u8]) -> Option<Vec<u8>>,
     ) -> *mut u8 {
         if bytes.is_null() || len <= 0 {
             unsafe { *out_len = 0 };
             return std::ptr::null_mut();
         }
-        let decoded = std::panic::catch_unwind(|| {
-            super::decode_image(unsafe { std::slice::from_raw_parts(bytes, len as usize) })
+        let out = std::panic::catch_unwind(|| {
+            f(unsafe { std::slice::from_raw_parts(bytes, len as usize) })
         });
-        let Ok(Some(decoded)) = decoded else {
+        let Ok(Some(out)) = out else {
             unsafe { *out_len = 0 };
             return std::ptr::null_mut();
         };
-        let decoded = decoded.into_boxed_slice();
-        unsafe { *out_len = decoded.len() as std::ffi::c_int };
-        Box::into_raw(decoded) as *mut u8
+        let out = out.into_boxed_slice();
+        unsafe { *out_len = out.len() as std::ffi::c_int };
+        Box::into_raw(out) as *mut u8
+    }
+
+    /// `decode_image` over the bridge's C ABI.
+    unsafe extern "C" fn decode_image_c(
+        bytes: *const u8,
+        len: std::ffi::c_int,
+        out_len: *mut std::ffi::c_int,
+    ) -> *mut u8 {
+        unsafe { bytes_c(bytes, len, out_len, super::decode_image) }
+    }
+
+    /// `decode_document` over the bridge's C ABI (`PdnSetDocumentHost`).
+    unsafe extern "C" fn decode_document_c(
+        bytes: *const u8,
+        len: std::ffi::c_int,
+        out_len: *mut std::ffi::c_int,
+    ) -> *mut u8 {
+        unsafe { bytes_c(bytes, len, out_len, super::decode_document) }
+    }
+
+    /// `encode_document` over the bridge's C ABI (`PdnSetDocumentHost`).
+    unsafe extern "C" fn encode_document_c(
+        bytes: *const u8,
+        len: std::ffi::c_int,
+        out_len: *mut std::ffi::c_int,
+    ) -> *mut u8 {
+        unsafe { bytes_c(bytes, len, out_len, super::encode_document) }
     }
 
     unsafe extern "C" fn free_bytes_c(bytes: *mut u8, len: std::ffi::c_int) {
@@ -1308,6 +1420,8 @@ mod web {
             text_outline: &JsValue,
             decode_image: &JsValue,
             encode_image: &JsValue,
+            decode_document: &JsValue,
+            encode_document: &JsValue,
             font_names: Vec<String>,
             font_files: Vec<js_sys::Uint8Array>,
             font_urls: Vec<String>,
@@ -1560,6 +1674,12 @@ mod web {
             |image: Vec<u8>, format: String, quality: u8| super::encode_image(&image, &format, quality),
         )
         .into_js_value();
+        static DECODE_DOCUMENT: JsValue =
+            Closure::<dyn Fn(Vec<u8>) -> Option<Vec<u8>>>::new(|bytes: Vec<u8>| super::decode_document(&bytes))
+                .into_js_value();
+        static ENCODE_DOCUMENT: JsValue =
+            Closure::<dyn Fn(Vec<u8>) -> Option<Vec<u8>>>::new(|blob: Vec<u8>| super::encode_document(&blob))
+                .into_js_value();
     }
 
     /// paint.rs's own faces, which the host's DirectWrite (OpenD2D, for GPU plug-ins' text) finds in its font
@@ -1612,6 +1732,8 @@ mod web {
             &TEXT_OUTLINE.with(Clone::clone),
             &DECODE_IMAGE.with(Clone::clone),
             &ENCODE_IMAGE.with(Clone::clone),
+            &DECODE_DOCUMENT.with(Clone::clone),
+            &ENCODE_DOCUMENT.with(Clone::clone),
             font_names,
             font_files,
             font_urls,
@@ -2270,6 +2392,33 @@ mod tests {
         let bold = super::text_outline("Ag", "Times New Roman", 32.0, 1);
         assert!(bold[0] > 0.0 && bold.len() > 50);
         assert_eq!(super::text_outline("", "Arial", 32.0, 0).len(), 3);
+    }
+
+    /// A document blob (the managed Document's layers) written as a .pdn reads back as the same blob.
+    #[test]
+    fn document_blob_round_trips_through_pdn() {
+        let mut blob = Vec::new();
+        blob.extend(3i32.to_le_bytes());
+        blob.extend(2i32.to_le_bytes());
+        blob.extend(150f64.to_le_bytes());
+        blob.extend(2i32.to_le_bytes());
+        for (name, flags, base) in [
+            ("Background", [1u8, 1, 255, 0], 10u8),
+            ("Ink é", [0, 0, 128, 12], 100),
+        ] {
+            blob.extend((name.len() as i32).to_le_bytes());
+            blob.extend(name.as_bytes());
+            blob.extend(flags);
+            blob.extend((0..24).map(|i| base + i as u8));
+        }
+        let pdn = super::encode_document(&blob).expect("encodes");
+        assert!(pdn.starts_with(b"PDN3"));
+        assert_eq!(super::decode_document(&pdn).expect("decodes"), blob);
+        assert_eq!(
+            super::encode_document(&blob[..blob.len() - 1]),
+            None,
+            "a short blob is refused"
+        );
     }
 
     /// A JPEG (which the browser host's System.Drawing cannot read itself) decodes to its size and BGRA.

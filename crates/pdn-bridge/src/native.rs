@@ -111,6 +111,9 @@ pub type DecodeImageFn = unsafe extern "C" fn(*const u8, c_int, *mut c_int) -> *
 pub type FreeBytesFn = unsafe extern "C" fn(*mut u8, c_int);
 type SetDrawingHostFn =
     unsafe extern "C" fn(TextOutlineFn, FreeFloatsFn, DecodeImageFn, FreeBytesFn);
+/// paint.rs's `.pdn` reader and writer for the managed `Document`: bytes in, bytes out, as `DecodeImageFn`
+/// (`pdn_core::effect::dotnet::decode_document`/`encode_document`).
+type SetDocumentHostFn = unsafe extern "C" fn(DecodeImageFn, DecodeImageFn, FreeBytesFn);
 type CanvasOpenFn = unsafe extern "C" fn(
     *mut c_void,
     *const c_char,
@@ -223,6 +226,7 @@ struct Exports {
     store_response: StoreResponseFn,
 
     canvas: Option<CanvasExports>,
+    set_document_host: Option<SetDocumentHostFn>,
 }
 
 /// The embedded CoreCLR + the managed `PdnBridge` exports. Lives for the process; the
@@ -336,6 +340,9 @@ impl Host {
                 )?),
 
                 // Optional: a host without them still runs every other plug-in.
+                set_document_host: get("PdnSetDocumentHost")
+                    .ok()
+                    .map(|f| std::mem::transmute::<*mut c_void, SetDocumentHostFn>(f)),
                 canvas: (|| {
                     Ok::<_, Error>(CanvasExports {
                         open: std::mem::transmute::<*mut c_void, CanvasOpenFn>(get(
@@ -404,6 +411,20 @@ impl Host {
     ) {
         signal_stack();
         unsafe { (self.exports.set_drawing_host)(outline, free_floats, decode, free_bytes) };
+    }
+
+    /// Give the managed `Document` paint.rs's `.pdn` reader and writer (`Document.FromStream`/`SaveToStream`).
+    /// A host without the export keeps them unsupported.
+    pub fn set_document_host(
+        &self,
+        decode: DecodeImageFn,
+        encode: DecodeImageFn,
+        free_bytes: FreeBytesFn,
+    ) {
+        if let Some(set) = self.exports.set_document_host {
+            signal_stack();
+            unsafe { set(decode, encode, free_bytes) };
+        }
     }
 
     /// The outside requests plug-ins may make, as the gate's JSON (`{"<plug-in>":[{"category","target","deny"?}]}`),

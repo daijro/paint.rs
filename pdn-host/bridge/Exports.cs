@@ -167,17 +167,28 @@ internal static unsafe class Exports
         finally { free(floats, n); }
     }
 
-    private static byte[] DecodeImage(byte[] encoded)
+    private static byte[] DecodeImage(byte[] encoded) => CallBytes(imageDecode, imageFree, encoded);
+
+    /// paint.rs's `.pdn` reader and writer for the managed Document (FromStream, SaveToStream), as the
+    /// "PaintDotNet.Document.Decode"/"Encode" app-context entries: bytes in, bytes out (empty when it fails), the
+    /// document as a layered blob (pdn_core::effect::dotnet::decode_document).
+    [UnmanagedCallersOnly(EntryPoint = "PdnSetDocumentHost")]
+    public static void PdnSetDocumentHost(nint decode, nint encode, nint freeBytes)
     {
-        if (encoded.Length == 0) return [];
-        var decode = (delegate* unmanaged<byte*, int, int*, byte*>)imageDecode;
-        var free = (delegate* unmanaged<byte*, int, void>)imageFree;
+        AppContext.SetData("PaintDotNet.Document.Decode", new Func<byte[], byte[]>(b => CallBytes(decode, freeBytes, b)));
+        AppContext.SetData("PaintDotNet.Document.Encode", new Func<byte[], byte[]>(b => CallBytes(encode, freeBytes, b)));
+    }
+
+    /// A host bytes-in, bytes-out call: `fn` returns a buffer `free` releases, or null.
+    private static byte[] CallBytes(nint fn, nint free, byte[] input)
+    {
+        if (input.Length == 0) return [];
         int n = 0;
         byte* bytes;
-        fixed (byte* e = encoded) bytes = decode(e, encoded.Length, &n);
+        fixed (byte* e = input) bytes = ((delegate* unmanaged<byte*, int, int*, byte*>)fn)(e, input.Length, &n);
         if (bytes == null) return [];
         try { return new ReadOnlySpan<byte>(bytes, n).ToArray(); }
-        finally { free(bytes, n); }
+        finally { ((delegate* unmanaged<byte*, int, void>)free)(bytes, n); }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "PdnFileTypeSave")]

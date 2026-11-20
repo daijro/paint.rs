@@ -79,9 +79,52 @@ public class BitmapLayer : Layer
 }
 
 /// Paint.NET's layer list is an ArrayList (plugins index and cast it).
-public class LayerList : ArrayList
+/// A document's layers, bottom first: Paint.NET's ArrayList with typed members over it and a struct enumerator, so
+/// plug-ins built against it index, enumerate and edit it as Layers.
+public class LayerList : ArrayList, IList<Layer>
 {
-    public void Add(Layer layer) => base.Add(layer);
+    public LayerList(Document document) => Document = document;
+    internal Document Document { get; }
+
+    public new Layer this[int index] { get => (Layer)base[index]!; set => base[index] = value; }
+    public void Add(Layer item) => base.Add(item);
+    public void AddRange(IEnumerable<Layer> layers) => base.AddRange(layers.ToArray());
+    public bool Contains(Layer item) => base.Contains(item);
+    public void CopyTo(Layer[] array, int arrayIndex) => base.CopyTo(array, arrayIndex);
+    public Layer GetAt(int index) => this[index];
+    public int IndexOf(Layer layer) => base.IndexOf(layer);
+    public void Insert(int index, Layer item) => base.Insert(index, item);
+    public void InsertRange(int index, IEnumerable<Layer> layers) => base.InsertRange(index, layers.ToArray());
+    public void Move(int oldIndex, int newIndex)
+    {
+        Layer layer = this[oldIndex];
+        RemoveAt(oldIndex);
+        base.Insert(newIndex, layer);
+    }
+    public bool Remove(Layer item)
+    {
+        int i = base.IndexOf(item);
+        if (i < 0) return false;
+        RemoveAt(i);
+        return true;
+    }
+    public void SetAt(int index, Layer newValue) => this[index] = newValue;
+    public void SwapAt(int indexA, int indexB) => (base[indexA], base[indexB]) = (base[indexB], base[indexA]);
+    public new Layer[] ToArray() => (Layer[])base.ToArray(typeof(Layer));
+    public new Enumerator GetEnumerator() => new(this);
+    IEnumerator<Layer> IEnumerable<Layer>.GetEnumerator() => GetEnumerator();
+
+    public struct Enumerator : IEnumerator<Layer>
+    {
+        private readonly LayerList list;
+        private int index;
+        internal Enumerator(LayerList list) { this.list = list; index = -1; }
+        public Layer Current => list[index];
+        object IEnumerator.Current => Current;
+        public bool MoveNext() => ++index < list.Count;
+        public void Reset() => index = -1;
+        public void Dispose() { }
+    }
 }
 
 /// A document's or layer's metadata: name/value strings in sections (a plug-in's own fields go in the user section).
@@ -117,13 +160,13 @@ public sealed class Metadata
 
 public sealed class Document : IDisposable
 {
-    public Document(int width, int height) { Width = width; Height = height; }
+    public Document(int width, int height) { Width = width; Height = height; Layers = new LayerList(this); }
     public Document(System.Drawing.Size size) : this(size.Width, size.Height) { }
     public int Width { get; }
     public int Height { get; }
     public System.Drawing.Size Size => new(Width, Height);
     public System.Drawing.Rectangle Bounds => new(0, 0, Width, Height);
-    public LayerList Layers { get; } = new();
+    public LayerList Layers { get; }
     public Metadata Metadata { get; } = new();
     public MeasurementUnit DpuUnit { get; set; } = MeasurementUnit.Inch;
     public double DpuX { get; set; } = Resolution.DefaultDpi;
@@ -141,14 +184,70 @@ public sealed class Document : IDisposable
     public static double CentimetersToInches(double centimeters) => centimeters / 2.54;
 
     // The default document resolution (96 DPI) — static, as in genuine (distinct from the instance Resolution a
-    // document carries). Loading/saving through a stream and attaching a colour context are the host's own file
-    // path, so those are inert here.
+    // document carries). Attaching a colour context is the host's own file path, so it is inert here.
     public static Resolution DefaultResolution => new Resolution(DefaultDpi, DefaultDpi, MeasurementUnit.Inch);
     public void SetColorContext(PaintDotNet.Imaging.IColorContext colorContext) { }
-    public static Document FromStream(System.IO.Stream stream)
-        => throw new NotSupportedException("loading a document from a stream is the host's own file path");
-    public void SaveToStream(System.IO.Stream stream)
-        => throw new NotSupportedException("saving a document to a stream is the host's own file path");
+
+    // A .pdn is read and written by paint.rs's own codec, which the host hands in as the "PaintDotNet.Document.Decode"
+    // and "Encode" app-context entries: bytes in, bytes out (empty on failure), the document as a layered blob of
+    // little-endian width and height (int), dots per inch (double) and layer count (int), then bottom layer first its
+    // name (int UTF-8 length, bytes), visible, background, opacity and blend mode (a byte each), and BGRA pixels.
+    private static Func<byte[], byte[]> Codec(string which)
+        => AppContext.GetData("PaintDotNet.Document." + which) as Func<byte[], byte[]>
+           ?? throw new NotSupportedException("this host has no Paint.NET document reader and writer");
+
+    /// A .pdn document read from the stream.
+    public static unsafe Document FromStream(Stream stream)
+    {
+        var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        byte[] blob = Codec("Decode")(bytes.ToArray());
+        if (blob.Length == 0) throw new FormatException("the stream is not a Paint.NET document");
+        using var r = new BinaryReader(new MemoryStream(blob));
+        int width = r.ReadInt32(), height = r.ReadInt32();
+        double dpi = r.ReadDouble();
+        int count = r.ReadInt32();
+        var doc = new Document(width, height) { DpuUnit = MeasurementUnit.Inch, DpuX = dpi, DpuY = dpi };
+        for (int i = 0; i < count; i++)
+        {
+            string name = System.Text.Encoding.UTF8.GetString(r.ReadBytes(r.ReadInt32()));
+            byte visible = r.ReadByte(), background = r.ReadByte(), opacity = r.ReadByte(), blend = r.ReadByte();
+            var surface = new Surface(width, height);
+            for (int y = 0; y < height; y++)
+                r.ReadBytes(width * 4).CopyTo(new Span<byte>(surface.GetRowPointer(y), width * 4));
+            doc.Layers.Add(new BitmapLayer(surface, takeOwnership: true)
+            {
+                Name = name, Visible = visible != 0, IsBackground = background != 0, Opacity = opacity, BlendMode = (LayerBlendMode)blend,
+            });
+        }
+        return doc;
+    }
+
+    /// The document written to the stream as a .pdn.
+    public unsafe void SaveToStream(Stream stream)
+    {
+        var blob = new MemoryStream();
+        using (var w = new BinaryWriter(blob, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            var layers = Layers.OfType<BitmapLayer>().ToList();
+            w.Write(Width);
+            w.Write(Height);
+            w.Write(DpuUnit == MeasurementUnit.Centimeter ? DotsPerCmToDotsPerInch(DpuX) : DpuUnit == MeasurementUnit.Inch ? DpuX : DefaultDpi);
+            w.Write(layers.Count);
+            foreach (BitmapLayer layer in layers)
+            {
+                byte[] name = System.Text.Encoding.UTF8.GetBytes(layer.Name);
+                w.Write(name.Length);
+                w.Write(name);
+                w.Write(new[] { (byte)(layer.Visible ? 1 : 0), (byte)(layer.IsBackground ? 1 : 0), layer.Opacity, (byte)layer.BlendMode });
+                for (int y = 0; y < Height; y++)
+                    w.Write(new ReadOnlySpan<byte>(layer.Surface.GetRowPointer(y), Width * 4));
+            }
+        }
+        byte[] pdn = Codec("Encode")(blob.ToArray());
+        if (pdn.Length == 0) throw new InvalidOperationException("the document could not be written as a Paint.NET document");
+        stream.Write(pdn);
+    }
     public void Render(RenderArgs args) => Render(args, clearBackground: true);
 
     /// A one-layer document of the image's pixels.

@@ -84,6 +84,8 @@ async function boot(fontNames, fontFiles) {
     textOutline: pageOnly("text"),
     decodeImage: pageOnly("an image codec"),
     encodeImage: pageOnly("an image codec"),
+    decodeDocument: pageOnly("a document codec"),
+    encodeDocument: pageOnly("a document codec"),
   });
   ex = (await created.getAssemblyExports(created.getConfig().mainAssemblyName)).PdnWebHost;
 }

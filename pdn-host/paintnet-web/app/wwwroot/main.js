@@ -62,6 +62,8 @@ async function boot() {
     },
     decodeImage: () => new Uint8Array(0),
     encodeImage: () => new Uint8Array(0),
+    decodeDocument: () => new Uint8Array(0),
+    encodeDocument: () => new Uint8Array(0),
     // The managed PrintDocument hands over the rendered pages as base64 PNGs; show them in a print-only
     // iframe and ask the browser to print. A page can override globalThis.pdnPrintPages (the census does, to
     // capture the pages without opening a print dialog).

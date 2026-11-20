@@ -14,13 +14,14 @@ let fonts = null; // the faces the host was given ({ names, files }), for the re
 
 // `textOutline`, `decodeImage` and `encodeImage` are paint.rs's text and image codecs (effect::dotnet's
 // text_outline, decode_image and encode_image), which the host's System.Drawing draws plug-in strings, reads images
-// and saves JPEGs with: its "pdn" imports. `fontNames`/`fontFiles`/`fontUrls` are paint.rs's own faces, which the
+// and saves JPEGs with: its "pdn" imports; `decodeDocument`/`encodeDocument` are its .pdn reader and writer
+// (decode_document, encode_document), for the managed Document's FromStream and SaveToStream. `fontNames`/`fontFiles`/`fontUrls` are paint.rs's own faces, which the
 // host's DirectWrite (OpenD2D) reads from /fonts; a family none of them has falls back to Selawik (paint.rs's
 // Segoe UI). Each face carries either its bytes (fontFiles[i]) or, if those are empty, the address of a shipped font
 // asset (fontUrls[i]) that is fetched here as the host boots: only a session that opens a plug-in downloads them,
 // they are fetched together (and the browser cache, shared with the interface's font list, serves repeat loads), and
 // a face that cannot be fetched is skipped rather than failing boot.
-export async function pdnBoot(textOutline, decodeImage, encodeImage, fontNames, fontFiles, fontUrls) {
+export async function pdnBoot(textOutline, decodeImage, encodeImage, decodeDocument, encodeDocument, fontNames, fontFiles, fontUrls) {
   // The AppBundle is served next to the page at pdn/_framework/; resolve against the document base
   // so it works from `/` and from any sub-path, matching Trunk's relative public_url.
   const url = new URL("pdn/_framework/dotnet.js", document.baseURI).href;
@@ -61,6 +62,8 @@ export async function pdnBoot(textOutline, decodeImage, encodeImage, fontNames, 
       textOutline: (text, family, px, style) => Array.from(textOutline(text, family, px, style)),
       decodeImage: (bytes) => decodeImage(bytes) ?? new Uint8Array(0),
       encodeImage: (image, format, quality) => encodeImage(image, format, quality) ?? new Uint8Array(0),
+      decodeDocument: (bytes) => decodeDocument(bytes) ?? new Uint8Array(0),
+      encodeDocument: (blob) => encodeDocument(blob) ?? new Uint8Array(0),
     });
     return (await getAssemblyExports(getConfig().mainAssemblyName)).PdnWebHost;
   })();
