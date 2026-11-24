@@ -100,6 +100,45 @@ fn read_file(path: PathBuf) -> Result<PickedFile, String> {
 pub fn read_paths(paths: Vec<PathBuf>) -> Pending<Result<Vec<PickedFile>, String>> {
     background(move || paths.into_iter().map(read_file).collect())
 }
+
+fn choose_save_path(r: TargetRequest) -> Result<Option<(TargetRequest, PathBuf, bool)>, String> {
+    let types = super::files::chooser_formats(r.initial_format);
+    #[cfg(target_os = "linux")]
+    let portal = {
+        let filters: Vec<super::portal_save::Filter> = types.iter().map(|f| {
+            (f.name.to_owned(), f.extensions.iter().map(|e| e.trim_start_matches('.').to_owned()).collect())
+        }).collect();
+        let name = super::portal_save::dialog_name(&r.suggested_name);
+        match super::portal_save::save_file(&name, &filters) {
+            Ok(None) => return Ok(None),
+            Ok(Some((path, picked))) => {
+                let selected = picked.map_or(&[][..], |i| &filters[i].1[..]);
+                let known = |e: &str| super::files::accepted_format(&format!("x.{e}")).is_ok();
+                let fixed = super::portal_save::with_chosen_type(&path, &r.suggested_name, selected, known);
+                Some((fixed != path, fixed))
+            }
+            Err(e) => {
+                eprintln!("paint.rs: the portal's save dialog is unavailable ({e}); using rfd's");
+                None
+            }
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let portal: Option<(bool, PathBuf)> = None;
+    let (retyped, path) = match portal {
+        Some(path) => path,
+        None => {
+            let mut dialog = rfd::FileDialog::new().set_file_name(&r.suggested_name);
+            for f in &types {
+                let extensions: Vec<_> = f.extensions.iter().map(|e| e.trim_start_matches('.')).collect();
+                dialog = dialog.add_filter(f.name, &extensions);
+            }
+            let Some(path) = dialog.save_file() else { return Ok(None) };
+            (false, path)
+        }
+    };
+    Ok(Some((r, path, retyped)))
+}
 /// One combined Images entry in `accept`'s order, then All files when asked (R156, BB27).
 pub fn open_filters(accept: &str, all_files: bool) -> Vec<(&'static str, Vec<&str>)> {
     let images = accept
@@ -127,34 +166,31 @@ pub fn choose_open_with(
     for (name, extensions) in open_filters(accept, all_files) {
         dialog = dialog.add_filter(name, &extensions);
     }
-    let paths = if multiple {
-        dialog.pick_files().unwrap_or_default()
-    } else {
-        dialog.pick_file().into_iter().collect()
-    };
-    Pending::ready(Ok(paths
-        .into_iter()
-        .map(|path| {
-            let mut f = PickedFile::snapshot(
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into(),
-                vec![],
-            );
-            f.path = Some(path);
-            f
-        })
-        .collect()))
+    background(move || {
+        let paths = if multiple {
+            dialog.pick_files().unwrap_or_default()
+        } else {
+            dialog.pick_file().into_iter().collect()
+        };
+        Ok(paths.into_iter().map(picked_path).collect())
+    })
+}
+
+fn picked_path(path: PathBuf) -> PickedFile {
+    let mut f = PickedFile::snapshot(
+        path.file_name().unwrap_or_default().to_string_lossy().into(),
+        vec![],
+    );
+    f.path = Some(path);
+    f
 }
 pub fn pick_open(multiple: bool, accept: &str) -> Pending<Result<Vec<PickedFile>, String>> {
-    let result = choose_open(multiple, accept)
-        .poll()
-        .expect("native chooser result");
-    match result {
-        Ok(files) => read_paths(files.into_iter().filter_map(|f| f.path).collect()),
-        Err(e) => Pending::ready(Err(e)),
-    }
+    let mut chooser = choose_open(multiple, accept);
+    Pending::future(async move {
+        let files = std::future::poll_fn(move |_| chooser.poll().map_or(Poll::Pending, Poll::Ready)).await?;
+        let mut read = read_paths(files.into_iter().filter_map(|f| f.path).collect());
+        std::future::poll_fn(move |_| read.poll().map_or(Poll::Pending, Poll::Ready)).await
+    })
 }
 
 pub fn adopt_open(
@@ -269,48 +305,51 @@ impl SaveTarget for Files {
         &mut self,
         r: TargetRequest,
     ) -> Pending<Result<Option<SaveDestination>, String>> {
-        let chosen = self.choose(&r);
-        let confirm = self.state.borrow_mut().confirm.remove(&r.workspace_id);
-        if !confirm {
-            return Pending::ready(chosen);
+        if !self.system {
+            return Pending::ready(Ok(None));
         }
-        let Ok(Some(destination)) = chosen else {
-            return Pending::ready(chosen);
-        };
+        let id = r.workspace_id;
+        let state = self.state.clone();
+        let mut choice = background(move || choose_save_path(r));
+        let pending: Pending<Result<Option<SaveDestination>, String>> = Pending::future(async move {
+            let chosen = std::future::poll_fn(move |_| choice.poll().map_or(Poll::Pending, Poll::Ready)).await?;
+            let Some((r, path, retyped)) = chosen else { return Ok(None) };
+            let mut path = path;
+            let appended = path.extension().is_none();
+            if appended {
+                path.set_extension(crate::dialogs::save_image::find_format(r.initial_format).extensions[0].trim_start_matches('.'));
+            }
+            let name = path.file_name().ok_or("Choose a file name.")?.to_string_lossy().into_owned();
+            let format = super::files::accepted_format(&name)?;
+            let destination = SaveDestination { name, path: Some(path.to_string_lossy().into()), format };
+            let mut s = state.borrow_mut();
+            if (appended || retyped) && path.exists() { s.confirm.insert(r.workspace_id); }
+            s.chosen.insert(r.workspace_id, NativeTarget { destination: destination.clone(), path });
+            Ok(Some(destination))
+        });
+        let confirm_state = self.state.clone();
+        let mut confirm_pending = pending;
         let result = Rc::new(RefCell::new(None));
         let callback = result.clone();
-        crate::dialogs::task::TaskDialog::show_then(
-            crate::dialogs::task::TaskDialogSpec {
-                title: "Confirm Save As".into(),
-                message: Some(format!(
-                    "Replace the existing file \"{}\"?",
-                    destination.name
-                )),
-                choices: vec![
-                    crate::dialogs::task::TaskChoice {
-                        value: "replace",
-                        title: "Replace".into(),
-                        ..Default::default()
-                    },
-                    crate::dialogs::task::TaskChoice {
-                        value: "cancel",
-                        title: "Cancel".into(),
-                        ..Default::default()
-                    },
-                ],
-                cancel_value: "cancel",
-                ..Default::default()
-            },
-            move |choice, _| {
-                *callback.borrow_mut() = Some(Ok((choice == "replace").then_some(destination)));
-            },
-        );
-        Pending::future(std::future::poll_fn(move |_| {
-            result
-                .borrow_mut()
-                .take()
-                .map_or(Poll::Pending, Poll::Ready)
-        }))
+        Pending::future(async move {
+            let chosen = std::future::poll_fn(move |_| confirm_pending.poll().map_or(Poll::Pending, Poll::Ready)).await?;
+            let Some(destination) = chosen else { return Ok(None) };
+            let confirm = confirm_state.borrow_mut().confirm.remove(&id);
+            if !confirm { return Ok(Some(destination)); }
+            crate::dialogs::task::TaskDialog::show_then(
+                crate::dialogs::task::TaskDialogSpec {
+                    title: "Confirm Save As".into(),
+                    message: Some(format!("Replace the existing file \"{}\"?", destination.name)),
+                    choices: vec![
+                        crate::dialogs::task::TaskChoice { value: "replace", title: "Replace".into(), ..Default::default() },
+                        crate::dialogs::task::TaskChoice { value: "cancel", title: "Cancel".into(), ..Default::default() },
+                    ],
+                    cancel_value: "cancel", ..Default::default()
+                },
+                move |choice, _| { *callback.borrow_mut() = Some(Ok((choice == "replace").then_some(destination))); },
+            );
+            std::future::poll_fn(move |_| result.borrow_mut().take().map_or(Poll::Pending, Poll::Ready)).await
+        })
     }
     fn prepare_pending(
         &mut self,
@@ -474,30 +513,29 @@ pub fn argv_files(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<Pat
 
 /// Batch Export's output folder, the chooser starting in `start` when it is one.
 pub fn choose_folder(start: &str) -> Option<PathBuf> {
+    // Kept as a synchronous compatibility helper; UI callers use choose_folder_pending.
+    choose_folder_blocking(start)
+}
+
+fn choose_folder_blocking(start: &str) -> Option<PathBuf> {
     let dialog = rfd::FileDialog::new();
-    let dialog = if Path::new(start).is_dir() {
-        dialog.set_directory(start)
-    } else {
-        dialog
-    };
+    let dialog = if Path::new(start).is_dir() { dialog.set_directory(start) } else { dialog };
     dialog.pick_folder()
+}
+
+pub fn choose_folder_pending(start: String) -> Pending<Result<Option<PathBuf>, String>> {
+    background(move || Ok(choose_folder_blocking(&start)))
 }
 
 /// BB36: one file through a titled chooser with one filter.
 pub fn choose_data(request: super::files::DataFile) -> Pending<Result<Vec<PickedFile>, String>> {
-    let picked = rfd::FileDialog::new()
-        .set_title(request.title)
-        .add_filter(request.filter, &[request.extension])
-        .pick_file();
-    Pending::ready(Ok(picked
-        .into_iter()
-        .map(|path| {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            let mut f = PickedFile::snapshot(name.into(), vec![]);
-            f.path = Some(path);
-            f
-        })
-        .collect()))
+    background(move || {
+        let picked = rfd::FileDialog::new()
+            .set_title(request.title)
+            .add_filter(request.filter, &[request.extension])
+            .pick_file();
+        Ok(picked.into_iter().map(picked_path).collect())
+    })
 }
 
 /// BB36: a titled save chooser with one filter, whose extension a bare chosen name gets
@@ -507,18 +545,19 @@ pub fn save_data(
     name: &str,
     bytes: Vec<u8>,
 ) -> Pending<Result<super::files::FileSaveOutcome, String>> {
-    let chosen = rfd::FileDialog::new()
+    let name = name.to_owned();
+    let mut choose = background(move || Ok(rfd::FileDialog::new()
         .set_title(request.title)
         .add_filter(request.filter, &[request.extension])
-        .set_file_name(name)
-        .save_file();
-    let Some(mut path) = chosen else {
-        return Pending::ready(Ok(super::files::FileSaveOutcome::Cancelled));
-    };
-    if path.extension().is_none() {
-        path.set_extension(request.extension);
-    }
-    write_bytes(path, bytes)
+        .set_file_name(&name)
+        .save_file()));
+    Pending::future(async move {
+        let chosen = std::future::poll_fn(move |_| choose.poll().map_or(Poll::Pending, Poll::Ready)).await?;
+        let Some(mut path) = chosen else { return Ok(super::files::FileSaveOutcome::Cancelled) };
+        if path.extension().is_none() { path.set_extension(request.extension); }
+        let mut write = write_bytes(path, bytes);
+        std::future::poll_fn(move |_| write.poll().map_or(Poll::Pending, Poll::Ready)).await
+    })
 }
 
 pub fn save_bytes(
@@ -526,13 +565,18 @@ pub fn save_bytes(
     bytes: Vec<u8>,
     existing: Option<super::files::FileTarget>,
 ) -> Pending<Result<super::files::FileSaveOutcome, String>> {
-    let path = existing
-        .and_then(|t| t.path)
-        .or_else(|| rfd::FileDialog::new().set_file_name(name).save_file());
-    let Some(path) = path else {
-        return Pending::ready(Ok(super::files::FileSaveOutcome::Cancelled));
-    };
-    write_bytes(path, bytes)
+    if let Some(path) = existing.and_then(|t| t.path) {
+        return write_bytes(path, bytes);
+    }
+    let name = name.to_owned();
+    let mut choose = background(move || Ok(rfd::FileDialog::new().set_file_name(&name).save_file()));
+    Pending::future(async move {
+        let Some(path) = std::future::poll_fn(move |_| choose.poll().map_or(Poll::Pending, Poll::Ready)).await? else {
+            return Ok(super::files::FileSaveOutcome::Cancelled);
+        };
+        let mut write = write_bytes(path, bytes);
+        std::future::poll_fn(move |_| write.poll().map_or(Poll::Pending, Poll::Ready)).await
+    })
 }
 
 /// Final review I1: the atomic save every file writer shares. A temporary file beside `target`,
@@ -688,6 +732,40 @@ mod bb27_tests {
             super::open_filters(".pdn,image/png,.png", false),
             [("Images", vec!["pdn", "png"])]
         );
+    }
+}
+
+#[cfg(test)]
+mod deferred_picker_tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    #[test]
+    fn background_picker_returns_before_completion_and_delivers_all_outcomes() {
+        let (release, wait) = mpsc::channel::<Result<Option<PathBuf>, String>>();
+        let mut pending = background(move || wait.recv().unwrap());
+        // Invocation returns while the simulated native dialog is still waiting for its response.
+        assert!(pending.poll().is_none());
+
+        release.send(Ok(Some(PathBuf::from("chosen.png")))).unwrap();
+        let result = loop {
+            if let Some(result) = pending.poll() { break result; }
+            std::thread::yield_now();
+        };
+        assert_eq!(result, Ok(Some(PathBuf::from("chosen.png"))));
+
+        let outcomes: [Result<Option<PathBuf>, String>; 2] = [Ok(None), Err("picker failed".to_owned())];
+        for expected in outcomes {
+            let (send, receive) = mpsc::channel();
+            let mut operation = background(move || receive.recv().unwrap());
+            assert!(operation.poll().is_none());
+            send.send(expected.clone()).unwrap();
+            let actual = loop {
+                if let Some(result) = operation.poll() { break result; }
+                std::thread::yield_now();
+            };
+            assert_eq!(actual, expected);
+        }
     }
 }
 
