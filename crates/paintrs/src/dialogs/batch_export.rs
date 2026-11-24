@@ -84,6 +84,7 @@ pub struct BatchExportDialog {
     scaler: Scaler,
     /// The output folder (desktop).
     folder: String,
+    folder_pick: Option<crate::platform::Pending<Result<Option<std::path::PathBuf>, String>>>,
     status: String,
     /// Replace or skip existing files: the question, and which files exist.
     ask: Option<(TaskDialogHandle, Vec<bool>)>,
@@ -130,6 +131,7 @@ impl BatchExportDialog {
             list: ScrollList::horizontal(0.75),
             scaler,
             folder,
+            folder_pick: None,
             status: String::new(),
             ask: None,
             export: None,
@@ -482,6 +484,14 @@ impl Dialog for BatchExportDialog {
         for item in &mut self.items {
             item.save.load(cx.settings);
         }
+        if let Some(pick) = &mut self.folder_pick {
+            if let Some(result) = pick.poll() {
+                self.folder_pick = None;
+                if let Ok(Some(path)) = result {
+                    self.folder = path.to_string_lossy().into_owned();
+                }
+            }
+        }
         if let Some(state) = self.advance(ui.ctx(), cx.app) {
             return state;
         }
@@ -604,10 +614,8 @@ impl Dialog for BatchExportDialog {
                 );
                 let response = dialog_button(ui, "browse", rect, "Browse...", false);
                 inputs::take_enter(ui, &response);
-                if button_clicked(ui, &response)
-                    && let Some(folder) = crate::platform::native::choose_folder(&self.folder)
-                {
-                    self.folder = folder.to_string_lossy().into_owned();
+                if button_clicked(ui, &response) && self.folder_pick.is_none() {
+                    self.folder_pick = Some(crate::platform::native::choose_folder_pending(self.folder.clone()));
                 }
             }
         };
